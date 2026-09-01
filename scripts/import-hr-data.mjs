@@ -1,0 +1,95 @@
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
+import { execSync } from 'child_process';
+
+const xlsxPath = 'c:/Users/dalewatkins/OneDrive - Country Lion/Projects/hrdata/HR Data.xlsx';
+const outputPath = 'c:/Users/dalewatkins/OneDrive - Country Lion/Projects/hrdata/hr-import-rows.json';
+const apiUrl = process.env.UM_IMPORT_URL || 'https://employee.countrylion.co.uk/api/adminImportHrData';
+const sessionCookie = process.env.UM_SESSION_COOKIE || '';
+
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'xlsx-'));
+const zipCopy = path.join(tmp, 'data.zip');
+fs.copyFileSync(xlsxPath, zipCopy);
+execSync(
+  `powershell -NoProfile -Command "Expand-Archive -LiteralPath '${zipCopy}' -DestinationPath '${path.join(tmp, 'unzipped')}' -Force"`,
+  { stdio: 'inherit' },
+);
+
+const root = path.join(tmp, 'unzipped');
+const sharedPath = path.join(root, 'xl', 'sharedStrings.xml');
+const sheetPath = path.join(root, 'xl', 'worksheets', 'sheet1.xml');
+const shared = [];
+
+if (fs.existsSync(sharedPath)) {
+  const xml = fs.readFileSync(sharedPath, 'utf8');
+  const re = /<t[^>]*>([^<]*)<\/t>/g;
+  let m;
+  while ((m = re.exec(xml))) shared.push(m[1]);
+}
+
+const sheet = fs.readFileSync(sheetPath, 'utf8');
+
+function colToIndex(col) {
+  let n = 0;
+  for (const ch of col) n = n * 26 + (ch.charCodeAt(0) - 64);
+  return n - 1;
+}
+
+const rowRe = /<row[^>]*>([\s\S]*?)<\/row>/g;
+const cellRe = /<c r="([A-Z]+)(\d+)"([^>]*)>(?:<v>([^<]*)<\/v>)?<\/c>/g;
+const rows = {};
+
+let rm;
+while ((rm = rowRe.exec(sheet))) {
+  const rowXml = rm[1];
+  let cm;
+  while ((cm = cellRe.exec(rowXml))) {
+    const col = colToIndex(cm[1]);
+    const row = parseInt(cm[2], 10) - 1;
+    const attrs = cm[3];
+    let val = cm[4] || '';
+    if (attrs.includes('t="s"')) val = shared[parseInt(val, 10)] || '';
+    if (!rows[row]) rows[row] = [];
+    rows[row][col] = val;
+  }
+}
+
+const table = Object.keys(rows)
+  .map(Number)
+  .sort((a, b) => a - b)
+  .map((k) => rows[k]);
+
+const headers = table[0] || [];
+const payloadRows = table.slice(1).map((cells) => {
+  const row = {};
+  headers.forEach((header, index) => {
+    row[header] = cells[index] ?? '';
+  });
+  return row;
+});
+
+fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+fs.writeFileSync(outputPath, JSON.stringify(payloadRows, null, 2));
+console.log(`Wrote ${payloadRows.length} rows to ${outputPath}`);
+
+if (!sessionCookie) {
+  console.log('Set UM_SESSION_COOKIE to a master-admin __session cookie to import directly.');
+  process.exit(0);
+}
+
+const response = await fetch(apiUrl, {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    cookie: `__session=${sessionCookie}`,
+  },
+  body: JSON.stringify({ rows: payloadRows }),
+});
+
+const result = await response.json().catch(() => ({}));
+console.log('Import response:', response.status, result);
+
+if (!response.ok) {
+  process.exit(1);
+}

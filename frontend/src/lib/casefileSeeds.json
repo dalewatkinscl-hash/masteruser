@@ -1,0 +1,317 @@
+[
+  {
+    "id": "casefile:seed:office-1",
+    "title": "After hours",
+    "size": 6,
+    "rooms": [
+      "lounge",
+      "kitchen",
+      "study",
+      "hall"
+    ],
+    "objects": [
+      {
+        "id": "shelf",
+        "row": 3,
+        "col": 2,
+        "room": "study"
+      },
+      {
+        "id": "plant",
+        "row": 0,
+        "col": 5,
+        "room": "kitchen"
+      },
+      {
+        "id": "chair",
+        "row": 3,
+        "col": 3,
+        "room": "hall"
+      },
+      {
+        "id": "globe",
+        "row": 0,
+        "col": 1,
+        "room": "lounge"
+      },
+      {
+        "id": "lamp",
+        "row": 1,
+        "col": 2,
+        "room": "lounge"
+      }
+    ],
+    "clues": [
+      {
+        "type": "besideObject",
+        "person": "adam",
+        "object": "plant",
+        "room": "kitchen",
+        "text": "Adam was beside the plant."
+      },
+      {
+        "type": "besideObject",
+        "person": "alex",
+        "object": "chair",
+        "room": "hall",
+        "text": "Alex was beside the chair."
+      },
+      {
+        "type": "besideObject",
+        "person": "amelia",
+        "object": "shelf",
+        "room": "study",
+        "text": "Amelia was beside the bookshelf."
+      },
+      {
+        "type": "besideObject",
+        "person": "bob",
+        "object": "globe",
+        "room": "lounge",
+        "text": "Bob was beside the globe."
+      },
+      {
+        "type": "besideObject",
+        "person": "victim",
+        "object": "lamp",
+        "room": "lounge",
+        "text": "The victim was beside the lamp."
+      }
+    ],
+    "solution": {
+      "placement": {
+        "adam": {
+          "row": 1,
+          "col": 5
+        },
+        "alex": {
+          "row": 4,
+          "col": 3
+        },
+        "amelia": {
+          "row": 3,
+          "col": 1
+        },
+        "bob": {
+          "row": 0,
+          "col": 0
+        },
+        "victim": {
+          "row": 2,
+          "col": 2
+        }
+      },
+      "murderer": "bob"
+    }
+  },
+  {
+    "id": "casefile:seed:office-2",
+    "title": "The open plan",
+    "size": 6,
+    "rooms": [
+      "lounge",
+      "kitchen",
+      "study",
+      "hall"
+    ],
+    "objects": [
+      {
+        "id": "globe",
+        "row": 0,
+        "col": 1,
+        "room": "lounge"
+      },
+      {
+        "id": "plant",
+        "row": 3,
+        "col": 4,
+        "room": "hall"
+      },
+      {
+        "id": "shelf",
+        "row": 3,
+        "col": 3,
+        "room": "hall"
+      },
+      {
+        "id": "lamp",
+        "row": 1,
+        "col": 4,
+        "room": "kitchen"
+      },
+      {
+        "id": "chair",
+        "row": 2,
+        "col": 2,
+        "room": "lounge"
+      }
+    ],
+    "clues": [
+      {
+        "type": "besideObject",
+        "person": "adam",
+        "object": "globe",
+        "room": "lounge",
+        "text": "Adam was beside the globe."
+      },
+      {
+        "type": "besideObject",
+        "person": "alex",
+        "object": "lamp",
+        "room": "kitchen",
+        "text": "Alex was beside the lamp."
+      },
+      {
+        "type": "besideObject",
+        "person": "amelia",
+        "object": "shelf",
+        "room": "hall",
+        "text": "Amelia was beside the bookshelf."
+      },
+      {
+        "type": "besideObject",
+        "person": "bob",
+        "object": "chair",
+        "room": "lounge",
+        "text": "Bob was beside the chair."
+      },
+      {
+        "type": "besideObject",
+        "person": "victim",
+        "object": "plant",
+        "room": "hall",
+        "text": "The victim was beside the plant."
+      }
+    ],
+    "solution": {
+      "placement": {
+        "adam": {
+          "row": 0,
+          "col": 0
+        },
+        "alex": {
+          "row": 2,
+          "col": 4
+        },
+        "amelia": {
+          "row": 4,
+          "col": 3
+        },
+        "bob": {
+          "row": 1,
+          "col": 2
+        },
+        "victim": {
+          "row": 3,
+          "col": 5
+        }
+      },
+      "murderer": "amelia"
+    }
+  },
+  {
+    "id": "casefile:seed:office-3",
+    "title": "Monday briefing",
+    "size": 6,
+    "rooms": [
+      "lounge",
+      "kitchen",
+      "study",
+      "hall"
+    ],
+    "objects": [
+      {
+        "id": "chair",
+        "row": 2,
+        "col": 2,
+        "room": "lounge"
+      },
+      {
+        "id": "lamp",
+        "row": 1,
+        "col": 3,
+        "room": "kitchen"
+      },
+      {
+        "id": "plant",
+        "row": 2,
+        "col": 4,
+        "room": "kitchen"
+      },
+      {
+        "id": "globe",
+        "row": 5,
+        "col": 0,
+        "room": "study"
+      },
+      {
+        "id": "shelf",
+        "row": 4,
+        "col": 3,
+        "room": "hall"
+      }
+    ],
+    "clues": [
+      {
+        "type": "besideObject",
+        "person": "adam",
+        "object": "shelf",
+        "room": "hall",
+        "text": "Adam was beside the bookshelf."
+      },
+      {
+        "type": "besideObject",
+        "person": "alex",
+        "object": "plant",
+        "room": "kitchen",
+        "text": "Alex was beside the plant."
+      },
+      {
+        "type": "besideObject",
+        "person": "amelia",
+        "object": "chair",
+        "room": "lounge",
+        "text": "Amelia was beside the chair."
+      },
+      {
+        "type": "besideObject",
+        "person": "bob",
+        "object": "globe",
+        "room": "study",
+        "text": "Bob was beside the globe."
+      },
+      {
+        "type": "besideObject",
+        "person": "victim",
+        "object": "lamp",
+        "room": "kitchen",
+        "text": "The victim was beside the lamp."
+      }
+    ],
+    "solution": {
+      "placement": {
+        "adam": {
+          "row": 4,
+          "col": 4
+        },
+        "alex": {
+          "row": 2,
+          "col": 5
+        },
+        "amelia": {
+          "row": 1,
+          "col": 2
+        },
+        "bob": {
+          "row": 5,
+          "col": 1
+        },
+        "victim": {
+          "row": 0,
+          "col": 3
+        }
+      },
+      "murderer": "alex"
+    }
+  }
+]

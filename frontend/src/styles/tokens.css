@@ -1,0 +1,293 @@
+/* Linear / Modern design tokens — Country Lion portals */
+
+/*
+ * Bridge daisyUI CSS variables → Country Lion tokens.
+ * daisyUI 4 stores theme colors as OKLCH channels (e.g. --bc: 32% 0.02 264).
+ * Using hsl() here washes Nord / Corporate into pale unreadable blues.
+ */
+html[data-theme] {
+  --cl-bg-deep: oklch(var(--b3));
+  --cl-bg-base: oklch(var(--b1));
+  --cl-bg-elevated: oklch(var(--b2));
+  --cl-surface: oklch(var(--bc) / 0.06);
+  --cl-surface-hover: oklch(var(--bc) / 0.1);
+  --cl-foreground: oklch(var(--bc));
+  --cl-foreground-muted: oklch(var(--bc) / 0.65);
+  --cl-foreground-subtle: oklch(var(--bc) / 0.72);
+  --cl-accent: oklch(var(--p));
+  --cl-accent-bright: oklch(var(--pf, var(--p)));
+  --cl-accent-glow: oklch(var(--p) / 0.28);
+  --cl-border: oklch(var(--bc) / 0.12);
+  --cl-border-hover: oklch(var(--bc) / 0.2);
+  --cl-border-accent: oklch(var(--p) / 0.35);
+  --cl-input-bg: oklch(var(--b2));
+  --cl-card-bg: oklch(var(--b2));
+  --cl-card-bg-soft: oklch(var(--b1));
+  --cl-panel-border: oklch(var(--b3));
+  --cl-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --cl-shadow-card: 0 1px 3px oklch(var(--bc) / 0.08), 0 4px 16px oklch(var(--bc) / 0.06);
+  --cl-shadow-card-hover: 0 8px 28px oklch(var(--bc) / 0.12);
+  --cl-shadow-accent: 0 4px 12px oklch(var(--p) / 0.25);
+  --cl-ambient-base: oklch(var(--b1));
+  --cl-ambient-grid: oklch(var(--bc) / 0.35);
+  --cl-nav-active-fg: oklch(var(--p));
+  --cl-nav-active-bg: oklch(var(--p) / 0.15);
+  --cl-scrollbar: oklch(var(--bc) / 0.2);
+  --cl-hardcoded-text-strong: oklch(var(--bc));
+  --cl-hardcoded-text-mid: oklch(var(--bc) / 0.85);
+  --cl-hardcoded-text-muted: oklch(var(--bc) / 0.65);
+}
+
+/* Default = dark (Country Lion tuned) */
+:root,
+html[data-theme='dark'] {
+  --cl-bg-deep: #020203;
+  --cl-bg-base: #050506;
+  --cl-bg-elevated: #0a0a0c;
+  --cl-surface: rgba(255, 255, 255, 0.05);
+  --cl-surface-hover: rgba(255, 255, 255, 0.08);
+  --cl-foreground: #ededef;
+  --cl-foreground-muted: #8a8f98;
+  --cl-foreground-subtle: rgba(255, 255, 255, 0.6);
+  --cl-accent: #5e6ad2;
+  --cl-accent-bright: #6872d9;
+  --cl-accent-glow: rgba(94, 106, 210, 0.3);
+  --cl-border: rgba(255, 255, 255, 0.06);
+  --cl-border-hover: rgba(255, 255, 255, 0.1);
+  --cl-border-accent: rgba(94, 106, 210, 0.3);
+  --cl-input-bg: #0f0f12;
+  --cl-card-bg: #0b1220;
+  --cl-card-bg-soft: #060e1a;
+  --cl-panel-border: #1a2540;
+  --cl-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --cl-shadow-card:
+    0 0 0 1px rgba(255, 255, 255, 0.06),
+    0 2px 20px rgba(0, 0, 0, 0.4),
+    0 0 40px rgba(0, 0, 0, 0.2);
+  --cl-shadow-card-hover:
+    0 0 0 1px rgba(255, 255, 255, 0.1),
+    0 8px 40px rgba(0, 0, 0, 0.5),
+    0 0 80px rgba(94, 106, 210, 0.1);
+  --cl-shadow-accent:
+    0 0 0 1px rgba(94, 106, 210, 0.5),
+    0 4px 12px rgba(94, 106, 210, 0.3),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.2);
+  --cl-ambient-base: radial-gradient(ellipse at top, #0a0a0f 0%, #050506 50%, #020203 100%);
+  --cl-ambient-grid: rgba(255, 255, 255, 0.6);
+  --cl-nav-active-fg: #c7cbf5;
+  --cl-nav-active-bg: rgba(94, 106, 210, 0.18);
+  --cl-scrollbar: rgba(255, 255, 255, 0.12);
+  --cl-hardcoded-text-strong: #ededef;
+  --cl-hardcoded-text-mid: #cbd5e1;
+  --cl-hardcoded-text-muted: #94a3b8;
+}
+
+html[data-theme='light'] {
+  --cl-bg-deep: #e8ecf4;
+  --cl-bg-base: #f3f5f9;
+  --cl-bg-elevated: #ffffff;
+  --cl-surface: rgba(15, 23, 42, 0.04);
+  --cl-surface-hover: rgba(15, 23, 42, 0.07);
+  --cl-foreground: #0f172a;
+  --cl-foreground-muted: #64748b;
+  --cl-foreground-subtle: rgba(15, 23, 42, 0.65);
+  --cl-accent: #4f5bc4;
+  --cl-accent-bright: #5e6ad2;
+  --cl-accent-glow: rgba(79, 91, 196, 0.22);
+  --cl-border: rgba(15, 23, 42, 0.1);
+  --cl-border-hover: rgba(15, 23, 42, 0.16);
+  --cl-border-accent: rgba(79, 91, 196, 0.35);
+  --cl-input-bg: #ffffff;
+  --cl-card-bg: #ffffff;
+  --cl-card-bg-soft: #f8fafc;
+  --cl-panel-border: #dbe2ef;
+  --cl-shadow-card:
+    0 0 0 1px rgba(15, 23, 42, 0.06),
+    0 2px 16px rgba(15, 23, 42, 0.06);
+  --cl-shadow-card-hover:
+    0 0 0 1px rgba(15, 23, 42, 0.1),
+    0 8px 28px rgba(15, 23, 42, 0.1);
+  --cl-shadow-accent:
+    0 0 0 1px rgba(79, 91, 196, 0.35),
+    0 4px 12px rgba(79, 91, 196, 0.2),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.5);
+  --cl-ambient-base: radial-gradient(ellipse at top, #ffffff 0%, #eef2f8 55%, #e4eaf4 100%);
+  --cl-ambient-grid: rgba(15, 23, 42, 0.45);
+  --cl-nav-active-fg: #3730a3;
+  --cl-nav-active-bg: rgba(79, 91, 196, 0.12);
+  --cl-scrollbar: rgba(15, 23, 42, 0.2);
+  --cl-hardcoded-text-strong: #1e293b;
+  --cl-hardcoded-text-mid: #334155;
+  --cl-hardcoded-text-muted: #64748b;
+}
+
+/* Super kawaii — pink, pastel rainbow, My Little Pony energy */
+html[data-theme='kawaii'] {
+  --cl-bg-deep: #ffd6ef;
+  --cl-bg-base: #ffe9f6;
+  --cl-bg-elevated: #ffffff;
+  --cl-surface: rgba(236, 72, 153, 0.1);
+  --cl-surface-hover: rgba(236, 72, 153, 0.18);
+  --cl-foreground: #6b2158;
+  --cl-foreground-muted: #b85a96;
+  --cl-foreground-subtle: rgba(107, 33, 88, 0.72);
+  --cl-accent: #ec4899;
+  --cl-accent-bright: #f472b6;
+  --cl-accent-glow: rgba(236, 72, 153, 0.4);
+  --cl-border: rgba(236, 72, 153, 0.22);
+  --cl-border-hover: rgba(236, 72, 153, 0.38);
+  --cl-border-accent: rgba(244, 114, 182, 0.65);
+  --cl-input-bg: #ffffff;
+  --cl-card-bg: rgba(255, 255, 255, 0.88);
+  --cl-card-bg-soft: #fff7fb;
+  --cl-panel-border: #f9c4e1;
+  --cl-shadow-card:
+    0 0 0 2px rgba(244, 114, 182, 0.25),
+    0 10px 28px rgba(236, 72, 153, 0.14),
+    0 0 48px rgba(167, 139, 250, 0.12);
+  --cl-shadow-card-hover:
+    0 0 0 2px rgba(244, 114, 182, 0.4),
+    0 14px 36px rgba(236, 72, 153, 0.2),
+    0 0 56px rgba(125, 211, 252, 0.16);
+  --cl-shadow-accent:
+    0 0 0 1px rgba(236, 72, 153, 0.45),
+    0 4px 14px rgba(236, 72, 153, 0.35),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.65);
+  --cl-ambient-base:
+    radial-gradient(ellipse 90% 55% at 15% 0%, #ffb8e4 0%, transparent 55%),
+    radial-gradient(ellipse 80% 50% at 90% 5%, #d8b4fe 0%, transparent 50%),
+    radial-gradient(ellipse 70% 45% at 50% 100%, #7dd3fc 0%, transparent 55%),
+    radial-gradient(ellipse 50% 35% at 70% 40%, #fef08a 0%, transparent 60%),
+    linear-gradient(180deg, #fff0f8 0%, #ffe4f6 40%, #f5e9ff 100%);
+  --cl-ambient-grid: rgba(236, 72, 153, 0.2);
+  --cl-nav-active-fg: #be185d;
+  --cl-nav-active-bg: rgba(244, 114, 182, 0.28);
+  --cl-scrollbar: rgba(236, 72, 153, 0.4);
+  --cl-hardcoded-text-strong: #6b2158;
+  --cl-hardcoded-text-mid: #9d4b7c;
+  --cl-hardcoded-text-muted: #b85a96;
+  font-family: 'Nunito', 'Quicksand', Inter, system-ui, sans-serif;
+}
+
+html[data-theme='forest'] {
+  --cl-bg-deep: #09120d;
+  --cl-bg-base: #0f1c15;
+  --cl-bg-elevated: #13231a;
+  --cl-surface: rgba(151, 191, 113, 0.1);
+  --cl-surface-hover: rgba(151, 191, 113, 0.16);
+  --cl-foreground: #e9f3e6;
+  --cl-foreground-muted: #9ab39a;
+  --cl-foreground-subtle: rgba(233, 243, 230, 0.66);
+  --cl-accent: #6aa84f;
+  --cl-accent-bright: #86c36a;
+  --cl-accent-glow: rgba(106, 168, 79, 0.3);
+  --cl-border: rgba(151, 191, 113, 0.16);
+  --cl-border-hover: rgba(151, 191, 113, 0.24);
+  --cl-border-accent: rgba(106, 168, 79, 0.32);
+  --cl-input-bg: #142219;
+  --cl-card-bg: #15261b;
+  --cl-card-bg-soft: #102016;
+  --cl-panel-border: #294430;
+  --cl-shadow-card:
+    0 0 0 1px rgba(151, 191, 113, 0.08),
+    0 8px 24px rgba(0, 0, 0, 0.28);
+  --cl-shadow-card-hover:
+    0 0 0 1px rgba(151, 191, 113, 0.14),
+    0 12px 36px rgba(0, 0, 0, 0.34);
+  --cl-shadow-accent:
+    0 0 0 1px rgba(106, 168, 79, 0.42),
+    0 4px 14px rgba(106, 168, 79, 0.22);
+  --cl-ambient-base:
+    radial-gradient(ellipse 90% 55% at 15% 0%, rgba(74, 222, 128, 0.2) 0%, transparent 50%),
+    radial-gradient(ellipse 70% 45% at 100% 20%, rgba(250, 204, 21, 0.08) 0%, transparent 45%),
+    linear-gradient(180deg, #102016 0%, #0d1711 50%, #08110c 100%);
+  --cl-ambient-grid: rgba(198, 255, 192, 0.22);
+  --cl-nav-active-fg: #d9f99d;
+  --cl-nav-active-bg: rgba(132, 204, 22, 0.18);
+  --cl-scrollbar: rgba(151, 191, 113, 0.25);
+  --cl-hardcoded-text-strong: #e9f3e6;
+  --cl-hardcoded-text-mid: #c3dcc4;
+  --cl-hardcoded-text-muted: #9ab39a;
+}
+
+html[data-theme='sunset'] {
+  --cl-bg-deep: #2a0f13;
+  --cl-bg-base: #3a1619;
+  --cl-bg-elevated: #4a1d20;
+  --cl-surface: rgba(251, 146, 60, 0.12);
+  --cl-surface-hover: rgba(251, 146, 60, 0.2);
+  --cl-foreground: #fff0e6;
+  --cl-foreground-muted: #f5b58e;
+  --cl-foreground-subtle: rgba(255, 240, 230, 0.7);
+  --cl-accent: #fb7185;
+  --cl-accent-bright: #fb923c;
+  --cl-accent-glow: rgba(251, 146, 60, 0.28);
+  --cl-border: rgba(251, 146, 60, 0.16);
+  --cl-border-hover: rgba(251, 146, 60, 0.24);
+  --cl-border-accent: rgba(244, 114, 182, 0.3);
+  --cl-input-bg: #4b201f;
+  --cl-card-bg: #4f2423;
+  --cl-card-bg-soft: #421b1c;
+  --cl-panel-border: #7a3b33;
+  --cl-shadow-card:
+    0 0 0 1px rgba(251, 146, 60, 0.08),
+    0 8px 26px rgba(0, 0, 0, 0.3);
+  --cl-shadow-card-hover:
+    0 0 0 1px rgba(251, 146, 60, 0.14),
+    0 14px 36px rgba(0, 0, 0, 0.34);
+  --cl-shadow-accent:
+    0 0 0 1px rgba(251, 113, 133, 0.38),
+    0 4px 14px rgba(251, 146, 60, 0.24);
+  --cl-ambient-base:
+    radial-gradient(ellipse 85% 55% at 20% 0%, rgba(251, 146, 60, 0.24) 0%, transparent 52%),
+    radial-gradient(ellipse 80% 50% at 90% 10%, rgba(244, 114, 182, 0.18) 0%, transparent 48%),
+    linear-gradient(180deg, #5b2524 0%, #41191b 50%, #250d12 100%);
+  --cl-ambient-grid: rgba(255, 221, 194, 0.18);
+  --cl-nav-active-fg: #ffe0bf;
+  --cl-nav-active-bg: rgba(251, 146, 60, 0.2);
+  --cl-scrollbar: rgba(251, 146, 60, 0.24);
+  --cl-hardcoded-text-strong: #fff0e6;
+  --cl-hardcoded-text-mid: #ffd8bf;
+  --cl-hardcoded-text-muted: #f5b58e;
+}
+
+html[data-theme='aurora'] {
+  --cl-bg-deep: #07131d;
+  --cl-bg-base: #0b1d2b;
+  --cl-bg-elevated: #102435;
+  --cl-surface: rgba(56, 189, 248, 0.1);
+  --cl-surface-hover: rgba(56, 189, 248, 0.16);
+  --cl-foreground: #e7fbff;
+  --cl-foreground-muted: #93cfe0;
+  --cl-foreground-subtle: rgba(231, 251, 255, 0.68);
+  --cl-accent: #22d3ee;
+  --cl-accent-bright: #a78bfa;
+  --cl-accent-glow: rgba(34, 211, 238, 0.28);
+  --cl-border: rgba(56, 189, 248, 0.14);
+  --cl-border-hover: rgba(56, 189, 248, 0.22);
+  --cl-border-accent: rgba(167, 139, 250, 0.26);
+  --cl-input-bg: #122637;
+  --cl-card-bg: #112534;
+  --cl-card-bg-soft: #0d1f2d;
+  --cl-panel-border: #27455b;
+  --cl-shadow-card:
+    0 0 0 1px rgba(56, 189, 248, 0.08),
+    0 8px 24px rgba(0, 0, 0, 0.3);
+  --cl-shadow-card-hover:
+    0 0 0 1px rgba(56, 189, 248, 0.14),
+    0 12px 34px rgba(0, 0, 0, 0.34);
+  --cl-shadow-accent:
+    0 0 0 1px rgba(34, 211, 238, 0.4),
+    0 4px 14px rgba(167, 139, 250, 0.18);
+  --cl-ambient-base:
+    radial-gradient(ellipse 85% 55% at 15% 0%, rgba(34, 211, 238, 0.18) 0%, transparent 50%),
+    radial-gradient(ellipse 75% 45% at 90% 15%, rgba(167, 139, 250, 0.2) 0%, transparent 48%),
+    linear-gradient(180deg, #102435 0%, #0b1b28 52%, #06111b 100%);
+  --cl-ambient-grid: rgba(125, 211, 252, 0.18);
+  --cl-nav-active-fg: #ccfbff;
+  --cl-nav-active-bg: rgba(34, 211, 238, 0.18);
+  --cl-scrollbar: rgba(56, 189, 248, 0.22);
+  --cl-hardcoded-text-strong: #e7fbff;
+  --cl-hardcoded-text-mid: #c5f4fb;
+  --cl-hardcoded-text-muted: #93cfe0;
+}

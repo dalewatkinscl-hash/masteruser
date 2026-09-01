@@ -1,0 +1,82 @@
+function medalEmoji(medal) {
+  if (medal === 'gold') return '🥇';
+  if (medal === 'silver') return '🥈';
+  if (medal === 'bronze') return '🥉';
+  return null;
+}
+
+/**
+ * Rank / medal / poop badge for Fun-tab leaderboards.
+ */
+export function FunRankBadge({ row }) {
+  const failed = row?.failed || row?.status === 'lost' || row?.correct === false;
+  if (failed) {
+    return (
+      <span className="w-10 text-center text-base leading-none" title="Failed">
+        💩
+      </span>
+    );
+  }
+
+  const medal = medalEmoji(row?.medal) || (row?.rank === 1 ? '🥇' : row?.rank === 2 ? '🥈' : row?.rank === 3 ? '🥉' : null);
+  if (medal) {
+    return (
+      <span
+        className="w-10 text-center text-base leading-none"
+        title={row?.rankLabel || ''}
+      >
+        {medal}
+      </span>
+    );
+  }
+
+  return (
+    <span className="w-10 text-center text-[10px] font-mono text-slate-500 leading-tight">
+      {row?.joint ? 'J' : '#'}{row?.rank || '—'}
+    </span>
+  );
+}
+
+export function FunRankLabel({ row, className = '' }) {
+  const failed = row?.failed || row?.status === 'lost' || row?.correct === false;
+  if (failed) return null;
+  if (!row?.joint) return null;
+  return (
+    <span className={`text-[10px] text-slate-500 ${className}`}>
+      {row.rankLabel || 'Joint'}
+    </span>
+  );
+}
+
+export default function FunLeaderboardRow({
+  row,
+  currentUserUid,
+  resultText,
+  metaText = '',
+}) {
+  const isMe = row.uid === currentUserUid;
+  const failed = row?.failed || row?.status === 'lost' || row?.correct === false;
+
+  return (
+    <li
+      className={`px-5 py-3 flex items-center justify-between gap-3 text-sm ${isMe ? 'bg-indigo-500/10' : ''}`}
+    >
+      <div className="flex items-center gap-2 min-w-0">
+        <FunRankBadge row={row} />
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className={`truncate ${isMe ? 'text-indigo-300 font-semibold text-base' : 'text-slate-100'}`}>
+              {row.fullName}
+              {isMe ? ' (you)' : ''}
+            </span>
+            <FunRankLabel row={row} />
+          </div>
+        </div>
+      </div>
+      <span className={`text-xs flex-shrink-0 ${failed ? 'text-rose-300' : 'text-slate-500'}`}>
+        {resultText}
+        {metaText ? ` · ${metaText}` : ''}
+      </span>
+    </li>
+  );
+}

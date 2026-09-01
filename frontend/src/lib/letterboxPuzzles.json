@@ -1,0 +1,248 @@
+[
+  {
+    "id": "lb001",
+    "sides": [
+      "DHT",
+      "CER",
+      "ASU",
+      "INO"
+    ],
+    "solution": [
+      "SOUND",
+      "DITCH",
+      "HEART"
+    ],
+    "par": 3
+  },
+  {
+    "id": "lb002",
+    "sides": [
+      "HOU",
+      "BTY",
+      "CNR",
+      "AMS"
+    ],
+    "solution": [
+      "BUSH",
+      "HARMONY",
+      "YACHTS"
+    ],
+    "par": 3
+  },
+  {
+    "id": "lb003",
+    "sides": [
+      "AGL",
+      "EKT",
+      "INR",
+      "HPU"
+    ],
+    "solution": [
+      "PEARL",
+      "LIGHT",
+      "TRUNK"
+    ],
+    "par": 3
+  },
+  {
+    "id": "lb004",
+    "sides": [
+      "GIP",
+      "HOS",
+      "NRT",
+      "ACY"
+    ],
+    "solution": [
+      "COAST",
+      "THRONGS",
+      "SPYING"
+    ],
+    "par": 3
+  },
+  {
+    "id": "lb005",
+    "sides": [
+      "AEI",
+      "NPS",
+      "LMR",
+      "CDG"
+    ],
+    "solution": [
+      "CRADLES",
+      "SIMPLE",
+      "ENGINE"
+    ],
+    "par": 3
+  },
+  {
+    "id": "lb006",
+    "sides": [
+      "ILP",
+      "ANS",
+      "EHM",
+      "GTY"
+    ],
+    "solution": [
+      "SING",
+      "GLYPHS",
+      "STEAM"
+    ],
+    "par": 3
+  },
+  {
+    "id": "lb007",
+    "sides": [
+      "AGI",
+      "FTW",
+      "DSU",
+      "NOR"
+    ],
+    "solution": [
+      "GRIND",
+      "DWARFS",
+      "STOUT"
+    ],
+    "par": 3
+  },
+  {
+    "id": "lb008",
+    "sides": [
+      "AFH",
+      "EGM",
+      "NRY",
+      "CIO"
+    ],
+    "solution": [
+      "FOAM",
+      "MACHINE",
+      "ENERGY"
+    ],
+    "par": 3
+  },
+  {
+    "id": "lb009",
+    "sides": [
+      "AGN",
+      "OPU",
+      "BMY",
+      "ERT"
+    ],
+    "solution": [
+      "NUTMEG",
+      "GRAPE",
+      "EBONY"
+    ],
+    "par": 3
+  },
+  {
+    "id": "lb010",
+    "sides": [
+      "COS",
+      "AHI",
+      "ENT",
+      "BRY"
+    ],
+    "solution": [
+      "RICE",
+      "EBONY",
+      "YACHTS"
+    ],
+    "par": 3
+  },
+  {
+    "id": "lb011",
+    "sides": [
+      "CEP",
+      "HLN",
+      "DMU",
+      "OST"
+    ],
+    "solution": [
+      "SCOUT",
+      "TEMPLE",
+      "ETCH",
+      "HOUND"
+    ],
+    "par": 4
+  },
+  {
+    "id": "lb012",
+    "sides": [
+      "ALN",
+      "GTU",
+      "BIR",
+      "CES"
+    ],
+    "solution": [
+      "CRUST",
+      "TABLE",
+      "EAGLE",
+      "ENGINE"
+    ],
+    "par": 4
+  },
+  {
+    "id": "lb013",
+    "sides": [
+      "EHR",
+      "GPT",
+      "AIL",
+      "DNO"
+    ],
+    "solution": [
+      "GRAPE",
+      "ENGINE",
+      "EARTH",
+      "HOLD"
+    ],
+    "par": 4
+  },
+  {
+    "id": "lb014",
+    "sides": [
+      "EHI",
+      "NRS",
+      "CTY",
+      "AGW"
+    ],
+    "solution": [
+      "WRITE",
+      "ENGINE",
+      "ENERGY",
+      "YACHTS"
+    ],
+    "par": 4
+  },
+  {
+    "id": "lb015",
+    "sides": [
+      "INT",
+      "ADX",
+      "EHU",
+      "PRV"
+    ],
+    "solution": [
+      "NATURE",
+      "EXPAND",
+      "DRIVE",
+      "EARTH"
+    ],
+    "par": 4
+  },
+  {
+    "id": "lb016",
+    "sides": [
+      "DMP",
+      "LNR",
+      "AGI",
+      "EKS"
+    ],
+    "solution": [
+      "SPEAK",
+      "KARMA",
+      "ANIMAL",
+      "LEGEND"
+    ],
+    "par": 4
+  }
+]

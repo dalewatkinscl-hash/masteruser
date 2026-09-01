@@ -1,0 +1,540 @@
+{
+  "functions": {
+    "source": "functions"
+  },
+  "hosting": {
+    "public": "frontend/dist",
+    "ignore": [
+      "firebase.json",
+      "**/.*",
+      "**/node_modules/**"
+    ],
+    "headers": [
+      {
+        "source": "/index.html",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache, no-store, must-revalidate"
+          }
+        ]
+      }
+    ],
+    "rewrites": [
+      {
+        "source": "/api/loginWithCookie",
+        "function": "loginWithCookie",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/loginPortalUser",
+        "function": "loginPortalUser",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/logoutPortalUser",
+        "function": "logoutPortalUser",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/verifySession",
+        "function": "verifySession",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/adminCreateUser",
+        "function": "adminCreateUser",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/adminUpdateUser",
+        "function": "adminUpdateUser",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/adminBulkUpdatePortals",
+        "function": "adminBulkUpdatePortals",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/verifyPortalSession",
+        "function": "verifyPortalSession",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getUsers",
+        "function": "getUsers",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getUsersForTrainingSync",
+        "function": "getUsersForTrainingSync",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getUsersForHolidaysSync",
+        "function": "getUsersForHolidaysSync",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getMentorProfiles{,/**}",
+        "function": "getMentorProfiles",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getAssessmentProfiles{,/**}",
+        "function": "getAssessmentProfiles",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getTyreProfiles{,/**}",
+        "function": "getTyreProfiles",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getUser/**",
+        "function": "getUser",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getMenuItems",
+        "function": "getMenuItems",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/verifyUserSession",
+        "function": "verifyUserSession",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/changeMyPassword",
+        "function": "changeMyPassword",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/adminResetPassword",
+        "function": "adminResetPassword",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getEmployeeProfiles",
+        "function": "getEmployeeProfiles",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getEmployeeProfile/**",
+        "function": "getEmployeeProfile",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getBusinessContactEmail",
+        "function": "getBusinessContactEmail",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/updateEmployeeProfile",
+        "function": "updateEmployeeProfile",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/adminImportHrData",
+        "function": "adminImportHrData",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/adminEnablePortalLogin",
+        "function": "adminEnablePortalLogin",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getEmployeeDuplicateSuggestions",
+        "function": "getEmployeeDuplicateSuggestions",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/adminMergeEmployees",
+        "function": "adminMergeEmployees",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/adminRunHrMilestoneAlerts",
+        "function": "adminRunHrMilestoneAlerts",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getDisciplinaryCases",
+        "function": "getDisciplinaryCases",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getDisciplinaryCase/**",
+        "function": "getDisciplinaryCase",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/createDisciplinaryCase",
+        "function": "createDisciplinaryCase",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/createAttendanceIncident",
+        "function": "createAttendanceIncident",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/reviewAttendanceIncident",
+        "function": "reviewAttendanceIncident",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/uploadDisciplinaryDocument",
+        "function": "uploadDisciplinaryDocument",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getPeopleCaseMeta",
+        "function": "getPeopleCaseMeta",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getPeopleCases",
+        "function": "getPeopleCases",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getPeopleCase/**",
+        "function": "getPeopleCase",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/createPeopleCase",
+        "function": "createPeopleCase",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/updatePeopleCase",
+        "function": "updatePeopleCase",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/createCaseMinutes",
+        "function": "createCaseMinutes",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/respondCaseMinutes",
+        "function": "respondCaseMinutes",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/createCaseReview",
+        "function": "createCaseReview",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/completeCaseReview",
+        "function": "completeCaseReview",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getEmployeeCaseActions",
+        "function": "getEmployeeCaseActions",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/createBumpCardPrompt",
+        "function": "createBumpCardPrompt",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/submitBumpCard",
+        "function": "submitBumpCard",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/exportPeopleCase",
+        "function": "exportPeopleCase",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/downloadCaseDocumentTemplate",
+        "function": "downloadCaseDocumentTemplate",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/clearExpiredWarnings",
+        "function": "clearExpiredWarnings",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getSharePointDisciplinaryPath",
+        "function": "getSharePointDisciplinaryPath",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getEmployeeSharePointDocuments",
+        "function": "getEmployeeSharePointDocuments",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getSharePointFolderSuggestions",
+        "function": "getSharePointFolderSuggestions",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/confirmSharePointFolderMapping",
+        "function": "confirmSharePointFolderMapping",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getDailyTrivia",
+        "function": "getDailyTrivia",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/submitTriviaAnswer",
+        "function": "submitTriviaAnswer",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getSuggestions",
+        "function": "getSuggestions",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getSuggestionBadge",
+        "function": "getSuggestionBadge",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/createSuggestion",
+        "function": "createSuggestion",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/listColleagueDirectory",
+        "function": "listColleagueDirectory",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getMyKudos",
+        "function": "getMyKudos",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/sendKudos",
+        "function": "sendKudos",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/updateSuggestionStatus",
+        "function": "updateSuggestionStatus",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getDailyWordle",
+        "function": "getDailyWordle",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/submitWordleGuess",
+        "function": "submitWordleGuess",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getDailySokoban",
+        "function": "getDailySokoban",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getSokobanPreview",
+        "function": "getSokobanPreview",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/submitSokobanMove",
+        "function": "submitSokobanMove",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getDailyNonogram",
+        "function": "getDailyNonogram",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getNonogramCatalog",
+        "function": "getNonogramCatalog",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/createNonogramPuzzle",
+        "function": "createNonogramPuzzle",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/deleteNonogramPuzzle",
+        "function": "deleteNonogramPuzzle",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/scheduleNonogramPuzzle",
+        "function": "scheduleNonogramPuzzle",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/submitNonogramState",
+        "function": "submitNonogramState",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getDailyBoggle",
+        "function": "getDailyBoggle",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getBoggleDictionary",
+        "function": "getBoggleDictionary",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/submitBoggleResult",
+        "function": "submitBoggleResult",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getDailyConnections",
+        "function": "getDailyConnections",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/submitConnectionsResult",
+        "function": "submitConnectionsResult",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getDailyEnclose",
+        "function": "getDailyEnclose",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/submitEncloseResult",
+        "function": "submitEncloseResult",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getDailyLetterbox",
+        "function": "getDailyLetterbox",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/submitLetterboxResult",
+        "function": "submitLetterboxResult",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getDailyPipes",
+        "function": "getDailyPipes",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/submitPipesResult",
+        "function": "submitPipesResult",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getDailyToolboxKick",
+        "function": "getDailyToolboxKick",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/submitToolboxKickResult",
+        "function": "submitToolboxKickResult",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/adminResetFunGame",
+        "function": "adminResetFunGame",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/adminBackfillFunMedals",
+        "function": "adminBackfillFunMedals",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getFunRotation",
+        "function": "getFunRotation",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getFunSchedule",
+        "function": "getFunSchedule",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/adminListFunContent",
+        "function": "adminListFunContent",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/adminSaveFunContent",
+        "function": "adminSaveFunContent",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/adminDeleteFunContent",
+        "function": "adminDeleteFunContent",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/previewFunContent",
+        "function": "previewFunContent",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getPolls",
+        "function": "getPolls",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/createPoll",
+        "function": "createPoll",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/submitPollVote",
+        "function": "submitPollVote",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/closePoll",
+        "function": "closePoll",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getProfileWidgets",
+        "function": "getProfileWidgets",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getEmergencyPhone",
+        "function": "getEmergencyPhone",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/createEmergencyPhoneShift",
+        "function": "createEmergencyPhoneShift",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/deleteEmergencyPhoneShift",
+        "function": "deleteEmergencyPhoneShift",
+        "region": "europe-west2"
+      },
+      {
+        "source": "**",
+        "destination": "/index.html"
+      }
+    ]
+  }
+}

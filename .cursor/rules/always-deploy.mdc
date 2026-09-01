@@ -1,0 +1,27 @@
+---
+description: Always deploy Employee Portal after shipping changes
+alwaysApply: true
+---
+
+# Always deploy after changes
+
+When finishing implementable work in this User Management / Employee Portal repo, **deploy** unless the user says not to.
+
+## Target
+
+- Firebase project: `master-user-management`
+- Production URL: https://employee.countrylion.co.uk
+- Hosting URL: https://master-user-management.web.app
+
+## Deploy steps
+
+1. `npm run build` in `frontend/`
+2. Prefer targeted deploys to avoid deleting remote-only orphans (`clearEmergencyPhoneAssignment`, `setEmergencyPhoneAssignment`, `trutacProxy`):
+   - `firebase deploy --only hosting --project master-user-management`
+   - `firebase deploy --only functions:<changedFn>,... --project master-user-management` for changed/new functions
+3. If a full `functions` deploy aborts on orphaned remote functions, do **not** use `--force` (that deletes them). Use targeted function deploys instead.
+4. After creating new hosting rewrites for new functions, redeploy hosting once those functions exist.
+
+## After deploy
+
+Tell the user the live URLs for what changed (e.g. `/dashboard/cases`).

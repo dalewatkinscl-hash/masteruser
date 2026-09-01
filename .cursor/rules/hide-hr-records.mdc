@@ -1,0 +1,15 @@
+---
+description: Keep HR records / disciplinary UI hidden until re-enabled
+alwaysApply: true
+---
+
+# Employee Portal — hide HR records for now
+
+In the User Management (Employee Portal) project, **HR records are temporarily hidden**.
+
+- Keep `SHOW_HR_RECORDS = false` in `frontend/src/utils/featureFlags.js` until Dale asks to turn them back on.
+- That flag must continue to hide:
+  - the **HR records** section on profiles
+  - the **Performance** tab on employee detail
+  - the **Disciplinary hub** sidebar link
+- Do not reintroduce these surfaces in new work unless Dale explicitly asks to enable HR records again.

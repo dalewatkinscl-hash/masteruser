@@ -1,0 +1,8 @@
+﻿[
+  {
+    "origin": ["https://master-user-management.web.app", "https://master-user-management.firebaseapp.com", "http://localhost:5173", "http://localhost:4173", "http://127.0.0.1:5173"],
+    "method": ["GET", "HEAD", "OPTIONS"],
+    "responseHeader": ["Content-Type", "Cache-Control", "Content-Length"],
+    "maxAgeSeconds": 3600
+  }
+]
