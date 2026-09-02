@@ -5,6 +5,7 @@ import { auth } from '../firebase';
 import { useAuth } from '../context/AuthContext';
 import AmbientBackground from '../components/AmbientBackground';
 import ThemeToggle from '../components/ThemeToggle';
+import DigitalClock from '../components/DigitalClock';
 import KudosWelcomeModal from '../components/KudosWelcomeModal';
 import KawaiiDecor from '../components/KawaiiDecor';
 import { useTheme } from '../context/ThemeContext';
@@ -269,9 +270,12 @@ export default function Dashboard() {
               <MenuIcon className="w-5 h-5" />
             </button>
           )}
-          <p className="text-base-content/70 text-sm min-w-0 truncate flex-1">
-            Hello, <span className="font-semibold text-base-content">{firstName}</span>
-          </p>
+          <div className="min-w-0 flex-1 flex items-center gap-3">
+            <p className="text-base-content/70 text-sm min-w-0 truncate">
+              Hello, <span className="font-semibold text-base-content">{firstName}</span>
+            </p>
+            <DigitalClock />
+          </div>
           <div className="sm:hidden">
             <ThemeToggle showLabel={false} className="!w-auto px-2" />
           </div>
