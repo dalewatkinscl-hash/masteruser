@@ -18,6 +18,7 @@ function labelFor(employee) {
 
 /**
  * Searchable person picker. mode: "employees" (active staff) or "managers" (cases-capable).
+ * Results appear as a dropdown as you type, matching the manager picker behaviour.
  */
 export default function EmployeeSelect({
   value = '',
@@ -31,77 +32,108 @@ export default function EmployeeSelect({
   className = '',
 }) {
   const [search, setSearch] = useState('');
+  const [menuOpen, setMenuOpen] = useState(false);
 
-  const options = useMemo(() => {
-    const query = search.trim().toLowerCase();
+  const selected = employees.find((employee) => employee.uid === value) || null;
+
+  // When a value is set externally (e.g. prefill), clear any stale search text.
+  const displaySearch = selected ? '' : search;
+
+  const suggestions = useMemo(() => {
+    const query = (selected ? '' : search).trim().toLowerCase();
+    if (!query) return [];
+
     let list = employees.filter((employee) => employee.isActive !== false);
-
     if (mode === 'managers') {
       list = list.filter(isCasesManagerCandidate);
     }
 
-    // Keep current value visible even if inactive / not in filtered set.
-    if (value) {
-      const selected = employees.find((employee) => employee.uid === value);
-      if (selected && !list.some((employee) => employee.uid === value)) {
-        list = [selected, ...list];
-      }
-    }
+    list = list.filter((employee) => {
+      if (value && employee.uid === value) return false; // already selected
+      const haystack = [
+        employee.fullName,
+        employee.email,
+        employee.employeeProfile?.department,
+        employee.employeeProfile?.jobRole,
+      ].filter(Boolean).join(' ').toLowerCase();
+      return haystack.includes(query);
+    });
 
-    if (query) {
-      list = list.filter((employee) => {
-        const haystack = [
-          employee.fullName,
-          employee.email,
-          employee.employeeProfile?.department,
-          employee.employeeProfile?.jobRole,
-        ].filter(Boolean).join(' ').toLowerCase();
-        return haystack.includes(query);
-      });
-    }
+    return list
+      .sort((a, b) => (a.fullName || a.email || '').localeCompare(b.fullName || b.email || ''))
+      .slice(0, 10);
+  }, [employees, mode, search, value, selected]);
 
-    return list.sort((a, b) => (a.fullName || a.email || '').localeCompare(b.fullName || b.email || ''));
-  }, [employees, mode, search, value]);
+  const select = (uid) => {
+    onChange?.(uid);
+    setSearch('');
+    setMenuOpen(false);
+  };
 
-  const selected = employees.find((employee) => employee.uid === value) || null;
+  const clear = () => {
+    onChange?.('');
+    setSearch('');
+  };
 
   return (
     <div className={`space-y-2 ${className}`}>
-      <input
-        type="search"
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        className={inputClass}
-        placeholder="Search by name, email, or department…"
-        disabled={disabled || loading}
-      />
-      <select
-        value={value}
-        onChange={(e) => onChange?.(e.target.value)}
-        className={inputClass}
-        disabled={disabled || loading}
-      >
-        {allowEmpty && (
-          <option value="">{loading ? 'Loading…' : emptyLabel}</option>
-        )}
-        {options.map((employee) => (
-          <option key={employee.uid} value={employee.uid}>
-            {labelFor(employee)}
-          </option>
-        ))}
-      </select>
-      {selected && (
-        <p className="text-xs text-slate-500">
-          {selected.email || 'No email'}
-          {selected.employeeProfile?.jobRole ? ` · ${selected.employeeProfile.jobRole}` : ''}
-        </p>
-      )}
-      {!loading && options.length === 0 && (
-        <p className="text-xs text-amber-300">
-          {mode === 'managers'
-            ? 'No People Cases managers match this search. Grant the People Cases role in the portal matrix.'
-            : 'No active employees match this search.'}
-        </p>
+      {selected ? (
+        <div className="flex items-center gap-2 rounded-lg border border-[#1a2540] bg-[#060e1a] px-3 py-2">
+          <span className="flex-1 text-sm text-slate-100 truncate">
+            {labelFor(selected)}
+          </span>
+          {!disabled && allowEmpty && (
+            <button
+              type="button"
+              className="text-slate-500 hover:text-red-300 text-base leading-none"
+              onClick={clear}
+              aria-label="Clear selection"
+            >
+              ×
+            </button>
+          )}
+        </div>
+      ) : (
+        <div className="relative">
+          <input
+            type="search"
+            value={displaySearch || search}
+            onChange={(e) => { setSearch(e.target.value); setMenuOpen(true); }}
+            onFocus={() => setMenuOpen(true)}
+            onBlur={() => window.setTimeout(() => setMenuOpen(false), 150)}
+            className={inputClass}
+            placeholder={loading ? 'Loading…' : `Search by name, email or department…`}
+            disabled={disabled || loading}
+            autoComplete="off"
+          />
+          {menuOpen && search.trim() && !loading && suggestions.length > 0 && (
+            <ul className="absolute z-20 mt-1 max-h-56 w-full overflow-auto rounded-lg border border-[#1a2540] bg-[#0b1220] shadow-xl py-1">
+              {suggestions.map((employee) => (
+                <li key={employee.uid}>
+                  <button
+                    type="button"
+                    className="block w-full px-3 py-2 text-left text-sm text-slate-200 hover:bg-[#060e1a]"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => select(employee.uid)}
+                  >
+                    <span className="block">{labelFor(employee)}</span>
+                    <span className="block text-xs text-slate-500">
+                      {employee.email || ''}
+                      {employee.employeeProfile?.jobRole ? ` · ${employee.employeeProfile.jobRole}` : ''}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          {menuOpen && search.trim() && !loading && suggestions.length === 0 && (
+            <p className="absolute z-20 mt-1 w-full rounded-lg border border-[#1a2540] bg-[#0b1220] px-3 py-2 text-xs text-amber-300 shadow-xl">
+              {mode === 'managers'
+                ? 'No People Cases managers match. Grant the People Cases role in the portal matrix.'
+                : `No active employees match "${search.trim()}".`}
+            </p>
+          )}
+        </div>
       )}
     </div>
   );
