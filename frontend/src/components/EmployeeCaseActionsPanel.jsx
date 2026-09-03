@@ -187,10 +187,22 @@ export default function EmployeeCaseActionsPanel() {
           <p className="text-sm text-indigo-100/70">No file notes pending signature.</p>
         )}
         {(data.pendingFileNotes || []).map((item) => {
-          const viewing = viewingFileNoteId === item.id;
+          const previewCollapsed = viewingFileNoteId === item.id;
           return (
             <div key={item.id} className="border border-indigo-500/20 rounded-lg p-3 space-y-3 bg-[#0b1220]/40">
-              <p className="text-sm font-medium text-indigo-50">File Note for Improvement</p>
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <p className="text-sm font-medium text-indigo-50">File Note for Improvement</p>
+                {item.portalHtml && (
+                  <button
+                    type="button"
+                    className="text-xs text-indigo-300 hover:text-indigo-200"
+                    onClick={() => openPortalDocument(item)}
+                  >
+                    Open full document ↗
+                  </button>
+                )}
+              </div>
+
               {item.fileNoteReason && (
                 <p className="text-sm text-indigo-100/90 whitespace-pre-wrap">
                   <span className="text-indigo-200/70">Reason: </span>{item.fileNoteReason}
@@ -208,27 +220,25 @@ export default function EmployeeCaseActionsPanel() {
                 </p>
               )}
 
-              {viewing && item.portalHtml && (
+              {item.portalHtml && (
                 <div className="rounded-lg border border-[#1a2540] bg-white overflow-hidden">
                   <iframe
                     title="File note for improvement"
                     srcDoc={item.portalHtml}
-                    className="w-full min-h-[420px] bg-white"
+                    className={`w-full bg-white transition-all ${previewCollapsed ? 'max-h-[160px]' : 'min-h-[520px]'}`}
+                    style={{ display: 'block' }}
                   />
+                  <button
+                    type="button"
+                    className="w-full py-1.5 text-xs text-indigo-300 hover:text-indigo-200 border-t border-[#1a2540] bg-[#0b1220]"
+                    onClick={() => setViewingFileNoteId(previewCollapsed ? '' : item.id)}
+                  >
+                    {previewCollapsed ? 'Show full preview ▼' : 'Collapse preview ▲'}
+                  </button>
                 </div>
               )}
 
               <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  className="px-3 py-1.5 text-sm rounded-lg border border-indigo-400/40 text-indigo-100"
-                  onClick={() => {
-                    setViewingFileNoteId(viewing ? '' : item.id);
-                    if (!viewing) openPortalDocument(item);
-                  }}
-                >
-                  {viewing ? 'Hide document' : 'Open document'}
-                </button>
                 <button
                   type="button"
                   className="px-3 py-1.5 text-sm rounded-lg bg-indigo-600 text-white font-medium disabled:opacity-50"
@@ -240,7 +250,7 @@ export default function EmployeeCaseActionsPanel() {
                     signFileNote(item.id);
                   }}
                 >
-                  {signingId === item.id ? 'Signing…' : 'Digitally sign'}
+                  {signingId === item.id ? 'Signing…' : 'Sign digitally'}
                 </button>
               </div>
             </div>
