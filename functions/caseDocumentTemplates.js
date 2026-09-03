@@ -26,10 +26,40 @@ function sanitizePathSegment(value, fallback = 'Case') {
     .slice(0, 80) || fallback;
 }
 
+function toFolderDate(value) {
+  if (!value) return null;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+  if (typeof value.toDate === 'function') {
+    const date = value.toDate();
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+  if (typeof value._seconds === 'number') {
+    const date = new Date(value._seconds * 1000);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+  if (typeof value === 'string') {
+    const isoDay = value.slice(0, 10);
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(isoDay)
+      ? new Date(`${isoDay}T12:00:00`)
+      : new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+  return null;
+}
+
 function buildCaseSharePointFolderName(caseData = {}, caseId = '') {
+  const stored = toTrimmedString(caseData.sharePointCaseFolderName);
+  if (stored) return sanitizePathSegment(stored, 'Case');
+
   const title = sanitizePathSegment(caseData.title || 'Case');
+  const date = toFolderDate(caseData.openedAt)
+    || toFolderDate(caseData.createdAt)
+    || toFolderDate(caseData.offPortalRaiseDate)
+    || toFolderDate(caseData.incidentAt);
+  const dateLabel = date ? formatUkDate(date).replace(/\//g, '-') : '';
   const shortId = String(caseId || '').slice(0, 8);
-  return shortId ? `${title} (${shortId})` : title;
+  const withDate = dateLabel ? `${title} (${dateLabel})` : title;
+  return shortId ? `${withDate} (${shortId})` : withDate;
 }
 
 /**

@@ -3635,6 +3635,11 @@ exports.uploadDisciplinaryDocument = onRequest(
 
       const { buildCaseSharePointFolderName } = require('./caseDocumentTemplates');
       const caseFolderName = buildCaseSharePointFolderName(caseData, caseId);
+      if (!caseData.sharePointCaseFolderName && caseFolderName) {
+        await caseSnap.ref.update({ sharePointCaseFolderName: caseFolderName }).catch((error) => {
+          console.error('Failed to persist sharePointCaseFolderName', error);
+        });
+      }
 
       const replaceOriginal = Boolean(
         relatedDocumentId
@@ -7742,8 +7747,8 @@ exports.submitToolboxKickResult = onRequest(
       const attempts = Array.isArray(req.body?.attempts)
         ? req.body.attempts.map((n) => clampToolboxKickDistance(n)).slice(0, 3)
         : [distanceM];
-      if (distanceM <= 0) {
-        res.status(400).json({ error: 'Need a distance greater than zero.' });
+      if (!Number.isFinite(Number(req.body?.distanceM))) {
+        res.status(400).json({ error: 'Need a valid distance.' });
         return;
       }
 
@@ -7891,10 +7896,10 @@ async function buildToolboxKickLeaderboard(dayKey) {
       fullName: data.fullName || 'Colleague',
       status: data.status || 'in_progress',
       mode: normalizeToolboxKickMode(data.mode),
-      distanceM: Math.max(0, Math.floor(Number(data.distanceM) || 0)),
+      distanceM: clampToolboxKickDistance(data.distanceM),
       completedAt: data.completedAt?.toDate?.()?.toISOString?.() || null,
     };
-  }).filter((row) => row.status === 'won' && row.distanceM > 0);
+  }).filter((row) => row.status === 'won');
 
   rows.sort(compareToolboxKickRows);
   assignJointRanks(rows, (a, b) => a.distanceM === b.distanceM);

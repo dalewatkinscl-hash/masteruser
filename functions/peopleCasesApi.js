@@ -155,6 +155,18 @@ function createPeopleCasesApi({
     };
   }
 
+  async function stampSharePointCaseFolderName(caseRef, caseData = {}) {
+    if (toTrimmedString(caseData.sharePointCaseFolderName)) {
+      return buildCaseSharePointFolderName(caseData, caseRef.id);
+    }
+    const name = buildCaseSharePointFolderName({
+      ...caseData,
+      openedAt: caseData.openedAt || caseData.createdAt || new Date(),
+    }, caseRef.id);
+    await caseRef.update({ sharePointCaseFolderName: name });
+    return name;
+  }
+
   async function clearCaseLinks(caseId, caseData = {}) {
     const updates = [];
     if (caseData.linkedDisciplinaryCaseId) {
@@ -572,6 +584,12 @@ function createPeopleCasesApi({
           updatedAt: now,
         });
 
+        await stampSharePointCaseFolderName(caseDoc, {
+          title: input.title || `${input.processFamily.replace(/_/g, ' ')} case`,
+          openedAt: new Date(),
+          offPortalRaiseDate: input.offPortalRaiseDate,
+        });
+
         await appendEvent(caseDoc.id, 'case_created', {
           processFamily: input.processFamily,
           caseType: input.caseType,
@@ -781,7 +799,7 @@ function createPeopleCasesApi({
                   isActive: employee.isActive !== false,
                   sharePointFolderName: employee.sharePointFolderName || '',
                   employeeRoot: employee.sharePointEmployeeRoot || '',
-                  caseFolderName: buildCaseSharePointFolderName(existing, caseId),
+                  caseFolderName: await stampSharePointCaseFolderName(caseSnap.ref, existing),
                   fileName,
                   fileBuffer: Buffer.from(fileNoteHtml, 'utf8'),
                   mimeType: 'text/html',
@@ -921,7 +939,7 @@ function createPeopleCasesApi({
                   isActive: employee.isActive !== false,
                   sharePointFolderName: employee.sharePointFolderName || '',
                   employeeRoot: employee.sharePointEmployeeRoot || '',
-                  caseFolderName: buildCaseSharePointFolderName(existing, caseId),
+                  caseFolderName: await stampSharePointCaseFolderName(caseSnap.ref, existing),
                   fileName,
                   fileBuffer: Buffer.from(inviteHtml, 'utf8'),
                   mimeType: 'text/html',
@@ -1140,6 +1158,10 @@ function createPeopleCasesApi({
             closedAt: null,
             createdByUid: session.profile.uid,
             updatedByUid: session.profile.uid,
+          });
+          await stampSharePointCaseFolderName(linked, {
+            title: `Disciplinary linked to accident: ${existing.title || caseId}`,
+            openedAt: new Date(),
           });
           patch.linkedDisciplinaryCaseId = linked.id;
           patch.trainingDecision = 'disciplinary';
@@ -1694,7 +1716,7 @@ function createPeopleCasesApi({
                 isActive: employee.isActive !== false,
                 sharePointFolderName: employee.sharePointFolderName || '',
                 employeeRoot: employee.sharePointEmployeeRoot || '',
-                caseFolderName: buildCaseSharePointFolderName(caseData, docData.caseId),
+                caseFolderName: await stampSharePointCaseFolderName(caseSnap.ref, caseData),
                 fileName: signedFileName,
                 fileBuffer: Buffer.from(finalHtml, 'utf8'),
                 mimeType: 'text/html',
@@ -1852,6 +1874,12 @@ function createPeopleCasesApi({
           updatedByUid: session.profile.uid,
           suspensionActive: false,
           outcomePackSteps: [],
+        });
+
+        await stampSharePointCaseFolderName(caseDoc, {
+          title: `Vehicle accident — ${employee.fullName || targetUid}`,
+          openedAt: new Date(),
+          incidentAt: bump.incidentAt,
         });
 
         await bumpRef.update({ caseId: caseDoc.id });
