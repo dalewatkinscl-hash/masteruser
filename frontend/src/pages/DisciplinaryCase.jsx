@@ -1798,6 +1798,12 @@ export default function DisciplinaryCase() {
                   </p>
                 </div>
 
+                {!form.employeeUid && (
+                  <p className="text-xs text-amber-300">
+                    Select an employee above to see their informal resolution history before choosing how to start.
+                  </p>
+                )}
+
                 {form.employeeUid && (
                   <div className="rounded-lg border border-[#1a2540] bg-[#060e1a]/60 p-3 space-y-2">
                     <p className="text-xs uppercase tracking-wide text-slate-500">
