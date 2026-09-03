@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { readJsonResponse } from '../utils/employeeProfile';
 import WorkspaceTabs from '../components/WorkspaceTabs';
 import { PROCESS_FAMILIES, caseProgressToneClass, getCaseProgressStatus, stageLabel } from '../utils/peopleCasesAccess';
+import { ALLOW_DELETE_CASES } from '../utils/featureFlags';
 
 const STATUS_OPTIONS = ['', 'open', 'pending_manager', 'pending_hr', 'pending_employee', 'reopened_on_appeal', 'closed'];
 
@@ -26,6 +27,34 @@ export default function DisciplinaryDashboard() {
   const [familyFilter, setFamilyFilter] = useState('');
   const [attentionOnly, setAttentionOnly] = useState(false);
   const [mineOnly, setMineOnly] = useState(false);
+  const [deletingId, setDeletingId] = useState('');
+
+  const deleteCase = async (item) => {
+    const label = item.title || item.id;
+    if (!window.confirm(`Permanently delete "${label}"?\n\nAll portal records for this case will be removed.`)) {
+      return;
+    }
+    if (!window.confirm('This cannot be undone. Delete now?')) {
+      return;
+    }
+    setDeletingId(item.id);
+    setError('');
+    try {
+      const response = await fetch('/api/deletePeopleCase', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ caseId: item.id }),
+      });
+      const data = (await readJsonResponse(response)) || {};
+      if (!response.ok) throw new Error(data.error || 'Failed to delete case.');
+      setCases((prev) => prev.filter((row) => row.id !== item.id));
+    } catch (err) {
+      setError(err.message || 'Failed to delete case.');
+    } finally {
+      setDeletingId('');
+    }
+  };
 
   const load = async () => {
     try {
@@ -204,13 +233,25 @@ export default function DisciplinaryDashboard() {
                     </td>
                     <td className="px-5 py-3 text-sm text-slate-300">{item.slaDueAt || '—'}</td>
                     <td className="px-5 py-3 text-right">
-                      <button
-                        type="button"
-                        onClick={() => navigate(`/dashboard/cases/${item.id}`)}
-                        className="text-indigo-300 hover:text-indigo-200 text-sm"
-                      >
-                        Open
-                      </button>
+                      <div className="inline-flex items-center gap-3">
+                        <button
+                          type="button"
+                          onClick={() => navigate(`/dashboard/cases/${item.id}`)}
+                          className="text-indigo-300 hover:text-indigo-200 text-sm"
+                        >
+                          Open
+                        </button>
+                        {ALLOW_DELETE_CASES && (
+                          <button
+                            type="button"
+                            onClick={() => deleteCase(item)}
+                            disabled={deletingId === item.id}
+                            className="text-red-300 hover:text-red-200 text-sm disabled:opacity-50"
+                          >
+                            {deletingId === item.id ? 'Deleting…' : 'Delete'}
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                   );

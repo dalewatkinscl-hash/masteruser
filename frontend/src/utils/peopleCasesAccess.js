@@ -74,6 +74,31 @@ export function stageLabel(stage) {
     .join(' ');
 }
 
+/** Stages where interviews / uploads are not part of the workflow (admin steps only). */
+export function stageAllowsDocumentation(processFamily, stage) {
+  const normalized = normalizeStage(processFamily, stage);
+  if (processFamily === 'grievance') return normalized !== 'acknowledged';
+  if (processFamily === 'vehicle_accident') return normalized !== 'triage';
+  return true;
+}
+
+export function documentationEmptyMessage(processFamily, stage, listFilter = 'stage') {
+  if (listFilter === 'all') {
+    return 'No documentation or interviews on this case yet.';
+  }
+  const normalized = normalizeStage(processFamily, stage);
+  if (!stageAllowsDocumentation(processFamily, normalized)) {
+    if (processFamily === 'grievance' && normalized === 'acknowledged') {
+      return 'This stage is for acknowledging the grievance only. Documentation and interviews are added from investigation onwards — see the progress panel above for acknowledgement details.';
+    }
+    if (processFamily === 'vehicle_accident' && normalized === 'triage') {
+      return 'This stage is for triage only. Documentation and interviews are added from investigation onwards.';
+    }
+    return 'Nothing is recorded at this stage.';
+  }
+  return 'No documentation or interviews recorded for this stage yet.';
+}
+
 function packIncomplete(caseItem) {
   const steps = Array.isArray(caseItem?.outcomePackSteps) ? caseItem.outcomePackSteps : [];
   return steps.some((step) => step.id !== 'mark_complete' && !step.done);
@@ -210,7 +235,18 @@ export function getCaseProgressStatus(caseItem = {}) {
   }
   if (stage === 'closed') {
     if (caseItem.outcomePreset === 'informal_action') {
-      return { label: `${prefix} — informal action`, hint: 'Closed at intake with informal action recorded', tone: 'slate', stage };
+      return { label: `${prefix} — informal action`, hint: 'Closed with informal action recorded', tone: 'slate', stage };
+    }
+    if (caseItem.outcomePreset === 'file_note_for_improvement') {
+      if (caseItem.fileNoteEmployeeSignStatus === 'pending' || caseItem.status === 'pending_employee') {
+        return {
+          label: `${prefix} — file note awaiting employee signature`,
+          hint: 'File note issued; employee must digitally sign in the portal',
+          tone: 'amber',
+          stage,
+        };
+      }
+      return { label: `${prefix} — file note for improvement`, hint: 'File note issued and signed', tone: 'slate', stage };
     }
     const outcome = caseItem.outcomePreset ? stageLabel(caseItem.outcomePreset) : 'no further action';
     const appealNote = caseItem.appealWindowEndsAt
@@ -236,6 +272,7 @@ export function caseProgressToneClass(tone) {
 
 export const OUTCOME_PRESETS = [
   { id: 'informal_action', label: 'Informal action (recorded)', suggestedExpiryMonths: null },
+  { id: 'file_note_for_improvement', label: 'File note for improvement', suggestedExpiryMonths: null },
   { id: 'no_further_action', label: 'No further action', suggestedExpiryMonths: null },
   { id: 'verbal_warning', label: 'Verbal warning', suggestedExpiryMonths: 6 },
   { id: 'written_warning', label: 'Written warning', suggestedExpiryMonths: 6 },
@@ -248,19 +285,19 @@ export const OUTCOME_PRESETS = [
 
 export const INFORMAL_RESOLUTION_OPTIONS = [
   {
+    id: 'resolve_informally',
+    label: 'Try to resolve informally first',
+    help: 'Open the case for fact-finding interviews and notes. Close as informal action later if it resolves the matter.',
+  },
+  {
     id: 'proceed_formal',
-    label: 'Informal steps tried — continue to formal process',
-    help: 'Record what was tried, then open a formal case.',
+    label: 'Informal steps already tried — continue to formal process',
+    help: 'Record what was tried, then investigate and proceed formally if needed.',
   },
   {
     id: 'not_appropriate',
     label: 'Informal resolution not appropriate',
     help: 'Explain why the matter must go straight to the formal process.',
-  },
-  {
-    id: 'informal_action_taken',
-    label: 'Informal action taken — record and close',
-    help: 'Capture what was said/done. The case is saved as closed with outcome “Informal action”.',
   },
 ];
 

@@ -46,7 +46,9 @@ export default function CaseStageDocuments({
 
         <p className="text-xs text-slate-400 mt-1">
 
-          Download a pre-filled working copy, complete it in Word, upload it, then send it to the employee for review.
+          Download a pre-filled working copy for letters and outcome documents, complete in Word, upload, then send to the employee.
+
+          Interview notes are recorded on the portal — not via Word upload.
 
           Masters live in SharePoint{' '}
 
@@ -151,6 +153,12 @@ export default function CaseStageDocuments({
                     )}
 
                   </p>
+
+                  {template.satisfiedByPortalInterview && (
+                    <p className="text-xs text-emerald-300 mt-1">
+                      Interview notes recorded on the portal for this stage.
+                    </p>
+                  )}
 
                   {template.uploaded && uploaded && (
 

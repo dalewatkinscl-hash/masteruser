@@ -242,6 +242,11 @@
         "region": "europe-west2"
       },
       {
+        "source": "/api/signFileNoteDocument",
+        "function": "signFileNoteDocument",
+        "region": "europe-west2"
+      },
+      {
         "source": "/api/createBumpCardPrompt",
         "function": "createBumpCardPrompt",
         "region": "europe-west2"
@@ -264,6 +269,11 @@
       {
         "source": "/api/clearExpiredWarnings",
         "function": "clearExpiredWarnings",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/deletePeopleCase",
+        "function": "deletePeopleCase",
         "region": "europe-west2"
       },
       {

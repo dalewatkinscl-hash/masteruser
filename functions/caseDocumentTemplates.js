@@ -821,7 +821,26 @@ function templateFileName(template, caseData = {}) {
   return `${base} - ${employee} - ${date}.docx`;
 }
 
-function missingRequiredTemplates({ processFamily, stage, outcomePreset, documents = [], templates }) {
+function isPortalInterviewMinute(minute = {}) {
+  if (minute.documentId) return false;
+  const recordType = toTrimmedString(minute.recordType) || 'interview';
+  return recordType === 'interview';
+}
+
+/** Portal-recorded interview notes satisfy required minutes templates for a stage. */
+function portalInterviewCoversTemplate(minutes = [], stage, template = {}) {
+  const stageKey = toTrimmedString(stage);
+  if (template.documentType !== 'minutes') return false;
+  return minutes.some((minute) => {
+    if (!isPortalInterviewMinute(minute)) return false;
+    if (!toTrimmedString(minute.content)) return false;
+    const minuteStage = toTrimmedString(minute.stageKey);
+    if (minuteStage) return minuteStage === stageKey;
+    return Array.isArray(template.stages) && template.stages.includes(stageKey);
+  });
+}
+
+function missingRequiredTemplates({ processFamily, stage, outcomePreset, documents = [], minutes = [], templates }) {
   const list = templates || templatesForStage(processFamily, stage, outcomePreset);
   const uploadedKeys = new Set(
     documents
@@ -830,8 +849,21 @@ function missingRequiredTemplates({ processFamily, stage, outcomePreset, documen
   );
   return list.filter((item) => {
     if (!isTemplateRequired(item, outcomePreset)) return false;
-    return !uploadedKeys.has(item.id) && !uploadedKeys.has(item.documentType);
+    if (uploadedKeys.has(item.id) || uploadedKeys.has(item.documentType)) return false;
+    if (portalInterviewCoversTemplate(minutes, stage, item)) return false;
+    return true;
   });
+}
+
+function formatMissingDocumentsError(missing = []) {
+  if (!missing.length) return 'Complete required documents before continuing.';
+  const parts = missing.map((item) => {
+    if (item.documentType === 'minutes') {
+      return `${item.title} (record an interview on the portal)`;
+    }
+    return item.title;
+  });
+  return `Complete required items before continuing: ${parts.join(', ')}.`;
 }
 
 const { buildTemplateDocxBuffer, DOCX_MIME_TYPE } = require('./caseDocumentDocx');
@@ -853,5 +885,8 @@ module.exports = {
   DOCX_MIME_TYPE,
   templateSeedFileName,
   templateFileName,
+  isPortalInterviewMinute,
+  portalInterviewCoversTemplate,
   missingRequiredTemplates,
+  formatMissingDocumentsError,
 };

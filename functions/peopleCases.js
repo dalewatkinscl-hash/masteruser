@@ -68,6 +68,7 @@ const CASE_TYPES = new Set([
 
 const OUTCOME_PRESETS = [
   { id: 'informal_action', label: 'Informal action (recorded)', warning: false },
+  { id: 'file_note_for_improvement', label: 'File note for improvement', warning: false },
   { id: 'no_further_action', label: 'No further action', warning: false },
   { id: 'verbal_warning', label: 'Verbal warning', warning: true, suggestedExpiryMonths: 6 },
   { id: 'written_warning', label: 'Written warning', warning: true, suggestedExpiryMonths: 6 },
@@ -79,6 +80,7 @@ const OUTCOME_PRESETS = [
 ];
 
 const INFORMAL_RESOLUTION_PATHS = new Set([
+  'resolve_informally',
   'proceed_formal',
   'not_appropriate',
   'informal_action_taken',

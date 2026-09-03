@@ -33,8 +33,11 @@ const {
   templateSeedFileName,
   templateFileName,
   missingRequiredTemplates,
+  formatMissingDocumentsError,
+  portalInterviewCoversTemplate,
   CASE_DOCUMENT_TEMPLATES,
 } = require('./caseDocumentTemplates');
+const { buildFileNoteForImprovementHtml, formatUkDateTime } = require('./fileNoteForImprovement');
 const {
   resolveEmployeeSharePointPaths,
   listTemplateLibraryFiles,
@@ -136,7 +139,74 @@ function createPeopleCasesApi({
       documents,
       minutes,
       reviews,
+      eventRefs: eventsSnap.docs.map((doc) => doc.ref),
+      documentRefs: documentsSnap.docs.map((doc) => doc.ref),
+      minuteRefs: minutesSnap.docs.map((doc) => doc.ref),
+      reviewRefs: reviewsSnap.docs.map((doc) => doc.ref),
     };
+  }
+
+  function relatedForClient(related) {
+    return {
+      events: related.events || [],
+      documents: related.documents || [],
+      minutes: related.minutes || [],
+      reviews: related.reviews || [],
+    };
+  }
+
+  async function clearCaseLinks(caseId, caseData = {}) {
+    const updates = [];
+    if (caseData.linkedDisciplinaryCaseId) {
+      updates.push(
+        db.collection('disciplinary_cases').doc(caseData.linkedDisciplinaryCaseId).update({
+          linkedAccidentCaseId: admin.firestore.FieldValue.delete(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }),
+      );
+    }
+    if (caseData.linkedAccidentCaseId) {
+      updates.push(
+        db.collection('disciplinary_cases').doc(caseData.linkedAccidentCaseId).update({
+          linkedDisciplinaryCaseId: admin.firestore.FieldValue.delete(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }),
+      );
+    }
+    const [fromAccidentSnap, fromDisciplinarySnap] = await Promise.all([
+      db.collection('disciplinary_cases').where('linkedAccidentCaseId', '==', caseId).get(),
+      db.collection('disciplinary_cases').where('linkedDisciplinaryCaseId', '==', caseId).get(),
+    ]);
+    for (const doc of fromAccidentSnap.docs) {
+      updates.push(doc.ref.update({
+        linkedAccidentCaseId: admin.firestore.FieldValue.delete(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }));
+    }
+    for (const doc of fromDisciplinarySnap.docs) {
+      updates.push(doc.ref.update({
+        linkedDisciplinaryCaseId: admin.firestore.FieldValue.delete(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }));
+    }
+    await Promise.allSettled(updates);
+  }
+
+  async function deleteCaseAndRelated(caseId, caseData = {}) {
+    const related = await listRelated(caseId);
+    await clearCaseLinks(caseId, caseData);
+    const refs = [
+      ...related.eventRefs,
+      ...related.documentRefs,
+      ...related.minuteRefs,
+      ...related.reviewRefs,
+      db.collection('disciplinary_cases').doc(caseId),
+    ];
+    for (let index = 0; index < refs.length; index += 400) {
+      const batch = db.batch();
+      refs.slice(index, index + 400).forEach((ref) => batch.delete(ref));
+      await batch.commit();
+    }
   }
 
   const getPeopleCaseMeta = onRequest(
@@ -330,9 +400,11 @@ function createPeopleCasesApi({
           const issuedMinutes = match
             ? minutes.find((item) => item.documentId === match.id)
             : null;
+          const satisfiedByPortalInterview = !match && portalInterviewCoversTemplate(minutes, stage, template);
           return {
             ...template,
-            uploaded: Boolean(match),
+            uploaded: Boolean(match) || satisfiedByPortalInterview,
+            satisfiedByPortalInterview,
             uploadedDocument: match ? {
               id: match.id,
               fileName: match.fileName,
@@ -353,12 +425,13 @@ function createPeopleCasesApi({
           stage,
           outcomePreset: serialized.outcomePreset || serialized.trainingDecision || '',
           documents,
+          minutes,
           templates: stageTemplates,
         }).map((item) => ({ id: item.id, title: item.title, documentType: item.documentType }));
 
         res.status(200).json({
           case: serialized,
-          ...related,
+          ...relatedForClient(related),
           history,
           consistency,
           outcomes: OUTCOME_PRESETS,
@@ -397,7 +470,7 @@ function createPeopleCasesApi({
         const path = input.informalResolutionPath;
         if (!path) {
           res.status(400).json({
-            error: 'Choose an informal resolution option: proceed formally, not appropriate, or informal action taken.',
+            error: 'Choose how to start: resolve informally, proceed formally, or not appropriate for informal resolution.',
           });
           return;
         }
@@ -410,12 +483,6 @@ function createPeopleCasesApi({
         if (path === 'not_appropriate' && !input.informalNotAppropriateReason) {
           res.status(400).json({
             error: 'Explain why informal resolution is not appropriate.',
-          });
-          return;
-        }
-        if (path === 'informal_action_taken' && !input.informalActionDetails) {
-          res.status(400).json({
-            error: 'Record the informal action taken before closing the case.',
           });
           return;
         }
@@ -435,8 +502,7 @@ function createPeopleCasesApi({
         const ownerManagerUid = input.ownerManagerUid || session.profile.uid;
         const ownerProfile = await getUserProfile(ownerManagerUid);
         const now = admin.firestore.FieldValue.serverTimestamp();
-        const closeAsInformal = input.informalResolutionPath === 'informal_action_taken';
-        const slaDueAt = closeAsInformal ? '' : addWorkingDays(new Date(), 5);
+        const slaDueAt = addWorkingDays(new Date(), 5);
 
         const caseDoc = await db.collection('disciplinary_cases').add({
           employeeUid: input.employeeUid,
@@ -449,8 +515,8 @@ function createPeopleCasesApi({
           caseType: input.caseType,
           title: input.title || `${input.processFamily.replace(/_/g, ' ')} case`,
           summary: input.summary,
-          status: closeAsInformal ? 'closed' : 'open',
-          stage: closeAsInformal ? 'closed' : input.stage,
+          status: 'open',
+          stage: input.stage,
           origin: input.sourceIncidentId ? 'attendance_auto' : 'manual',
           sourceIncidentId: input.sourceIncidentId || '',
           dueAt: input.dueAt || '',
@@ -459,15 +525,15 @@ function createPeopleCasesApi({
           informalTried: input.informalResolutionPath === 'proceed_formal' || input.informalTried,
           informalNotes: input.informalNotes,
           informalNotAppropriateReason: input.informalNotAppropriateReason,
-          informalActionDetails: input.informalActionDetails,
-          informalActionTakenAt: closeAsInformal ? now : null,
+          informalActionDetails: '',
+          informalActionTakenAt: null,
           offPortalRaiseDate: input.offPortalRaiseDate,
           offPortalRaiseNotes: input.offPortalRaiseNotes,
           historyReviewedAt: null,
           historyReviewedByUid: '',
           investigatorUid: session.profile.uid,
           hearingManagerUid: '',
-          decisionMakerUid: closeAsInformal ? session.profile.uid : '',
+          decisionMakerUid: '',
           appealOwnerUid: '',
           companionOffered: false,
           companionRequested: false,
@@ -488,7 +554,7 @@ function createPeopleCasesApi({
           suspensionFrom: '',
           suspensionTo: '',
           suspensionReason: '',
-          outcomePreset: closeAsInformal ? 'informal_action' : '',
+          outcomePreset: '',
           outcomePackSteps: [],
           warningEffectiveAt: '',
           warningExpiresAt: '',
@@ -498,7 +564,7 @@ function createPeopleCasesApi({
           trainingDecision: '',
           trainingOutline: '',
           openedAt: now,
-          closedAt: closeAsInformal ? now : null,
+          closedAt: null,
           appealedAt: null,
           createdByUid: session.profile.uid,
           updatedByUid: session.profile.uid,
@@ -509,24 +575,14 @@ function createPeopleCasesApi({
         await appendEvent(caseDoc.id, 'case_created', {
           processFamily: input.processFamily,
           caseType: input.caseType,
-          stage: closeAsInformal ? 'closed' : input.stage,
+          stage: input.stage,
           ownerManagerUid,
           informalResolutionPath: input.informalResolutionPath || '',
         }, session.profile);
 
-        if (closeAsInformal) {
-          await appendEvent(caseDoc.id, 'informal_action_recorded_and_closed', {
-            informalActionDetails: input.informalActionDetails,
-            outcomePreset: 'informal_action',
-          }, session.profile);
-        }
-
         res.status(200).json({
           id: caseDoc.id,
-          message: closeAsInformal
-            ? 'Informal action recorded and case closed.'
-            : 'Case created.',
-          closedAsInformal: closeAsInformal,
+          message: 'Case created.',
         });
       } catch (error) {
         console.error('createPeopleCase failed', error);
@@ -597,10 +653,11 @@ function createPeopleCasesApi({
               stage: currentStage,
               outcomePreset: existing.outcomePreset || existing.trainingDecision || '',
               documents: related.documents || [],
+              minutes: related.minutes || [],
             });
             if (missing.length) {
               res.status(400).json({
-                error: `Upload required documents before continuing: ${missing.map((item) => item.title).join(', ')}. Download the template, complete it, then upload.`,
+                error: formatMissingDocumentsError(missing),
                 code: 'missing_documents',
                 missing: missing.map((item) => ({ id: item.id, title: item.title, documentType: item.documentType })),
               });
@@ -633,6 +690,158 @@ function createPeopleCasesApi({
           patch.closedAt = admin.firestore.FieldValue.serverTimestamp();
           patch.appealWindowEndsAt = addWorkingDays(new Date(), 5);
           events.push(['closed_with_notes', { outcomePreset: preset.id, notes }]);
+        }
+
+        if (body.closeAsInformalAction === true) {
+          const details = toTrimmedString(body.informalActionDetails) || toTrimmedString(body.closeNotes);
+          if (!details) {
+            res.status(400).json({ error: 'Record the informal action taken before closing the case.' });
+            return;
+          }
+          patch.outcomePreset = 'informal_action';
+          patch.outcomePackSteps = [];
+          patch.informalResolutionPath = 'informal_action_taken';
+          patch.informalActionDetails = details;
+          patch.informalActionTakenAt = admin.firestore.FieldValue.serverTimestamp();
+          patch.closeNotes = details;
+          patch.decisionMakerUid = session.profile.uid;
+          patch.stage = 'closed';
+          patch.status = 'closed';
+          patch.closedAt = admin.firestore.FieldValue.serverTimestamp();
+          events.push(['informal_action_recorded_and_closed', {
+            informalActionDetails: details,
+            outcomePreset: 'informal_action',
+          }]);
+        }
+
+        let fileNoteHtml = '';
+        if (body.issueFileNoteForImprovement === true) {
+          const reason = toTrimmedString(body.fileNoteReason);
+          const actionRequired = toTrimmedString(body.fileNoteActionRequired);
+          if (!reason) {
+            res.status(400).json({ error: 'Enter the reason the file note is being issued.' });
+            return;
+          }
+          if (!actionRequired) {
+            res.status(400).json({ error: 'Enter the improvement or action required from the employee.' });
+            return;
+          }
+          const family = existing.processFamily || 'disciplinary';
+          const currentStage = normalizeStage(family, existing.stage);
+          if (currentStage !== 'fact_finding') {
+            res.status(400).json({ error: 'File notes for improvement can only be issued during fact-finding.' });
+            return;
+          }
+          const relatedForFileNote = await listRelated(caseId);
+          const missingMinutes = missingRequiredTemplates({
+            processFamily: family,
+            stage: currentStage,
+            outcomePreset: '',
+            documents: relatedForFileNote.documents || [],
+            minutes: relatedForFileNote.minutes || [],
+          }).filter((item) => item.documentType === 'minutes');
+          if (missingMinutes.length) {
+            res.status(400).json({
+              error: 'Record a fact-finding interview on the portal before issuing a file note for improvement.',
+              code: 'missing_documents',
+            });
+            return;
+          }
+
+          const issuerName = session.profile.fullName || session.profile.email || 'Manager';
+          const issuedAt = new Date();
+          const issuedAtLabel = issuedAt.toLocaleDateString('en-GB');
+          const managerSignature = {
+            signedByUid: session.profile.uid,
+            signedByName: issuerName,
+            signedAt: issuedAt.toISOString(),
+            signedAtLabel: formatUkDateTime(issuedAt),
+            method: 'portal_issue',
+          };
+          fileNoteHtml = buildFileNoteForImprovementHtml({
+            employeeName: existing.employeeNameSnapshot || '',
+            managerName: issuerName,
+            reason,
+            actionRequired,
+            issuedAtLabel,
+            managerSignature,
+            employeeSignature: null,
+          });
+          const fileName = `File note for improvement - ${issuedAtLabel.replace(/\//g, '-')}.html`;
+          const now = admin.firestore.FieldValue.serverTimestamp();
+          let sharePointWebUrl = '';
+          let sharePointFolderPath = '';
+          let storageProvider = 'portal';
+          if (typeof uploadDisciplinaryDocument === 'function' && isSharePointConfigured(getSharePointConfig())) {
+            try {
+              const employee = await getUserProfile(existing.employeeUid);
+              if (employee) {
+                const uploadResult = await uploadDisciplinaryDocument(getSharePointConfig(), {
+                  fullName: employee.fullName || existing.employeeNameSnapshot || '',
+                  isActive: employee.isActive !== false,
+                  sharePointFolderName: employee.sharePointFolderName || '',
+                  employeeRoot: employee.sharePointEmployeeRoot || '',
+                  caseFolderName: buildCaseSharePointFolderName(existing, caseId),
+                  fileName,
+                  fileBuffer: Buffer.from(fileNoteHtml, 'utf8'),
+                  mimeType: 'text/html',
+                });
+                sharePointWebUrl = uploadResult.sharePointWebUrl || '';
+                sharePointFolderPath = uploadResult.folderPath || '';
+                storageProvider = 'sharepoint';
+              }
+            } catch (spError) {
+              console.error('File note SharePoint upload failed; keeping portal copy', spError);
+            }
+          }
+          const docRef = await db.collection('disciplinary_documents').add({
+            caseId,
+            employeeUid: existing.employeeUid,
+            documentType: 'file_note_for_improvement',
+            templateId: 'file_note_for_improvement',
+            fileName,
+            fileFormat: 'html',
+            mimeType: 'text/html',
+            storageProvider,
+            portalHtml: fileNoteHtml,
+            sharePointWebUrl,
+            sharePointFolderPath,
+            uploadedByUid: session.profile.uid,
+            source: 'file_note_for_improvement',
+            fileNoteReason: reason,
+            fileNoteActionRequired: actionRequired,
+            issuedToEmployeeAt: now,
+            employeeSignStatus: 'pending',
+            managerSignature,
+            employeeSignature: null,
+            createdAt: now,
+            updatedAt: now,
+          });
+
+          patch.outcomePreset = 'file_note_for_improvement';
+          patch.outcomePackSteps = [];
+          patch.fileNoteReason = reason;
+          patch.fileNoteActionRequired = actionRequired;
+          patch.fileNoteIssuedAt = now;
+          patch.fileNoteDocumentId = docRef.id;
+          patch.fileNoteIssuedByUid = session.profile.uid;
+          patch.fileNoteIssuedByName = issuerName;
+          patch.fileNoteManagerSignedAt = managerSignature.signedAt;
+          patch.fileNoteEmployeeSignStatus = 'pending';
+          patch.closeNotes = reason;
+          patch.decisionMakerUid = session.profile.uid;
+          patch.stage = 'closed';
+          // Keep pending_employee so the case shows awaiting employee digital signature.
+          patch.status = 'pending_employee';
+          patch.closedAt = now;
+          events.push(['file_note_for_improvement_issued', {
+            documentId: docRef.id,
+            reason,
+            actionRequired,
+            outcomePreset: 'file_note_for_improvement',
+            managerSignedAt: managerSignature.signedAt,
+            awaitingEmployeeSignature: true,
+          }]);
         }
 
         if (body.historyReviewed === true) {
@@ -836,10 +1045,11 @@ function createPeopleCasesApi({
               stage: currentStage,
               outcomePreset: patch.outcomePreset || existing.outcomePreset || '',
               documents: relatedForClose.documents || [],
+              minutes: relatedForClose.minutes || [],
             });
             if (missing.length && !body.forceClose) {
               res.status(400).json({
-                error: `Upload required outcome documents before closing: ${missing.map((item) => item.title).join(', ')}.`,
+                error: formatMissingDocumentsError(missing),
                 code: 'missing_documents',
                 missing: missing.map((item) => ({ id: item.id, title: item.title, documentType: item.documentType })),
               });
@@ -944,7 +1154,13 @@ function createPeopleCasesApi({
         }
 
         const refreshed = await caseSnap.ref.get();
-        res.status(200).json({ case: serializeCase(refreshed), message: 'Case updated.' });
+        const responseBody = { case: serializeCase(refreshed), message: 'Case updated.' };
+        if (fileNoteHtml) {
+          responseBody.message = 'File note issued to the employee portal for digital signature. Manager signature applied. Case closed pending employee sign-off.';
+          responseBody.fileNoteHtml = fileNoteHtml;
+          responseBody.fileNoteDocumentId = patch.fileNoteDocumentId || '';
+        }
+        res.status(200).json(responseBody);
       } catch (error) {
         console.error('updatePeopleCase failed', error);
         res.status(500).json({ error: 'Failed to update case.' });
@@ -997,6 +1213,10 @@ function createPeopleCasesApi({
           : [];
         // De-dupe while preserving order
         const presentUids = [...new Set(rawPresentUids)];
+        if (!documentId && presentUids.length < 2) {
+          res.status(400).json({ error: 'At least 2 managers must be recorded as present for an interview.' });
+          return;
+        }
         const managersPresent = [];
         for (const uid of presentUids) {
           const profile = await getUserProfile(uid);
@@ -1008,10 +1228,29 @@ function createPeopleCasesApi({
         const meetingType = toTrimmedString(body.meetingType)
           || (documentData?.templateId ? String(documentData.templateId).replace(/_/g, ' ') : '')
           || 'interview';
+        const stageKey = toTrimmedString(body.stageKey)
+          || toTrimmedString(documentData?.stageKey)
+          || '';
+        const interviewAt = toTrimmedString(body.interviewAt) || '';
+        const interviewTime = toTrimmedString(body.interviewTime) || '';
+        const recordType = documentId ? 'document' : 'interview';
+        const intervieweeUid = toTrimmedString(body.intervieweeUid) || caseData.employeeUid;
+        const interviewee = await getUserProfile(intervieweeUid);
+        if (!interviewee) {
+          res.status(400).json({ error: 'Selected interviewee not found.' });
+          return;
+        }
+        const intervieweeNameSnapshot = interviewee.fullName || interviewee.email || '';
         const ref = await db.collection('case_minutes').add({
           caseId,
-          employeeUid: caseData.employeeUid,
+          employeeUid: intervieweeUid,
+          caseEmployeeUid: caseData.employeeUid || '',
+          intervieweeNameSnapshot,
           meetingType,
+          stageKey,
+          interviewAt,
+          interviewTime,
+          recordType,
           content,
           documentId: documentData?.id || '',
           fileName: documentData?.fileName || '',
@@ -1047,6 +1286,12 @@ function createPeopleCasesApi({
         await appendEvent(caseId, 'minutes_issued', {
           minutesId: ref.id,
           meetingType,
+          stageKey,
+          interviewAt,
+          interviewTime,
+          recordType,
+          intervieweeUid,
+          intervieweeNameSnapshot,
           managersPresentUids: presentUids,
           documentId: documentData?.id || '',
           fileName: documentData?.fileName || '',
@@ -1064,6 +1309,20 @@ function createPeopleCasesApi({
     }),
   );
 
+  function resolvePendingAmendmentRequests(requests = [], decision, managerUid, managerResponse = '') {
+    const resolvedAt = new Date().toISOString();
+    return requests.map((item) => {
+      if (item.status && item.status !== 'pending') return item;
+      return {
+        ...item,
+        status: decision,
+        resolvedAt,
+        resolvedByUid: managerUid,
+        managerResponse: managerResponse || '',
+      };
+    });
+  }
+
   const respondCaseMinutes = onRequest(
     { region: 'europe-west2' },
     withCors(async (req, res) => {
@@ -1079,7 +1338,7 @@ function createPeopleCasesApi({
       const body = req.body || {};
       const minutesId = toTrimmedString(body.minutesId);
       const action = toTrimmedString(body.action);
-      if (!minutesId || !['approve', 'amend', 'sign_off', 'dispute', 'manager_update'].includes(action)) {
+      if (!minutesId || !['approve', 'amend', 'sign_off', 'manager_update', 'apply_amendment', 'decline_amendment'].includes(action)) {
         res.status(400).json({ error: 'minutesId and valid action are required.' });
         return;
       }
@@ -1102,31 +1361,58 @@ function createPeopleCasesApi({
         if (action === 'amend' && isEmployee) {
           const request = toTrimmedString(body.amendmentRequest);
           if (!request) {
-            res.status(400).json({ error: 'amendmentRequest is required.' });
+            res.status(400).json({ error: 'Please describe what should be amended.' });
             return;
           }
           patch.amendmentRequests = admin.firestore.FieldValue.arrayUnion({
             text: request,
             at: new Date().toISOString(),
             byUid: session.profile.uid,
+            status: 'pending',
           });
           patch.status = 'amendment_requested';
+        } else if (action === 'apply_amendment' && isManager) {
+          const content = toTrimmedString(body.content);
+          if (!content) {
+            res.status(400).json({ error: 'Updated notes are required when applying an amendment.' });
+            return;
+          }
+          patch.content = content;
+          patch.managerVersion = content;
+          patch.status = 'issued';
+          patch.amendmentRequests = resolvePendingAmendmentRequests(
+            minutes.amendmentRequests || [],
+            'applied',
+            session.profile.uid,
+            toTrimmedString(body.managerResponse),
+          );
+          patch.lastAmendmentDeclineReason = admin.firestore.FieldValue.delete();
+        } else if (action === 'decline_amendment' && isManager) {
+          patch.status = 'issued';
+          patch.amendmentRequests = resolvePendingAmendmentRequests(
+            minutes.amendmentRequests || [],
+            'declined',
+            session.profile.uid,
+            toTrimmedString(body.declineReason),
+          );
+          patch.lastAmendmentDeclineReason = toTrimmedString(body.declineReason) || '';
         } else if (action === 'manager_update' && isManager) {
           patch.content = toTrimmedString(body.content) || minutes.content;
           patch.managerVersion = patch.content;
           patch.status = 'issued';
+          if ((minutes.amendmentRequests || []).some((item) => !item.status || item.status === 'pending')) {
+            patch.amendmentRequests = resolvePendingAmendmentRequests(
+              minutes.amendmentRequests || [],
+              'applied',
+              session.profile.uid,
+              '',
+            );
+          }
         } else if ((action === 'approve' || action === 'sign_off') && isEmployee) {
           patch.status = 'signed_off';
           patch.signedOffAt = now;
           patch.signedOffByUid = session.profile.uid;
           patch.disputed = false;
-        } else if (action === 'dispute' && isEmployee) {
-          patch.status = 'disputed';
-          patch.disputed = true;
-          patch.disputedNotes = toTrimmedString(body.disputedNotes);
-          patch.employeeVersion = toTrimmedString(body.employeeVersion) || minutes.content;
-          patch.signedOffAt = now;
-          patch.signedOffByUid = session.profile.uid;
         } else {
           res.status(403).json({ error: 'Action not allowed for this user.' });
           return;
@@ -1135,14 +1421,32 @@ function createPeopleCasesApi({
         await minutesSnap.ref.update(patch);
         await appendEvent(minutes.caseId, `minutes_${action}`, { minutesId }, session.profile);
 
-        if (['sign_off', 'approve', 'dispute'].includes(action)) {
+        if (action === 'amend') {
           await db.collection('disciplinary_cases').doc(minutes.caseId).update({
             status: 'pending_manager',
             updatedAt: now,
           });
+        } else if (['sign_off', 'approve'].includes(action)) {
+          await db.collection('disciplinary_cases').doc(minutes.caseId).update({
+            status: 'pending_manager',
+            updatedAt: now,
+          });
+        } else if (['apply_amendment', 'decline_amendment', 'manager_update'].includes(action) && isManager) {
+          await db.collection('disciplinary_cases').doc(minutes.caseId).update({
+            status: 'pending_employee',
+            updatedAt: now,
+          });
         }
 
-        res.status(200).json({ message: 'Minutes updated.' });
+        const messages = {
+          amend: 'Amendment request sent to the investigator.',
+          sign_off: 'Notes signed off as accurate.',
+          approve: 'Notes signed off as accurate.',
+          apply_amendment: 'Amended notes sent back to the employee for sign-off.',
+          decline_amendment: 'Amendment declined — original notes sent back to the employee.',
+          manager_update: 'Notes updated and sent back to the employee.',
+        };
+        res.status(200).json({ message: messages[action] || 'Minutes updated.' });
       } catch (error) {
         console.error('respondCaseMinutes failed', error);
         res.status(500).json({ error: 'Failed to update minutes.' });
@@ -1249,7 +1553,7 @@ function createPeopleCasesApi({
 
         const pendingMinutes = minutesSnap.docs
           .map((doc) => ({ id: doc.id, ...doc.data(), createdAt: serializeTimestamp(doc.data().createdAt) }))
-          .filter((item) => ['issued', 'amendment_requested'].includes(item.status));
+          .filter((item) => item.status === 'issued');
 
         const cases = casesSnap.docs.map((doc) => serializeCase(doc));
         const prompts = promptsSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
@@ -1259,14 +1563,24 @@ function createPeopleCasesApi({
             ...doc.data(),
             createdAt: serializeTimestamp(doc.data().createdAt),
             issuedToEmployeeAt: serializeTimestamp(doc.data().issuedToEmployeeAt),
+            managerSignature: doc.data().managerSignature || null,
+            employeeSignature: doc.data().employeeSignature || null,
           }))
           .filter((item) => {
+            if (item.documentType === 'file_note_for_improvement' && item.issuedToEmployeeAt) {
+              return true;
+            }
             if (['invite', 'letter', 'warning', 'outcome', 'suspension_letter', 'training_outline', 'pip_plan'].includes(item.documentType)) {
               return true;
             }
             // Minutes / notes Word files that were explicitly sent for employee review
             return Boolean(item.issuedToEmployeeAt) && ['minutes', 'evidence', 'other'].includes(item.documentType);
           });
+
+        const pendingFileNotes = documents.filter(
+          (item) => item.documentType === 'file_note_for_improvement'
+            && item.employeeSignStatus === 'pending',
+        );
 
         const pendingHearingInvites = cases
           .filter((item) => item.hearingInviteIssuedAt && ['hearing_invite', 'hearing'].includes(item.stage))
@@ -1281,15 +1595,159 @@ function createPeopleCasesApi({
 
         res.status(200).json({
           pendingMinutes,
+          pendingFileNotes,
           cases,
           bumpPrompts: prompts,
           documents,
           pendingHearingInvites,
-          badgeCount: pendingMinutes.length + prompts.length + pendingHearingInvites.length,
+          badgeCount: pendingMinutes.length + prompts.length + pendingHearingInvites.length + pendingFileNotes.length,
         });
       } catch (error) {
         console.error('getEmployeeCaseActions failed', error);
         res.status(500).json({ error: 'Failed to load actions.' });
+      }
+    }),
+  );
+
+  const signFileNoteDocument = onRequest(
+    { region: 'europe-west2' },
+    withCors(async (req, res) => {
+      if (req.method !== 'POST') {
+        res.status(405).json({ error: 'Method not allowed.' });
+        return;
+      }
+      const session = await getVerifiedSessionUser(req);
+      if (!session) {
+        res.status(401).json({ error: 'Authentication required.' });
+        return;
+      }
+
+      const documentId = toTrimmedString(req.body?.documentId);
+      if (!documentId) {
+        res.status(400).json({ error: 'documentId is required.' });
+        return;
+      }
+
+      try {
+        const docSnap = await db.collection('disciplinary_documents').doc(documentId).get();
+        if (!docSnap.exists) {
+          res.status(404).json({ error: 'Document not found.' });
+          return;
+        }
+        const docData = docSnap.data();
+        if (docData.documentType !== 'file_note_for_improvement') {
+          res.status(400).json({ error: 'This document is not a file note for improvement.' });
+          return;
+        }
+        if (docData.employeeUid !== session.profile.uid) {
+          res.status(403).json({ error: 'Only the employee named on this file note can sign it.' });
+          return;
+        }
+        if (docData.employeeSignStatus === 'signed' || docData.employeeSignature?.signedAt) {
+          res.status(400).json({ error: 'This file note has already been signed.' });
+          return;
+        }
+
+        const managerSignature = docData.managerSignature || null;
+        const signedAt = new Date();
+        const employeeSignature = {
+          signedByUid: session.profile.uid,
+          signedByName: session.profile.fullName || session.profile.email || 'Employee',
+          signedAt: signedAt.toISOString(),
+          signedAtLabel: formatUkDateTime(signedAt),
+          method: 'portal_employee',
+        };
+
+        // Prefer employee name from the case when available.
+        let employeeName = '';
+        const caseSnap = await db.collection('disciplinary_cases').doc(docData.caseId).get();
+        if (caseSnap.exists) {
+          employeeName = caseSnap.data().employeeNameSnapshot || '';
+        }
+        const finalHtml = buildFileNoteForImprovementHtml({
+          employeeName: employeeName || employeeSignature.signedByName,
+          managerName: managerSignature?.signedByName || '',
+          reason: docData.fileNoteReason || '',
+          actionRequired: docData.fileNoteActionRequired || '',
+          issuedAtLabel: caseSnap.exists && caseSnap.data().fileNoteIssuedAt?.toDate
+            ? caseSnap.data().fileNoteIssuedAt.toDate().toLocaleDateString('en-GB')
+            : new Date().toLocaleDateString('en-GB'),
+          managerSignature,
+          employeeSignature,
+        });
+
+        const now = admin.firestore.FieldValue.serverTimestamp();
+        let sharePointWebUrl = docData.sharePointWebUrl || '';
+        let sharePointItemId = docData.sharePointItemId || '';
+        let sharePointFolderPath = docData.sharePointFolderPath || '';
+        let storageProvider = docData.storageProvider || 'portal';
+        let signedFileName = docData.fileName || '';
+
+        if (typeof uploadDisciplinaryDocument === 'function' && isSharePointConfigured(getSharePointConfig()) && caseSnap.exists) {
+          try {
+            const caseData = caseSnap.data();
+            const employee = await getUserProfile(docData.employeeUid);
+            if (employee) {
+              signedFileName = `File note for improvement - signed ${signedAt.toISOString().slice(0, 10)}.html`;
+              const uploadResult = await uploadDisciplinaryDocument(getSharePointConfig(), {
+                fullName: employee.fullName || caseData.employeeNameSnapshot || '',
+                isActive: employee.isActive !== false,
+                sharePointFolderName: employee.sharePointFolderName || '',
+                employeeRoot: employee.sharePointEmployeeRoot || '',
+                caseFolderName: buildCaseSharePointFolderName(caseData, docData.caseId),
+                fileName: signedFileName,
+                fileBuffer: Buffer.from(finalHtml, 'utf8'),
+                mimeType: 'text/html',
+              });
+              sharePointWebUrl = uploadResult.sharePointWebUrl || sharePointWebUrl;
+              sharePointItemId = uploadResult.sharePointItemId || sharePointItemId;
+              sharePointFolderPath = uploadResult.folderPath || sharePointFolderPath;
+              storageProvider = 'sharepoint';
+            }
+          } catch (spError) {
+            console.error('Signed file note SharePoint upload failed; keeping portal copy', spError);
+          }
+        }
+
+        await docSnap.ref.update({
+          portalHtml: finalHtml,
+          fileName: signedFileName || docData.fileName,
+          employeeSignature,
+          employeeSignStatus: 'signed',
+          signedCopy: true,
+          signedAt: now,
+          sharePointWebUrl,
+          sharePointItemId,
+          sharePointFolderPath,
+          storageProvider,
+          updatedAt: now,
+        });
+
+        if (caseSnap.exists) {
+          await caseSnap.ref.update({
+            fileNoteEmployeeSignStatus: 'signed',
+            fileNoteEmployeeSignedAt: employeeSignature.signedAt,
+            fileNoteSignedDocumentId: documentId,
+            fileNoteSignedAt: now,
+            status: 'closed',
+            updatedAt: now,
+          });
+          await appendEvent(docData.caseId, 'file_note_employee_signed', {
+            documentId,
+            signedAt: employeeSignature.signedAt,
+            signedByUid: session.profile.uid,
+          }, session.profile);
+        }
+
+        res.status(200).json({
+          message: 'File note digitally signed.',
+          documentId,
+          portalHtml: finalHtml,
+          employeeSignature,
+        });
+      } catch (error) {
+        console.error('signFileNoteDocument failed', error);
+        res.status(500).json({ error: 'Failed to sign file note.' });
       }
     }),
   );
@@ -1553,7 +2011,7 @@ function createPeopleCasesApi({
           exportedAt: new Date().toISOString(),
           exportedByUid: session.profile.uid,
           case: serializeCase(caseSnap),
-          ...related,
+          ...relatedForClient(related),
           guide: guideFor(
             caseSnap.data().processFamily || 'disciplinary',
             normalizeStage(caseSnap.data().processFamily || 'disciplinary', caseSnap.data().stage),
@@ -1606,7 +2064,40 @@ function createPeopleCasesApi({
     }),
   );
 
-  // Keep legacy create path compatible by enriching createDisciplinaryCase callers via shared sanitize later.
+  const deletePeopleCase = onRequest(
+    { region: 'europe-west2' },
+    withCors(async (req, res) => {
+      if (req.method !== 'POST') {
+        res.status(405).json({ error: 'Method not allowed.' });
+        return;
+      }
+      const session = await getVerifiedSessionUser(req);
+      if (!assertManager(session, res)) return;
+
+      const body = req.body || {};
+      const caseId = toTrimmedString(body.caseId);
+      if (!caseId) {
+        res.status(400).json({ error: 'caseId is required.' });
+        return;
+      }
+
+      try {
+        const caseSnap = await loadCaseOrFail(caseId, res);
+        if (!caseSnap) return;
+        const caseData = caseSnap.data();
+        await deleteCaseAndRelated(caseId, caseData);
+        res.status(200).json({
+          deleted: true,
+          caseId,
+          message: 'Case and all portal records deleted. SharePoint files were not removed.',
+        });
+      } catch (error) {
+        console.error('deletePeopleCase failed', error);
+        res.status(500).json({ error: 'Failed to delete case.' });
+      }
+    }),
+  );
+
   return {
     getPeopleCaseMeta,
     getPeopleCases,
@@ -1618,11 +2109,13 @@ function createPeopleCasesApi({
     createCaseReview,
     completeCaseReview,
     getEmployeeCaseActions,
+    signFileNoteDocument,
     createBumpCardPrompt,
     submitBumpCard,
     downloadCaseDocumentTemplate,
     exportPeopleCase,
     clearExpiredWarnings,
+    deletePeopleCase,
     DOCUMENT_TYPES,
   };
 }

@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { readJsonResponse } from '../utils/employeeProfile';
 import CaseGuidePanel from '../components/CaseGuidePanel';
-import CaseStageDocuments from '../components/CaseStageDocuments';
-import EmployeeSelect, { ManagerMultiSelect } from '../components/EmployeeSelect';
+import CaseDocumentationHub from '../components/CaseDocumentationHub';
+import CaseProgressRail from '../components/CaseProgressRail';
+import EmployeeSelect from '../components/EmployeeSelect';
 import {
   INFORMAL_RESOLUTION_OPTIONS,
   MINIMUM_HEARING_NOTICE_WORKING_DAYS,
@@ -14,12 +15,15 @@ import {
   addWorkingDaysIso,
   countWorkingDaysNotice,
   normalizeStage,
+  stageAllowsDocumentation,
   stageLabel,
   stagesForFamily,
   getCaseProgressStatus,
   caseProgressToneClass,
 } from '../utils/peopleCasesAccess';
 import { buildHearingInviteHtml, printHearingInvite } from '../utils/hearingInvitePrint';
+import { buildFileNoteForImprovementHtml, printHtmlDocument } from '../utils/fileNoteForImprovementPrint';
+import { ALLOW_DELETE_CASES } from '../utils/featureFlags';
 
 const CASE_TYPES = ['attendance', 'conduct', 'performance', 'policy', 'capability', 'grievance', 'vehicle_accident', 'other'];
 const DOCUMENT_TYPES = ['evidence', 'letter', 'minutes', 'warning', 'outcome', 'invite', 'suspension_letter', 'training_outline', 'pip_plan', 'other'];
@@ -49,42 +53,6 @@ const inputClass = 'w-full bg-[#060e1a] border border-[#1a2540] text-slate-100 t
 const btnSecondary = 'px-3 py-2 text-sm border border-[#1a2540] rounded-lg text-slate-200 hover:bg-[#0b1220]';
 const btnPrimary = 'px-3 py-2 text-sm rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium';
 
-function ProgressRail({ stages, current }) {
-  const currentIndex = Math.max(0, stages.indexOf(current));
-  return (
-    <div className="bg-[#0b1220] border border-[#1a2540] rounded-xl p-4">
-      <p className="text-xs uppercase text-slate-500 mb-3">Case progress</p>
-      <ol className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
-        {stages.map((stage, index) => {
-          const done = index < currentIndex;
-          const active = stage === current;
-          return (
-            <li key={stage} className="flex items-center gap-2">
-              <span
-                className={`inline-flex h-7 min-w-7 items-center justify-center rounded-full px-2 text-xs font-medium border ${
-                  active
-                    ? 'bg-indigo-600 border-indigo-500 text-white'
-                    : done
-                      ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-200'
-                      : 'border-[#1a2540] text-slate-500'
-                }`}
-              >
-                {done ? '✓' : index + 1}
-              </span>
-              <span className={`text-sm ${active ? 'text-white font-medium' : done ? 'text-slate-300' : 'text-slate-500'}`}>
-                {stageLabel(stage)}
-              </span>
-              {index < stages.length - 1 && (
-                <span className="hidden sm:inline text-slate-600 mx-1">→</span>
-              )}
-            </li>
-          );
-        })}
-      </ol>
-    </div>
-  );
-}
-
 function StepCard({ title, children, footer }) {
   return (
     <section className="bg-[#0b1220] border border-[#1a2540] rounded-xl p-5 space-y-4">
@@ -99,19 +67,21 @@ function ChoiceRow({ children }) {
   return <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2">{children}</div>;
 }
 
-function ChoiceButton({ title, help, onClick, disabled, primary }) {
+function ChoiceButton({ title, help, onClick, disabled, primary, selected }) {
   return (
     <button
       type="button"
       disabled={disabled}
       onClick={onClick}
       className={`text-left rounded-xl border p-4 transition ${
-        primary
-          ? 'border-indigo-500/50 bg-indigo-500/10 hover:bg-indigo-500/15'
-          : 'border-[#1a2540] bg-[#060e1a]/50 hover:bg-[#060e1a]'
+        selected
+          ? 'ring-2 ring-indigo-400/80 border-indigo-500/60 bg-indigo-500/15'
+          : primary
+            ? 'border-indigo-500/50 bg-indigo-500/10 hover:bg-indigo-500/15'
+            : 'border-[#1a2540] bg-[#060e1a]/50 hover:bg-[#060e1a]'
       } disabled:opacity-50`}
     >
-      <span className={`block text-sm font-medium ${primary ? 'text-indigo-100' : 'text-slate-100'}`}>{title}</span>
+      <span className={`block text-sm font-medium ${primary || selected ? 'text-indigo-100' : 'text-slate-100'}`}>{title}</span>
       {help && <span className="block text-xs text-slate-400 mt-1">{help}</span>}
     </button>
   );
@@ -144,9 +114,13 @@ export default function DisciplinaryCase() {
   const [missingDocuments, setMissingDocuments] = useState([]);
   const [uploading, setUploading] = useState(false);
   const [uploadType, setUploadType] = useState('evidence');
-  const [minutesContent, setMinutesContent] = useState('');
-  const [managersPresentUids, setManagersPresentUids] = useState([]);
   const [closeNotes, setCloseNotes] = useState('');
+  const [informalActionDetails, setInformalActionDetails] = useState('');
+  const [fileNoteReason, setFileNoteReason] = useState('');
+  const [fileNoteActionRequired, setFileNoteActionRequired] = useState('');
+  const [selectedFactFindingOutcome, setSelectedFactFindingOutcome] = useState('');
+  const signedFileNoteInputRef = useRef(null);
+  const [viewStage, setViewStage] = useState(null);
   const [showExtras, setShowExtras] = useState(false);
   const [reviewDueAt, setReviewDueAt] = useState('');
   const [reviewTitle, setReviewTitle] = useState('Scheduled review');
@@ -168,7 +142,7 @@ export default function DisciplinaryCase() {
     caseType: prefilledFamily === 'grievance' ? 'grievance' : prefilledFamily === 'vehicle_accident' ? 'vehicle_accident' : 'conduct',
     title: '',
     summary: '',
-    informalResolutionPath: '',
+    informalResolutionPath: 'resolve_informally',
     informalNotes: '',
     informalNotAppropriateReason: '',
     informalActionDetails: '',
@@ -183,10 +157,28 @@ export default function DisciplinaryCase() {
     [isNew, family, caseData?.stage],
   );
 
+  useEffect(() => {
+    if (currentStage) setViewStage(currentStage);
+  }, [currentStage]);
+
+  const displayStage = viewStage || currentStage;
+  const viewingPastStage = Boolean(displayStage && currentStage && displayStage !== currentStage);
+  const needsPortalInterview = useMemo(
+    () => missingDocuments.some((item) => item.documentType === 'minutes'),
+    [missingDocuments],
+  );
+
   const meetingTypeForStage = useMemo(() => {
-    if (family === 'grievance') return 'grievance_meeting';
+    if (family === 'grievance') {
+      if (currentStage === 'meeting') return 'grievance_meeting';
+      return 'grievance_investigation';
+    }
     if (family === 'vehicle_accident') return 'accident_interview';
     if (currentStage === 'hearing') return 'hearing';
+    if (currentStage === 'hearing_invite') return 'hearing_invite';
+    if (currentStage === 'appeal') return 'appeal';
+    if (currentStage === 'outcome_pack') return 'outcome';
+    if (currentStage === 'fact_finding') return 'fact_finding';
     return 'investigation';
   }, [family, currentStage]);
 
@@ -208,6 +200,7 @@ export default function DisciplinaryCase() {
     const response = await fetch(`/api/getPeopleCase/${id}`, { credentials: 'include' });
     const data = (await readJsonResponse(response)) || {};
     if (!response.ok) throw new Error(data.error || 'Failed to load case.');
+    if (!data.case) throw new Error('Case payload missing from server response.');
     setCaseData(data.case);
     setEvents(data.events || []);
     setDocuments(data.documents || []);
@@ -257,19 +250,33 @@ export default function DisciplinaryCase() {
   }, []);
 
   useEffect(() => {
-    if (isNew) return;
+    if (isNew) {
+      setLoading(false);
+      return undefined;
+    }
+
+    let cancelled = false;
+    // Route reuse (new → existing case) keeps this component mounted with stale
+    // loading=false / caseData=null — clear and reload so we never render a blank crash.
+    setLoading(true);
+    setCaseData(null);
+    setError('');
+    setMessage('');
+    setViewStage(null);
+
     const load = async () => {
       try {
-        setLoading(true);
-        setError('');
         await reload(caseId);
       } catch (err) {
-        setError(err.message || 'Failed to load case.');
+        if (!cancelled) setError(err.message || 'Failed to load case.');
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     };
     load();
+    return () => {
+      cancelled = true;
+    };
   }, [caseId, isNew]);
 
   const handleChange = (e) => {
@@ -345,7 +352,7 @@ export default function DisciplinaryCase() {
     }
   };
 
-  const handleUploadDocument = async (event, template = null) => {
+  const handleUploadDocument = async (event, template = null, overrides = {}) => {
     const file = event.target.files?.[0];
     event.target.value = '';
     if (!file || isNew) return;
@@ -362,17 +369,22 @@ export default function DisciplinaryCase() {
           fileName: file.name,
           contentBase64,
           mimeType: file.type || 'application/octet-stream',
-          documentType: template?.documentType || uploadType,
+          documentType: overrides.documentType || template?.documentType || uploadType,
           templateId: template?.id || '',
-          stageKey: currentStage || '',
+          stageKey: overrides.stageKey || currentStage || '',
+          source: overrides.source || '',
+          relatedDocumentId: overrides.relatedDocumentId || '',
         }),
       });
       const data = (await readJsonResponse(response)) || {};
       if (!response.ok) throw new Error(data.error || 'Failed to upload document.');
       await reload();
-      setMessage(data.sharePointFolderPath
-        ? `Document uploaded to SharePoint: ${data.sharePointFolderPath}`
-        : 'Document uploaded.');
+      setMessage(
+        data.message
+        || (data.sharePointFolderPath
+          ? `Document uploaded to SharePoint: ${data.sharePointFolderPath}`
+          : 'Document uploaded.'),
+      );
     } catch (err) {
       setError(err.message || 'Failed to upload document.');
     } finally {
@@ -391,7 +403,6 @@ export default function DisciplinaryCase() {
         body: JSON.stringify({
           caseId,
           templateId: template.id,
-          managersPresentUids,
         }),
       });
       const data = (await readJsonResponse(response)) || {};
@@ -434,7 +445,7 @@ export default function DisciplinaryCase() {
           caseId,
           documentId,
           meetingType: meetingTypeForStage || template?.id || 'interview',
-          managersPresentUids,
+          stageKey: currentStage || '',
         }),
       });
       const data = (await readJsonResponse(response)) || {};
@@ -448,23 +459,15 @@ export default function DisciplinaryCase() {
     }
   };
 
-  const stageDocumentsPanel = (
-    <CaseStageDocuments
-      templates={documentTemplates}
-      missingDocuments={missingDocuments}
-      sharePointConfigured={sharePointConfigured}
-      sharePointPath={sharePointPath}
-      sharePointFolderConfirmed={sharePointFolderConfirmed}
-      uploading={uploading}
-      saving={saving}
-      onDownloadTemplate={handleDownloadTemplate}
-      onUploadForTemplate={(template, event) => handleUploadDocument(event, template)}
-      onIssueToEmployee={issueDocumentToEmployee}
-      documentsBlock={null}
-    />
-  );
-
-  const issueMinutes = async () => {
+  const recordInterview = async ({
+    content,
+    interviewAt,
+    interviewTime,
+    intervieweeUid,
+    managersPresentUids,
+    meetingType,
+    stageKey,
+  }) => {
     setSaving(true);
     setError('');
     try {
@@ -474,29 +477,81 @@ export default function DisciplinaryCase() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           caseId,
-          content: minutesContent,
-          meetingType: meetingTypeForStage,
+          content,
+          interviewAt,
+          interviewTime,
+          intervieweeUid,
+          meetingType: meetingType || meetingTypeForStage,
+          stageKey: stageKey || currentStage || '',
           managersPresentUids,
         }),
       });
       const data = (await readJsonResponse(response)) || {};
-      if (!response.ok) throw new Error(data.error || 'Failed to issue minutes.');
-      setMinutesContent('');
-      setManagersPresentUids([]);
-      setMessage('Minutes issued to employee.');
+      if (!response.ok) throw new Error(data.error || 'Failed to send interview notes.');
+      setMessage(data.message || 'Interview notes sent to employee for confirmation.');
       await reload();
     } catch (err) {
-      setError(err.message || 'Failed to issue minutes.');
+      setError(err.message || 'Failed to send interview notes.');
     } finally {
       setSaving(false);
     }
   };
 
-  const formatManagersPresent = (item) => {
-    const list = Array.isArray(item?.managersPresent) ? item.managersPresent : [];
-    if (list.length === 0) return null;
-    return list.map((person) => person.name || person.uid).filter(Boolean).join(', ');
+  const respondToMinutes = async (minutesId, action, extra = {}) => {
+    setSaving(true);
+    setError('');
+    try {
+      const response = await fetch('/api/respondCaseMinutes', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ minutesId, action, ...extra }),
+      });
+      const data = (await readJsonResponse(response)) || {};
+      if (!response.ok) throw new Error(data.error || 'Failed to update notes.');
+      setMessage(data.message || 'Notes updated.');
+      await reload();
+    } catch (err) {
+      setError(err.message || 'Failed to update notes.');
+      throw err;
+    } finally {
+      setSaving(false);
+    }
   };
+
+  const canAddDocumentation = !isNew
+    && currentStage !== 'closed'
+    && stageAllowsDocumentation(family, currentStage);
+
+  const documentationHub = !isNew && displayStage ? (
+    <CaseDocumentationHub
+      stageKey={displayStage}
+      processFamily={family}
+      caseData={caseData}
+      minutes={minutes}
+      documents={documents}
+      templates={documentTemplates}
+      missingDocuments={missingDocuments}
+      sharePointConfigured={sharePointConfigured}
+      sharePointPath={sharePointPath}
+      sharePointFolderConfirmed={sharePointFolderConfirmed}
+      employees={employees}
+      employeesLoading={employeesLoading}
+      uploading={uploading}
+      saving={saving}
+      canAdd={canAddDocumentation && !viewingPastStage}
+      meetingType={meetingTypeForStage}
+      documentTypes={DOCUMENT_TYPES}
+      uploadType={uploadType}
+      onUploadTypeChange={setUploadType}
+      onRecordInterview={recordInterview}
+      onUploadDocument={handleUploadDocument}
+      onDownloadTemplate={handleDownloadTemplate}
+      onUploadForTemplate={(template, event) => handleUploadDocument(event, template)}
+      onIssueToEmployee={issueDocumentToEmployee}
+      onRespondToMinutes={respondToMinutes}
+    />
+  ) : null;
 
   const scheduleReview = async () => {
     setSaving(true);
@@ -541,6 +596,33 @@ export default function DisciplinaryCase() {
     }
   };
 
+  const deleteCase = async () => {
+    const label = caseData?.title || caseId;
+    if (!window.confirm(`Permanently delete this case?\n\n"${label}"\n\nAll portal records (events, minutes, document metadata) will be removed. SharePoint files are not deleted.`)) {
+      return;
+    }
+    if (!window.confirm('This cannot be undone. Delete the case now?')) {
+      return;
+    }
+    setSaving(true);
+    setError('');
+    try {
+      const response = await fetch('/api/deletePeopleCase', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ caseId }),
+      });
+      const data = (await readJsonResponse(response)) || {};
+      if (!response.ok) throw new Error(data.error || 'Failed to delete case.');
+      navigate('/dashboard/cases', { replace: true, state: { message: data.message || 'Case deleted.' } });
+    } catch (err) {
+      setError(err.message || 'Failed to delete case.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const selectOutcome = async (presetId) => {
     const preset = OUTCOME_PRESETS.find((item) => item.id === presetId);
     const today = new Date().toISOString().slice(0, 10);
@@ -563,6 +645,188 @@ export default function DisciplinaryCase() {
       outcomePreset: 'no_further_action',
     });
     if (result?.ok) setCloseNotes('');
+  };
+
+  const closeAsInformalAction = async () => {
+    const result = await apiUpdate({
+      closeAsInformalAction: true,
+      informalActionDetails,
+    });
+    if (result?.ok) setInformalActionDetails('');
+  };
+
+  const issueFileNoteForImprovement = async () => {
+    const result = await apiUpdate({
+      issueFileNoteForImprovement: true,
+      fileNoteReason,
+      fileNoteActionRequired,
+    });
+    if (result?.ok) {
+      setFileNoteReason('');
+      setFileNoteActionRequired('');
+      const html = result.data?.fileNoteHtml;
+      if (html) {
+        try {
+          await printHtmlDocument(html);
+          setMessage('File note issued to the employee portal. Your manager signature is already applied — the employee must digitally sign in their account.');
+          // Do not auto-print; portal sign-off is the primary path.
+        } catch (err) {
+          setError(err.message || 'File note saved but print failed.');
+        }
+      }
+    }
+  };
+
+  const printExistingFileNote = async () => {
+    const docId = caseData?.fileNoteDocumentId;
+    const doc = documents.find((item) => item.id === docId) || documents.find((item) => item.documentType === 'file_note_for_improvement');
+    const html = doc?.portalHtml
+      || buildFileNoteForImprovementHtml({
+        employeeName: caseData?.employeeNameSnapshot || '',
+        managerName: caseData?.fileNoteIssuedByName
+          || employees.find((person) => person.uid === caseData?.fileNoteIssuedByUid)?.fullName
+          || 'Manager',
+        reason: caseData?.fileNoteReason || caseData?.closeNotes || '',
+        actionRequired: caseData?.fileNoteActionRequired || '',
+        managerSignature: doc?.managerSignature || (caseData?.fileNoteIssuedByName ? {
+          signedByName: caseData.fileNoteIssuedByName,
+          signedAtLabel: caseData.fileNoteManagerSignedAt
+            ? String(caseData.fileNoteManagerSignedAt).slice(0, 16).replace('T', ' ')
+            : '',
+        } : null),
+        employeeSignature: doc?.employeeSignature || null,
+      });
+    try {
+      await printHtmlDocument(html);
+    } catch (err) {
+      setError(err.message || 'Could not open print dialog.');
+    }
+  };
+
+  const signedFileNoteDocument = useMemo(() => {
+    const bySignedId = caseData?.fileNoteSignedDocumentId
+      ? documents.find((item) => item.id === caseData.fileNoteSignedDocumentId)
+      : null;
+    if (bySignedId) return bySignedId;
+    const original = caseData?.fileNoteDocumentId
+      ? documents.find((item) => item.id === caseData.fileNoteDocumentId)
+      : documents.find((item) => item.documentType === 'file_note_for_improvement');
+    if (original?.signedCopy || original?.source === 'signed_file_note') return original;
+    return documents.find((item) => item.documentType === 'file_note_signed') || null;
+  }, [caseData?.fileNoteDocumentId, caseData?.fileNoteSignedDocumentId, documents]);
+
+  const uploadSignedFileNote = (event) => handleUploadDocument(event, null, {
+    documentType: 'file_note_signed',
+    stageKey: 'fact_finding',
+    source: 'signed_file_note',
+    relatedDocumentId: caseData?.fileNoteDocumentId || '',
+  });
+
+  const renderFileNoteSigningPanel = () => {
+    const employeePending = caseData?.fileNoteEmployeeSignStatus === 'pending'
+      || (!caseData?.fileNoteEmployeeSignStatus && !signedFileNoteDocument);
+    const employeeSigned = caseData?.fileNoteEmployeeSignStatus === 'signed'
+      || Boolean(caseData?.fileNoteEmployeeSignedAt)
+      || Boolean(signedFileNoteDocument?.employeeSignature?.signedAt);
+
+    return (
+      <div className="rounded-xl border border-indigo-500/25 bg-indigo-500/10 p-4 space-y-4">
+        <div>
+          <p className="text-sm font-medium text-indigo-100">File note for improvement</p>
+          <p className="text-xs text-indigo-100/80 mt-1">
+            Primary process: issued to the employee portal for digital signature.
+            Your manager signature was applied when the note was created.
+          </p>
+        </div>
+
+        <div className="rounded-lg border border-indigo-500/20 bg-[#0b1220]/40 p-3 space-y-2 text-sm">
+          <p className="text-indigo-100">
+            Manager signature:{' '}
+            <span className="text-emerald-300">
+              {caseData?.fileNoteIssuedByName || 'Applied at issue'}
+              {caseData?.fileNoteManagerSignedAt
+                ? ` · ${String(caseData.fileNoteManagerSignedAt).slice(0, 16).replace('T', ' ')}`
+                : ''}
+            </span>
+          </p>
+          <p className="text-indigo-100">
+            Employee signature:{' '}
+            {employeeSigned ? (
+              <span className="text-emerald-300">
+                Signed
+                {caseData?.fileNoteEmployeeSignedAt
+                  ? ` · ${String(caseData.fileNoteEmployeeSignedAt).slice(0, 16).replace('T', ' ')}`
+                  : ''}
+              </span>
+            ) : (
+              <span className="text-amber-300">Awaiting digital signature in Employee Portal</span>
+            )}
+          </p>
+        </div>
+
+        {caseData?.fileNoteReason && (
+          <div>
+            <p className="text-xs uppercase text-indigo-200/70">Reason</p>
+            <p className="text-sm text-indigo-50/90 whitespace-pre-wrap">{caseData.fileNoteReason}</p>
+          </div>
+        )}
+        {caseData?.fileNoteActionRequired && (
+          <div>
+            <p className="text-xs uppercase text-indigo-200/70">Improvement required</p>
+            <p className="text-sm text-indigo-50/90 whitespace-pre-wrap">{caseData.fileNoteActionRequired}</p>
+          </div>
+        )}
+
+        <div className="flex flex-wrap gap-2">
+          <button type="button" className={btnSecondary} onClick={printExistingFileNote}>
+            View / print document
+          </button>
+        </div>
+
+        <div className="border-t border-indigo-500/20 pt-4 space-y-3">
+          <p className="text-xs uppercase tracking-wide text-indigo-200/70">Backup — wet signature</p>
+          <p className="text-xs text-indigo-100/80">
+            If portal signing is not possible, print the note, obtain wet signatures, scan, and upload.
+            The upload replaces the portal copy on the personnel file.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className={btnSecondary} onClick={printExistingFileNote}>
+              Print for wet signature
+            </button>
+            <button
+              type="button"
+              className={btnSecondary}
+              disabled={uploading || !sharePointConfigured}
+              onClick={() => signedFileNoteInputRef.current?.click()}
+            >
+              {uploading
+                ? 'Uploading…'
+                : signedFileNoteDocument && !employeePending
+                  ? 'Replace signed scan'
+                  : 'Upload signed scan'}
+            </button>
+            <input
+              ref={signedFileNoteInputRef}
+              type="file"
+              className="hidden"
+              accept=".pdf,.png,.jpg,.jpeg,.webp,.doc,.docx"
+              onChange={uploadSignedFileNote}
+            />
+          </div>
+          {!sharePointConfigured && (
+            <p className="text-xs text-amber-300">SharePoint must be configured to upload a signed scan.</p>
+          )}
+          {signedFileNoteDocument?.sharePointWebUrl && (
+            <p className="text-sm text-emerald-300">
+              File on SharePoint:{' '}
+              <a href={signedFileNoteDocument.sharePointWebUrl} target="_blank" rel="noreferrer" className="underline">
+                {signedFileNoteDocument.fileName || 'Open'}
+              </a>
+            </p>
+          )}
+        </div>
+      </div>
+    );
   };
 
   const buildInviteHtmlFromForm = () => buildHearingInviteHtml({
@@ -610,81 +874,18 @@ export default function DisciplinaryCase() {
     }
   };
 
-  const minutesComposer = (
-    <div className="space-y-3">
-      <Field label="Managers present (can select more than one)">
-        <ManagerMultiSelect
-          value={managersPresentUids}
-          onChange={setManagersPresentUids}
-          employees={employees}
-          loading={employeesLoading}
-          disabled={saving}
-          emptyHint="Add every manager who attended this interview / meeting"
-        />
-      </Field>
-      <Field label="Minutes content">
-        <textarea value={minutesContent} onChange={(e) => setMinutesContent(e.target.value)} rows={5} className={inputClass} />
-      </Field>
-      <button type="button" className={btnPrimary} disabled={saving || !minutesContent.trim()} onClick={issueMinutes}>
-        Issue minutes to employee
-      </button>
-    </div>
-  );
-
-  const minutesList = (
+  const uploadedDocumentsList = (
     <ul className="space-y-2">
-      {minutes.map((item) => {
-        const presentLabel = formatManagersPresent(item);
-        return (
-          <li key={item.id} className="border border-[#1a2540] rounded-lg px-3 py-2 text-sm text-slate-300">
-            <div className="flex justify-between gap-2">
-              <span>{item.meetingType} · {item.status}</span>
-              <span className="text-xs text-slate-500">{item.createdAt?.slice?.(0, 10) || ''}</span>
-            </div>
-            {presentLabel && (
-              <p className="text-xs text-slate-500 mt-1">Managers present: {presentLabel}</p>
-            )}
-            {(item.sharePointWebUrl || item.fileName) && (
-              <p className="text-xs text-indigo-300 mt-1">
-                Document: {item.fileName || 'attached'}
-                {item.sharePointWebUrl && (
-                  <a href={item.sharePointWebUrl} target="_blank" rel="noreferrer" className="ml-2 underline">Open</a>
-                )}
-              </p>
-            )}
-            <p className="text-slate-400 mt-1 whitespace-pre-wrap">{item.content}</p>
-            {item.disputed && <p className="text-amber-300 text-xs mt-1">Disputed — both versions retained</p>}
-          </li>
-        );
-      })}
+      {documents.map((doc) => (
+        <li key={doc.id} className="text-sm text-slate-300">
+          {doc.documentType}: {doc.fileName}
+          {doc.sharePointWebUrl && (
+            <a href={doc.sharePointWebUrl} target="_blank" rel="noreferrer" className="ml-2 text-indigo-300">Open</a>
+          )}
+        </li>
+      ))}
+      {documents.length === 0 && <li className="text-sm text-slate-500">No uploaded files yet.</li>}
     </ul>
-  );
-
-  const documentsBlock = (
-    <div className="space-y-3">
-      <div className="flex flex-wrap gap-3 items-center">
-        <select value={uploadType} onChange={(e) => setUploadType(e.target.value)} className={`${inputClass} w-auto`}>
-          {DOCUMENT_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
-        </select>
-        <label className={`${btnSecondary} cursor-pointer`}>
-          {uploading ? 'Uploading…' : 'Upload file'}
-          <input type="file" className="hidden" onChange={handleUploadDocument} disabled={uploading} />
-        </label>
-        {!sharePointConfigured && (
-          <span className="text-xs text-amber-300">SharePoint not configured — uploads may fail</span>
-        )}
-      </div>
-      <ul className="space-y-2">
-        {documents.map((doc) => (
-          <li key={doc.id} className="text-sm text-slate-300">
-            {doc.documentType}: {doc.fileName}
-            {doc.sharePointWebUrl && (
-              <a href={doc.sharePointWebUrl} target="_blank" rel="noreferrer" className="ml-2 text-indigo-300">Open</a>
-            )}
-          </li>
-        ))}
-      </ul>
-    </div>
   );
 
   const renderDisciplinaryStep = () => {
@@ -692,7 +893,7 @@ export default function DisciplinaryCase() {
       return (
         <StepCard title="Step 1 — Fact-finding interview">
           <p className="text-sm text-slate-400">
-            Hold an initial fact-finding interview. This is not a formal hearing. Afterwards, either close with notes or schedule a hearing.
+            Hold an initial fact-finding interview (not a formal hearing). Record notes on the portal, then choose how the matter resolves.
           </p>
 
           <div className="rounded-lg border border-[#1a2540] p-3 space-y-3">
@@ -729,19 +930,6 @@ export default function DisciplinaryCase() {
             />
           </Field>
 
-          <Field label="Managers present (for notes / send to employee)">
-            <ManagerMultiSelect
-              value={managersPresentUids}
-              onChange={setManagersPresentUids}
-              employees={employees}
-              loading={employeesLoading}
-              disabled={saving}
-              emptyHint="Add every manager who attended this interview"
-            />
-          </Field>
-
-          {stageDocumentsPanel}
-
           <div className="rounded-lg border border-[#1a2540] p-3 space-y-2">
             <p className="text-sm text-slate-300">Optional: precautionary suspension</p>
             <div className="flex flex-wrap gap-2">
@@ -763,32 +951,157 @@ export default function DisciplinaryCase() {
             </div>
           </div>
 
-          <div className="border-t border-[#1a2540] pt-4 space-y-3">
-            <p className="text-sm font-medium text-white">After fact-finding — choose one</p>
-            <Field label="Close notes (required if closing now)">
-              <textarea
-                value={closeNotes}
-                onChange={(e) => setCloseNotes(e.target.value)}
-                rows={3}
-                className={inputClass}
-                placeholder="e.g. Fact-finding showed no case to answer; informal coaching given; no formal hearing needed."
-              />
-            </Field>
-            <ChoiceRow>
+          <div className="border-t border-[#1a2540] pt-4 space-y-4">
+            <div>
+              <p className="text-sm font-medium text-white">After fact-finding — choose one outcome</p>
+              <p className="text-xs text-slate-400 mt-1">
+                Record interview notes on the portal first (Documentation &amp; interviews below). Then pick the route that matches what happened.
+              </p>
+              {needsPortalInterview && (
+                <p className="text-xs text-amber-300 mt-2">Record at least one interview for this stage before continuing.</p>
+              )}
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
               <ChoiceButton
-                title="Close with notes"
-                help="No formal hearing. Case closes as no further action with your notes on file."
-                disabled={saving || !closeNotes.trim()}
-                onClick={closeWithNotes}
+                title="1. Close — no further action"
+                help="Use when fact-finding shows no case to answer, or no action is needed. Brief close notes are kept on the case only — not a file note and not informal action."
+                selected={selectedFactFindingOutcome === 'nfa'}
+                disabled={saving || needsPortalInterview}
+                onClick={() => setSelectedFactFindingOutcome('nfa')}
+              />
+              <ChoiceButton
+                title="2. Close — informal action"
+                help="Use when a quiet word or informal agreement resolved it (e.g. verbal reminder, agreed change). Recorded on the case but no file note document and not formal discipline."
+                selected={selectedFactFindingOutcome === 'informal'}
+                disabled={saving || needsPortalInterview}
+                onClick={() => setSelectedFactFindingOutcome('informal')}
+              />
+              <ChoiceButton
+                title="3. Issue file note for improvement"
+                help="Use when standards must improve but formal discipline is not appropriate yet. Generates a printable file note for the personnel file — may be considered if issues recur."
+                selected={selectedFactFindingOutcome === 'file_note'}
+                disabled={saving || needsPortalInterview}
+                onClick={() => setSelectedFactFindingOutcome('file_note')}
               />
               <ChoiceButton
                 primary
-                title="Schedule formal hearing →"
-                help="Move to the next step: issue hearing invite and evidence pack."
-                disabled={saving}
-                onClick={() => apiUpdate({ stage: 'hearing_invite' })}
+                title="4. Schedule formal hearing →"
+                help="Use when the concern is serious, informal steps failed, or you are proceeding straight to formal discipline. Next step is the hearing invite."
+                selected={selectedFactFindingOutcome === 'formal_hearing'}
+                disabled={saving || needsPortalInterview}
+                onClick={() => setSelectedFactFindingOutcome('formal_hearing')}
               />
-            </ChoiceRow>
+            </div>
+
+            {selectedFactFindingOutcome && (
+              <div className="rounded-xl border border-indigo-500/30 bg-indigo-500/5 p-4 space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm font-medium text-indigo-100">Complete your chosen outcome</p>
+                  <button
+                    type="button"
+                    className="text-xs text-slate-400 hover:text-slate-200"
+                    onClick={() => setSelectedFactFindingOutcome('')}
+                  >
+                    Choose a different outcome
+                  </button>
+                </div>
+
+                {selectedFactFindingOutcome === 'nfa' && (
+                  <>
+                    <Field label="Close notes">
+                      <textarea
+                        value={closeNotes}
+                        onChange={(e) => setCloseNotes(e.target.value)}
+                        rows={4}
+                        className={inputClass}
+                        placeholder="Why is the case being closed with no further action?"
+                      />
+                    </Field>
+                    <button
+                      type="button"
+                      className={btnPrimary}
+                      disabled={saving || !closeNotes.trim()}
+                      onClick={closeWithNotes}
+                    >
+                      Close case — no further action
+                    </button>
+                  </>
+                )}
+
+                {selectedFactFindingOutcome === 'informal' && (
+                  <>
+                    <Field label="What was said or agreed">
+                      <textarea
+                        value={informalActionDetails}
+                        onChange={(e) => setInformalActionDetails(e.target.value)}
+                        rows={4}
+                        className={inputClass}
+                        placeholder="e.g. Verbal reminder given; employee agreed to improve attendance."
+                      />
+                    </Field>
+                    <button
+                      type="button"
+                      className={btnPrimary}
+                      disabled={saving || !informalActionDetails.trim()}
+                      onClick={closeAsInformalAction}
+                    >
+                      Close case — informal action
+                    </button>
+                  </>
+                )}
+
+                {selectedFactFindingOutcome === 'file_note' && (
+                  <>
+                    <Field label="Reason the file note is being issued">
+                      <textarea
+                        value={fileNoteReason}
+                        onChange={(e) => setFileNoteReason(e.target.value)}
+                        rows={3}
+                        className={inputClass}
+                        placeholder="The reason improvement is required (shown on the file note document)."
+                      />
+                    </Field>
+                    <Field label="Improvement or action required">
+                      <textarea
+                        value={fileNoteActionRequired}
+                        onChange={(e) => setFileNoteActionRequired(e.target.value)}
+                        rows={3}
+                        className={inputClass}
+                        placeholder="What the employee must do differently going forward."
+                      />
+                    </Field>
+                    <p className="text-xs text-slate-400">
+                      Issuing applies your digital signature automatically and sends the file note to the employee portal for their digital signature. Print / scan / upload remains available as a backup on the closed case.
+                    </p>
+                    <button
+                      type="button"
+                      className={btnPrimary}
+                      disabled={saving || !fileNoteReason.trim() || !fileNoteActionRequired.trim()}
+                      onClick={issueFileNoteForImprovement}
+                    >
+                      Issue to portal &amp; apply my signature
+                    </button>
+                  </>
+                )}
+
+                {selectedFactFindingOutcome === 'formal_hearing' && (
+                  <>
+                    <p className="text-sm text-slate-300">
+                      You will move to the hearing invite step to set a date, send the portal invite, and prepare the formal hearing.
+                    </p>
+                    <button
+                      type="button"
+                      className={btnPrimary}
+                      disabled={saving}
+                      onClick={() => apiUpdate({ stage: 'hearing_invite' })}
+                    >
+                      Continue to schedule formal hearing
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
           </div>
         </StepCard>
       );
@@ -949,9 +1262,7 @@ export default function DisciplinaryCase() {
           </div>
 
           <div className="border-t border-[#1a2540] pt-4">
-            <p className="text-sm text-slate-400 mb-3">Upload additional evidence if needed.</p>
-            {stageDocumentsPanel}
-            <div className="mt-4">{documentsBlock}</div>
+            <p className="text-sm text-slate-400 mb-3">Attach evidence using Add documentation below before continuing.</p>
           </div>
 
           <ChoiceRow>
@@ -977,7 +1288,7 @@ export default function DisciplinaryCase() {
       return (
         <StepCard title="Step 3 — Formal hearing">
           <p className="text-sm text-slate-400">
-            Hold the hearing, record companion attendance, and issue hearing minutes for sign-off.
+            Hold the hearing, record companion attendance, and record the hearing using Add documentation below.
           </p>
           {(caseData?.hearingScheduledAt || caseData?.hearingLocation) && (
             <div className="rounded-lg border border-[#1a2540] px-3 py-2 text-sm text-slate-300">
@@ -1013,12 +1324,6 @@ export default function DisciplinaryCase() {
               />
             </Field>
           </div>
-          <div className="space-y-3">
-            <p className="text-sm font-medium text-slate-200">Hearing minutes</p>
-            {minutesComposer}
-            {minutesList}
-          </div>
-          {stageDocumentsPanel}
           <ChoiceRow>
             <ChoiceButton
               title="← Back to invite"
@@ -1028,10 +1333,13 @@ export default function DisciplinaryCase() {
             <ChoiceButton
               primary
               title="Hearing complete — decide outcome →"
-              disabled={saving}
+              disabled={saving || needsPortalInterview}
               onClick={() => apiUpdate({ stage: 'outcome_pack' })}
             />
           </ChoiceRow>
+          {needsPortalInterview && (
+            <p className="text-xs text-amber-300">Record hearing interview notes on the portal before continuing.</p>
+          )}
         </StepCard>
       );
     }
@@ -1039,8 +1347,7 @@ export default function DisciplinaryCase() {
     if (currentStage === 'outcome_pack') {
       return (
         <StepCard title="Step 4 — Outcome">
-          <p className="text-sm text-slate-400">Select an outcome, complete the document pack, then close the case.</p>
-          {stageDocumentsPanel}
+          <p className="text-sm text-slate-400">Select an outcome, complete the document pack using Add documentation below, then close the case.</p>
           {consistency.length > 0 && (
             <div className="rounded-lg border border-[#1a2540] p-3">
               <p className="text-xs uppercase text-slate-500 mb-2">Consistency snapshot (similar closed cases)</p>
@@ -1127,9 +1434,11 @@ export default function DisciplinaryCase() {
             <div className="rounded-xl border border-emerald-500/25 bg-emerald-500/10 p-4">
               <p className="text-sm font-medium text-emerald-100">Closed as informal action</p>
               <p className="text-sm text-emerald-50/90 mt-1 whitespace-pre-wrap">
-                {caseData.informalActionDetails || 'Informal action was recorded at case creation.'}
+                {caseData.informalActionDetails || 'Informal action was recorded.'}
               </p>
             </div>
+          ) : caseData?.outcomePreset === 'file_note_for_improvement' ? (
+            renderFileNoteSigningPanel()
           ) : (
             <div className="space-y-2 text-sm text-slate-300">
               <p>Outcome: <span className="text-white">{caseData?.outcomePreset || '—'}</span></p>
@@ -1146,7 +1455,7 @@ export default function DisciplinaryCase() {
               Export pack
             </button>
           </div>
-          {caseData?.outcomePreset !== 'informal_action' && (
+          {caseData?.outcomePreset !== 'informal_action' && caseData?.outcomePreset !== 'file_note_for_improvement' && (
             <div className="border-t border-[#1a2540] pt-4 space-y-3">
               <p className="text-sm font-medium text-white">Appeal</p>
               <Field label="Appeal owner (should differ from decision-maker)">
@@ -1195,12 +1504,6 @@ export default function DisciplinaryCase() {
               emptyLabel="Select appeal owner"
             />
           </Field>
-          <div className="space-y-3">
-            <p className="text-sm font-medium text-slate-200">Appeal minutes</p>
-            {minutesComposer}
-            {minutesList}
-          </div>
-          {stageDocumentsPanel}
           <div className="flex flex-wrap gap-2">
             {OUTCOME_PRESETS.filter((p) => p.id !== 'informal_action').map((preset) => (
               <button
@@ -1259,16 +1562,18 @@ export default function DisciplinaryCase() {
               emptyLabel="Select investigator"
             />
           </Field>
-          <div className="space-y-3">
-            <p className="text-sm font-medium text-slate-200">Investigation notes / minutes</p>
-            {minutesComposer}
-            {minutesList}
-          </div>
-          {stageDocumentsPanel}
           <ChoiceRow>
             <ChoiceButton title="Close with notes" disabled={saving || !closeNotes.trim()} onClick={closeWithNotes} />
-            <ChoiceButton primary title="Arrange grievance meeting →" disabled={saving} onClick={() => apiUpdate({ stage: 'meeting' })} />
+            <ChoiceButton
+              primary
+              title="Arrange grievance meeting →"
+              disabled={saving || needsPortalInterview}
+              onClick={() => apiUpdate({ stage: 'meeting' })}
+            />
           </ChoiceRow>
+          {needsPortalInterview && (
+            <p className="text-xs text-amber-300">Record investigation interview notes on the portal before continuing.</p>
+          )}
           <Field label="Close notes (if closing)">
             <textarea value={closeNotes} onChange={(e) => setCloseNotes(e.target.value)} rows={2} className={inputClass} />
           </Field>
@@ -1278,13 +1583,15 @@ export default function DisciplinaryCase() {
     if (currentStage === 'meeting') {
       return (
         <StepCard title="Step 3 — Grievance meeting">
-          <div className="space-y-3">
-            <p className="text-sm font-medium text-slate-200">Meeting minutes</p>
-            {minutesComposer}
-            {minutesList}
-          </div>
-          {stageDocumentsPanel}
-          <ChoiceButton primary title="Meeting done — decide outcome →" disabled={saving} onClick={() => apiUpdate({ stage: 'outcome_pack' })} />
+          <ChoiceButton
+            primary
+            title="Meeting done — decide outcome →"
+            disabled={saving || needsPortalInterview}
+            onClick={() => apiUpdate({ stage: 'outcome_pack' })}
+          />
+          {needsPortalInterview && (
+            <p className="text-xs text-amber-300 mt-2">Record meeting interview notes on the portal before continuing.</p>
+          )}
         </StepCard>
       );
     }
@@ -1306,21 +1613,21 @@ export default function DisciplinaryCase() {
     if (currentStage === 'investigation') {
       return (
         <StepCard title="Step 2 — Investigation">
-          <div className="space-y-3">
-            <p className="text-sm font-medium text-slate-200">Interview minutes</p>
-            {minutesComposer}
-            {minutesList}
-          </div>
-          {stageDocumentsPanel}
-          {documentsBlock}
-          <ChoiceButton primary title="Investigation complete — training decision →" disabled={saving} onClick={() => apiUpdate({ stage: 'training_decision' })} />
+          <ChoiceButton
+            primary
+            title="Investigation complete — training decision →"
+            disabled={saving || needsPortalInterview}
+            onClick={() => apiUpdate({ stage: 'training_decision' })}
+          />
+          {needsPortalInterview && (
+            <p className="text-xs text-amber-300 mt-2">Record investigation interview notes on the portal before continuing.</p>
+          )}
         </StepCard>
       );
     }
     if (currentStage === 'training_decision') {
       return (
         <StepCard title="Step 3 — Training team decision">
-          {stageDocumentsPanel}
           <ChoiceRow>
             <ChoiceButton title="Training required" disabled={saving} onClick={() => apiUpdate({ trainingDecision: 'training_required', stage: 'training_decision' })} />
             <ChoiceButton title="Open linked disciplinary" disabled={saving} onClick={() => apiUpdate({ openLinkedDisciplinary: true })} />
@@ -1346,12 +1653,37 @@ export default function DisciplinaryCase() {
   };
 
   const renderCurrentStep = () => {
-    if (family === 'grievance') return renderGrievanceStep();
-    if (family === 'vehicle_accident') return renderAccidentStep();
-    return renderDisciplinaryStep();
+    const step = viewingPastStage ? (
+      <StepCard title={`Viewing — ${stageLabel(displayStage)}`}>
+        <p className="text-sm text-slate-400">
+          Historical view of this stage. Dates, choices, and who actioned them are in the progress panel above.
+          Documentation and interviews for this stage are listed below — click Open for full details.
+        </p>
+      </StepCard>
+    ) : family === 'grievance'
+      ? renderGrievanceStep()
+      : family === 'vehicle_accident'
+        ? renderAccidentStep()
+        : renderDisciplinaryStep();
+    return (
+      <div className="space-y-6">
+        {step}
+        {documentationHub}
+      </div>
+    );
   };
 
-  if (loading) {
+  if (!isNew && (loading || !caseData)) {
+    if (error && !loading) {
+      return (
+        <div className="p-8 space-y-4 max-w-lg">
+          <div className="bg-red-500/10 border border-red-500/25 rounded-lg p-4 text-sm text-red-300">{error}</div>
+          <button type="button" onClick={() => navigate('/dashboard/cases')} className={btnSecondary}>
+            Back to cases
+          </button>
+        </div>
+      );
+    }
     return <div className="p-8 text-sm text-slate-400">Loading case…</div>;
   }
 
@@ -1402,7 +1734,7 @@ export default function DisciplinaryCase() {
             <div>
               <p className="text-sm font-medium text-white">Step 0 — Open the case</p>
               <p className="text-sm text-slate-400 mt-1">
-                Record the concern, then either dismiss informally with notes, or open a formal case and continue step by step.
+                Record the concern and open the case. You can hold interviews, upload notes, and decide later whether it resolves informally or goes formal.
               </p>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1449,9 +1781,9 @@ export default function DisciplinaryCase() {
             {(form.processFamily === 'disciplinary' || form.processFamily === 'grievance') && (
               <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-4 space-y-4">
                 <div>
-                  <p className="text-sm font-medium text-amber-100">Informal resolution (Acas)</p>
+                  <p className="text-sm font-medium text-amber-100">How are you starting?</p>
                   <p className="text-xs text-slate-400 mt-1">
-                    Choose one path. If informal action resolves it, record what happened and the case closes immediately but stays on file.
+                    This records your initial approach. Informal resolution is decided later on the case, after interviews and notes.
                   </p>
                 </div>
                 <div className="space-y-3">
@@ -1490,18 +1822,6 @@ export default function DisciplinaryCase() {
                     <textarea name="informalNotAppropriateReason" value={form.informalNotAppropriateReason} onChange={handleChange} rows={3} className={inputClass} />
                   </Field>
                 )}
-                {form.informalResolutionPath === 'informal_action_taken' && (
-                  <Field label="Informal action taken (what was said / agreed)">
-                    <textarea
-                      name="informalActionDetails"
-                      value={form.informalActionDetails}
-                      onChange={handleChange}
-                      rows={4}
-                      className={inputClass}
-                      placeholder="e.g. Quiet word on 27 Aug about lateness; employee agreed to improve; no formal warning issued."
-                    />
-                  </Field>
-                )}
               </div>
             )}
 
@@ -1526,17 +1846,23 @@ export default function DisciplinaryCase() {
               }
               className={btnPrimary}
             >
-              {saving
-                ? 'Saving…'
-                : form.informalResolutionPath === 'informal_action_taken'
-                  ? 'Record informal action & close'
-                  : 'Open case — start fact-finding'}
+              {saving ? 'Saving…' : 'Open case — start fact-finding'}
             </button>
           </div>
         ) : (
           <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_320px] gap-6">
             <div className="space-y-6">
-              <ProgressRail stages={stages} current={currentStage} />
+              <CaseProgressRail
+                stages={stages}
+                currentStage={currentStage}
+                viewStage={displayStage}
+                onViewStageChange={setViewStage}
+                caseData={caseData}
+                events={events}
+                minutes={minutes}
+                documents={documents}
+                employees={employees}
+              />
               {renderCurrentStep()}
 
               <div className="bg-[#0b1220] border border-[#1a2540] rounded-xl">
@@ -1552,7 +1878,7 @@ export default function DisciplinaryCase() {
                   <div className="px-5 pb-5 space-y-6 border-t border-[#1a2540] pt-4">
                     <div>
                       <h4 className="text-white font-medium mb-3">Documents</h4>
-                      {documentsBlock}
+                      {uploadedDocumentsList}
                     </div>
                     <div>
                       <h4 className="text-white font-medium mb-3">Reassign / leaver</h4>
@@ -1586,6 +1912,22 @@ export default function DisciplinaryCase() {
                         ))}
                       </ul>
                     </div>
+                    {ALLOW_DELETE_CASES && (
+                      <div className="border-t border-red-500/20 pt-4">
+                        <h4 className="text-white font-medium mb-2">Testing — delete case</h4>
+                        <p className="text-xs text-slate-500 mb-3">
+                          Removes this case and all portal records permanently. SharePoint files are left in place.
+                        </p>
+                        <button
+                          type="button"
+                          className="px-3 py-2 text-sm rounded-lg border border-red-500/40 text-red-300 hover:bg-red-500/10 disabled:opacity-50"
+                          disabled={saving}
+                          onClick={deleteCase}
+                        >
+                          Delete entire case
+                        </button>
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

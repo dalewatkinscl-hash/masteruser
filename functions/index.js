@@ -12,6 +12,7 @@ const {
   suggestEmployeeFolders,
   uploadDisciplinaryDocument,
   validateEmployeeFolder,
+  deleteDriveItem,
 } = require('./sharepoint');
 const {
   buildContactEmailFields,
@@ -570,6 +571,7 @@ const DISCIPLINARY_DOCUMENT_TYPES = new Set([
   'suspension_letter',
   'training_outline',
   'pip_plan',
+  'file_note_signed',
   'other',
 ]);
 
@@ -3591,6 +3593,8 @@ exports.uploadDisciplinaryDocument = onRequest(
     const documentType = DISCIPLINARY_DOCUMENT_TYPES.has(documentTypeRaw) ? documentTypeRaw : 'other';
     const templateId = toTrimmedString(req.body?.templateId);
     const stageKey = toTrimmedString(req.body?.stageKey);
+    const source = toTrimmedString(req.body?.source) || (templateId ? 'template_upload' : 'upload');
+    const relatedDocumentId = toTrimmedString(req.body?.relatedDocumentId);
 
     if (!caseId || !fileName || !contentBase64) {
       res.status(400).json({ error: 'caseId, fileName, and contentBase64 are required.' });
@@ -3632,6 +3636,24 @@ exports.uploadDisciplinaryDocument = onRequest(
       const { buildCaseSharePointFolderName } = require('./caseDocumentTemplates');
       const caseFolderName = buildCaseSharePointFolderName(caseData, caseId);
 
+      const replaceOriginal = Boolean(
+        relatedDocumentId
+        && (source === 'signed_file_note' || documentType === 'file_note_signed'),
+      );
+      let originalDocSnap = null;
+      if (replaceOriginal) {
+        originalDocSnap = await db.collection('disciplinary_documents').doc(relatedDocumentId).get();
+        if (!originalDocSnap.exists) {
+          res.status(404).json({ error: 'Original file note document not found.' });
+          return;
+        }
+        const originalData = originalDocSnap.data();
+        if (originalData.caseId !== caseId) {
+          res.status(400).json({ error: 'Document does not belong to this case.' });
+          return;
+        }
+      }
+
       const uploadResult = await uploadDisciplinaryDocument(sharePointConfig, {
         fullName: employee.fullName || caseData.employeeNameSnapshot || '',
         isActive: employee.isActive !== false,
@@ -3644,41 +3666,113 @@ exports.uploadDisciplinaryDocument = onRequest(
       });
 
       const now = admin.firestore.FieldValue.serverTimestamp();
-      const documentRef = await db.collection('disciplinary_documents').add({
-        caseId,
-        employeeUid: caseData.employeeUid,
-        documentType,
-        templateId: templateId || '',
-        stageKey: stageKey || caseData.stage || '',
-        fileName: uploadResult.fileName,
-        fileFormat: uploadResult.fileName.split('.').pop()?.toLowerCase() || '',
-        mimeType,
-        storageProvider: 'sharepoint',
-        sharePointItemId: uploadResult.sharePointItemId,
-        sharePointWebUrl: uploadResult.sharePointWebUrl,
-        sharePointDriveId: uploadResult.sharePointDriveId,
-        sharePointFolderPath: uploadResult.folderPath,
-        uploadedByUid: session.profile.uid,
-        source: templateId ? 'template_upload' : 'upload',
-        createdAt: now,
-      });
+      let documentId = '';
+      let responseMessage = 'Document uploaded to SharePoint.';
 
-      await appendDisciplinaryEvent(caseId, 'document_uploaded', {
-        documentId: documentRef.id,
+      if (replaceOriginal && originalDocSnap) {
+        const originalData = originalDocSnap.data();
+        const oldItemId = originalData.sharePointItemId || '';
+        if (
+          oldItemId
+          && oldItemId !== uploadResult.sharePointItemId
+          && originalData.storageProvider === 'sharepoint'
+        ) {
+          try {
+            await deleteDriveItem(sharePointConfig, oldItemId);
+          } catch (deleteError) {
+            console.error('Failed to delete original unsigned file note from SharePoint', deleteError);
+          }
+        }
+
+        await originalDocSnap.ref.update({
+          documentType: 'file_note_for_improvement',
+          templateId: originalData.templateId || 'file_note_for_improvement',
+          stageKey: stageKey || originalData.stageKey || caseData.stage || '',
+          fileName: uploadResult.fileName,
+          fileFormat: uploadResult.fileName.split('.').pop()?.toLowerCase() || '',
+          mimeType,
+          storageProvider: 'sharepoint',
+          sharePointItemId: uploadResult.sharePointItemId,
+          sharePointWebUrl: uploadResult.sharePointWebUrl,
+          sharePointDriveId: uploadResult.sharePointDriveId,
+          sharePointFolderPath: uploadResult.folderPath,
+          uploadedByUid: session.profile.uid,
+          source: 'signed_file_note',
+          signedCopy: true,
+          signedAt: now,
+          signedUploadedByUid: session.profile.uid,
+          employeeSignStatus: 'signed',
+          employeeSignature: originalData.employeeSignature || {
+            signedByUid: caseData.employeeUid || '',
+            signedByName: caseData.employeeNameSnapshot || 'Employee',
+            signedAt: new Date().toISOString(),
+            signedAtLabel: new Date().toLocaleString('en-GB'),
+            method: 'wet_scan_upload',
+          },
+          // Keep printable blank wording for reprints; signed scan is now the SharePoint file.
+          updatedAt: now,
+        });
+
+        documentId = originalDocSnap.id;
+        await db.collection('disciplinary_cases').doc(caseId).update({
+          fileNoteDocumentId: documentId,
+          fileNoteSignedDocumentId: documentId,
+          fileNoteSignedAt: now,
+          fileNoteEmployeeSignStatus: 'signed',
+          fileNoteEmployeeSignedAt: new Date().toISOString(),
+          status: 'closed',
+          updatedAt: now,
+        });
+        responseMessage = 'Signed file note uploaded and replaced the original unsigned document.';
+      } else {
+        const documentRef = await db.collection('disciplinary_documents').add({
+          caseId,
+          employeeUid: caseData.employeeUid,
+          documentType,
+          templateId: templateId || '',
+          stageKey: stageKey || caseData.stage || '',
+          fileName: uploadResult.fileName,
+          fileFormat: uploadResult.fileName.split('.').pop()?.toLowerCase() || '',
+          mimeType,
+          storageProvider: 'sharepoint',
+          sharePointItemId: uploadResult.sharePointItemId,
+          sharePointWebUrl: uploadResult.sharePointWebUrl,
+          sharePointDriveId: uploadResult.sharePointDriveId,
+          sharePointFolderPath: uploadResult.folderPath,
+          uploadedByUid: session.profile.uid,
+          source,
+          relatedDocumentId: relatedDocumentId || '',
+          createdAt: now,
+        });
+        documentId = documentRef.id;
+
+        if (documentType === 'file_note_signed' || relatedDocumentId) {
+          await db.collection('disciplinary_cases').doc(caseId).update({
+            fileNoteSignedDocumentId: documentId,
+            fileNoteSignedAt: now,
+            updatedAt: now,
+          });
+        }
+      }
+
+      await appendDisciplinaryEvent(caseId, replaceOriginal ? 'file_note_signed_uploaded' : 'document_uploaded', {
+        documentId,
         fileName: uploadResult.fileName,
-        documentType,
+        documentType: replaceOriginal ? 'file_note_for_improvement' : documentType,
         templateId: templateId || '',
         sharePointWebUrl: uploadResult.sharePointWebUrl,
         sharePointFolderPath: uploadResult.folderPath,
+        replacedOriginal: replaceOriginal,
       }, session.profile);
 
       res.status(200).json({
-        id: documentRef.id,
+        id: documentId,
         fileName: uploadResult.fileName,
         sharePointWebUrl: uploadResult.sharePointWebUrl,
         sharePointFolderPath: uploadResult.folderPath,
         templateId: templateId || '',
-        message: 'Document uploaded to SharePoint.',
+        replacedOriginal: replaceOriginal,
+        message: responseMessage,
       });
     } catch (error) {
       console.error('uploadDisciplinaryDocument failed', error);
@@ -3710,10 +3804,12 @@ exports.respondCaseMinutes = peopleCasesApi.respondCaseMinutes;
 exports.createCaseReview = peopleCasesApi.createCaseReview;
 exports.completeCaseReview = peopleCasesApi.completeCaseReview;
 exports.getEmployeeCaseActions = peopleCasesApi.getEmployeeCaseActions;
+exports.signFileNoteDocument = peopleCasesApi.signFileNoteDocument;
 exports.createBumpCardPrompt = peopleCasesApi.createBumpCardPrompt;
 exports.submitBumpCard = peopleCasesApi.submitBumpCard;
 exports.exportPeopleCase = peopleCasesApi.exportPeopleCase;
 exports.clearExpiredWarnings = peopleCasesApi.clearExpiredWarnings;
+exports.deletePeopleCase = peopleCasesApi.deletePeopleCase;
 exports.downloadCaseDocumentTemplate = peopleCasesApi.downloadCaseDocumentTemplate;
 
 // GET → verify SharePoint connectivity and return the resolved folder path for an employee.

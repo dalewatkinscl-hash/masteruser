@@ -24,6 +24,12 @@ function CaseIdRedirect() {
   return <Navigate to={`/dashboard/cases/${caseId}`} replace />;
 }
 
+/** Force remount when switching new ↔ case id (React reuses the same element type otherwise). */
+function DisciplinaryCaseRoute() {
+  const { caseId } = useParams();
+  return <DisciplinaryCase key={caseId || 'new'} />;
+}
+
 export default function App() {
   return (
     <ThemeProvider>
@@ -89,7 +95,7 @@ export default function App() {
                 path="cases/new"
                 element={(
                   <ProtectedRoute requireCasesManager>
-                    <DisciplinaryCase />
+                    <DisciplinaryCaseRoute />
                   </ProtectedRoute>
                 )}
               />
@@ -105,7 +111,7 @@ export default function App() {
                 path="cases/:caseId"
                 element={(
                   <ProtectedRoute requireCasesManager>
-                    <DisciplinaryCase />
+                    <DisciplinaryCaseRoute />
                   </ProtectedRoute>
                 )}
               />

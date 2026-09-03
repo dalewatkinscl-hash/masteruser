@@ -118,8 +118,12 @@ export function ManagerMultiSelect({
   loading = false,
   excludeUids = [],
   disabled = false,
+  minManagers = 0,
   emptyHint = 'Add managers who were present at this meeting',
 }) {
+  const [search, setSearch] = useState('');
+  const [menuOpen, setMenuOpen] = useState(false);
+
   const selectedUids = Array.isArray(value) ? value.filter(Boolean) : [];
   const exclude = new Set([...(excludeUids || []), ...selectedUids]);
 
@@ -127,14 +131,39 @@ export function ManagerMultiSelect({
     .map((uid) => employees.find((employee) => employee.uid === uid) || { uid, fullName: uid })
     .filter(Boolean);
 
+  const suggestions = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    if (!query) return [];
+
+    let list = employees.filter((employee) => employee.isActive !== false && isCasesManagerCandidate(employee));
+    list = list.filter((employee) => !exclude.has(employee.uid));
+    list = list.filter((employee) => {
+      const haystack = [
+        employee.fullName,
+        employee.email,
+        employee.employeeProfile?.department,
+        employee.employeeProfile?.jobRole,
+      ].filter(Boolean).join(' ').toLowerCase();
+      return haystack.includes(query);
+    });
+
+    return list
+      .sort((a, b) => (a.fullName || a.email || '').localeCompare(b.fullName || b.email || ''))
+      .slice(0, 8);
+  }, [employees, exclude, search]);
+
   const addUid = (uid) => {
     if (!uid || selectedUids.includes(uid)) return;
     onChange?.([...selectedUids, uid]);
+    setSearch('');
+    setMenuOpen(false);
   };
 
   const removeUid = (uid) => {
     onChange?.(selectedUids.filter((item) => item !== uid));
   };
+
+  const managersShort = minManagers > 0 && selectedUids.length < minManagers;
 
   return (
     <div className="space-y-2">
@@ -161,16 +190,52 @@ export function ManagerMultiSelect({
       ) : (
         <p className="text-xs text-slate-500">{emptyHint}</p>
       )}
-      <EmployeeSelect
-        value=""
-        onChange={addUid}
-        employees={employees.filter((employee) => !exclude.has(employee.uid))}
-        loading={loading}
-        mode="managers"
-        allowEmpty
-        emptyLabel="Add another manager…"
-        disabled={disabled}
-      />
+
+      <div className="relative">
+        <input
+          type="search"
+          value={search}
+          onChange={(event) => {
+            setSearch(event.target.value);
+            setMenuOpen(true);
+          }}
+          onFocus={() => setMenuOpen(true)}
+          onBlur={() => {
+            window.setTimeout(() => setMenuOpen(false), 150);
+          }}
+          className={inputClass}
+          placeholder={loading ? 'Loading managers…' : 'Type a manager name to search…'}
+          disabled={disabled || loading}
+          autoComplete="off"
+        />
+        {menuOpen && search.trim() && !loading && suggestions.length > 0 && (
+          <ul className="absolute z-20 mt-1 max-h-48 w-full overflow-auto rounded-lg border border-[#1a2540] bg-[#0b1220] shadow-xl py-1">
+            {suggestions.map((employee) => (
+              <li key={employee.uid}>
+                <button
+                  type="button"
+                  className="block w-full px-3 py-2 text-left text-sm text-slate-200 hover:bg-[#060e1a]"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={() => addUid(employee.uid)}
+                >
+                  {labelFor(employee)}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        {menuOpen && search.trim() && !loading && suggestions.length === 0 && (
+          <p className="absolute z-20 mt-1 w-full rounded-lg border border-[#1a2540] bg-[#0b1220] px-3 py-2 text-xs text-amber-300 shadow-xl">
+            No managers match &ldquo;{search.trim()}&rdquo;.
+          </p>
+        )}
+      </div>
+
+      {managersShort && (
+        <p className="text-xs text-amber-300">
+          At least {minManagers} managers must be present ({selectedUids.length} selected).
+        </p>
+      )}
     </div>
   );
 }
