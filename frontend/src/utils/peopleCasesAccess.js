@@ -274,7 +274,7 @@ export const OUTCOME_PRESETS = [
   { id: 'informal_action', label: 'Informal action (recorded)', suggestedExpiryMonths: null },
   { id: 'file_note_for_improvement', label: 'File note for improvement', suggestedExpiryMonths: null },
   { id: 'no_further_action', label: 'No further action', suggestedExpiryMonths: null },
-  { id: 'verbal_warning', label: 'Verbal warning', suggestedExpiryMonths: 6 },
+
   { id: 'written_warning', label: 'Written warning', suggestedExpiryMonths: 6 },
   { id: 'final_written_warning', label: 'Final written warning', suggestedExpiryMonths: 12 },
   { id: 'pip', label: 'Performance improvement plan', suggestedExpiryMonths: null },

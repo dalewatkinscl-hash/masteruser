@@ -487,6 +487,65 @@ function buildHearingInviteHtml({
 </html>`;
 }
 
+function buildOutcomeLetterHtml({
+  employeeName, caseTitle, presetLabel, outcomeDetails,
+  warningEffectiveAt, warningExpiresAt, durationLabel,
+  issuedByName, issuedAtLabel, companyName = 'Country Lion',
+}) {
+  const warningBlock = warningEffectiveAt
+    ? `<p>This ${escapeHtml(presetLabel.toLowerCase())} is effective from <strong>${escapeHtml(warningEffectiveAt)}</strong>${warningExpiresAt ? ` and will remain on your record until <strong>${escapeHtml(warningExpiresAt)}</strong> (${escapeHtml(durationLabel)})` : ''}.</p>`
+    : '';
+  return `<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"/><title>Outcome letter</title>
+<style>@page{size:A4;margin:18mm}body{font-family:"Century Gothic",Calibri,Arial,sans-serif;color:#111;line-height:1.45;margin:0}p{margin:0 0 12px;font-size:11pt}h1{font-size:16pt;margin:0 0 4px}.meta{color:#444;font-size:10pt;margin-bottom:22px}</style>
+</head><body>
+<h1>Outcome of disciplinary hearing</h1>
+<p class="meta">${escapeHtml(companyName)} · ${escapeHtml(issuedAtLabel)}</p>
+<p>Dear ${escapeHtml(employeeName || 'Colleague')},</p>
+<p>Following the disciplinary hearing regarding <strong>${escapeHtml(caseTitle || 'the matter under investigation')}</strong>, I am writing to confirm the outcome.</p>
+<p><strong>Decision:</strong> ${escapeHtml(presetLabel)}</p>
+<p><strong>Reasons for the decision:</strong></p>
+<p>${escapeHtml(outcomeDetails || 'See case notes.').replace(/\n/g, '<br/>')}</p>
+${warningBlock}
+<p>You have the right to appeal this decision. If you wish to appeal, you should do so in writing within five working days of receiving this letter, stating the grounds for your appeal.</p>
+<p>Yours sincerely,<br/>${escapeHtml(issuedByName || 'Management')}</p>
+<p style="font-size:9pt;color:#555;margin-top:28px">This letter is issued in line with the Acas Code of Practice on disciplinary and grievance procedures.</p>
+</body></html>`;
+}
+
+function buildWarningDocumentHtml({
+  employeeName, caseTitle, presetLabel, presetId, outcomeDetails,
+  warningEffectiveAt, warningExpiresAt, durationLabel,
+  issuedByName, issuedAtLabel, companyName = 'Country Lion',
+}) {
+  const isPip = presetId === 'pip';
+  const title = isPip ? 'Performance improvement plan' : presetLabel;
+  const reviewNote = isPip
+    ? '<p>A review meeting will be scheduled to assess progress against the objectives set out in this plan. Failure to demonstrate sufficient improvement may result in further disciplinary action.</p>'
+    : '';
+  return `<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"/><title>${escapeHtml(title)}</title>
+<style>@page{size:A4;margin:18mm}body{font-family:"Century Gothic",Calibri,Arial,sans-serif;color:#111;line-height:1.45;margin:0}p{margin:0 0 12px;font-size:11pt}h1{font-size:16pt;margin:0 0 4px}.meta{color:#444;font-size:10pt;margin-bottom:22px}</style>
+</head><body>
+<h1>${escapeHtml(title)}</h1>
+<p class="meta">${escapeHtml(companyName)} · ${escapeHtml(issuedAtLabel)}</p>
+<p><strong>Employee:</strong> ${escapeHtml(employeeName || '—')}</p>
+<p><strong>Case:</strong> ${escapeHtml(caseTitle || '—')}</p>
+<p><strong>Effective from:</strong> ${escapeHtml(warningEffectiveAt || '—')}</p>
+<p><strong>Expires:</strong> ${escapeHtml(warningExpiresAt || '—')} (${escapeHtml(durationLabel || '—')})</p>
+<p>&nbsp;</p>
+<p><strong>Details:</strong></p>
+<p>${escapeHtml(outcomeDetails || 'See outcome letter.').replace(/\n/g, '<br/>')}</p>
+${reviewNote}
+<p>Any further breach of company standards or failure to improve may result in further disciplinary action up to and including dismissal.</p>
+<p>&nbsp;</p>
+<p>Issued by: ${escapeHtml(issuedByName || 'Management')}</p>
+<p>Date: ${escapeHtml(issuedAtLabel)}</p>
+<p>&nbsp;</p>
+<p>Employee signature: ____________________________&nbsp;&nbsp;&nbsp;Date: ____________</p>
+</body></html>`;
+}
+
 function serializeTimestamp(value) {
   if (!value) return null;
   if (typeof value.toDate === 'function') return value.toDate().toISOString();
@@ -536,6 +595,8 @@ module.exports = {
   addWorkingDays,
   countWorkingDaysNotice,
   buildHearingInviteHtml,
+  buildOutcomeLetterHtml,
+  buildWarningDocumentHtml,
   serializeCase,
   serializeTimestamp,
 };

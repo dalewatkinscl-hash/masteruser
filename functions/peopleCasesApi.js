@@ -17,6 +17,8 @@ const {
   addWorkingDays,
   countWorkingDaysNotice,
   buildHearingInviteHtml,
+  buildOutcomeLetterHtml,
+  buildWarningDocumentHtml,
   serializeCase,
   serializeTimestamp,
   CASES_PORTAL,
@@ -896,16 +898,22 @@ function createPeopleCasesApi({
             return;
           }
           const noticeDays = countWorkingDaysNotice(today, hearingScheduledAt);
-          const recommendedDays = 5;
-          if (noticeDays < recommendedDays && !body.acknowledgeShortNotice) {
+          const minimumDays = 1; // Country Lion policy: minimum 24 working hours
+          if (noticeDays < minimumDays && !body.acknowledgeShortNotice) {
             res.status(400).json({
-              error: `Acas expects reasonable notice. Recommended gap is about ${recommendedDays} working days (this date gives ${noticeDays}). Confirm to proceed with shorter notice.`,
+              error: `Country Lion policy requires a minimum of 24 working hours' notice (this date gives ${noticeDays} working day(s)). Confirm to proceed with shorter notice.`,
               code: 'short_notice',
               noticeWorkingDays: noticeDays,
-              recommendedWorkingDays: recommendedDays,
-              suggestedDate: addWorkingDays(new Date(), recommendedDays),
+              recommendedWorkingDays: minimumDays,
             });
             return;
+          }
+
+          // Apply suspension if specified
+          if (body.precautionarySuspension) {
+            patch.suspensionActive = true;
+            patch.precautionarySuspension = true;
+            patch.suspensionReason = toTrimmedString(body.suspensionReason) || 'Suspended pending disciplinary hearing';
           }
 
           const hearingManagerUid = toTrimmedString(patch.hearingManagerUid || existing.hearingManagerUid);
@@ -921,9 +929,9 @@ function createPeopleCasesApi({
             issuedByName: session.profile.fullName || session.profile.email || 'Management',
             issuedAtLabel: new Date().toLocaleDateString('en-GB'),
             extraNotes: hearingInviteNotes,
-            suspensionActive: Boolean(existing.suspensionActive),
-            precautionarySuspension: Boolean(existing.precautionarySuspension || existing.suspensionActive),
-            suspensionReason: existing.suspensionReason || '',
+            suspensionActive: Boolean(body.precautionarySuspension || existing.suspensionActive),
+            precautionarySuspension: Boolean(body.precautionarySuspension || existing.precautionarySuspension || existing.suspensionActive),
+            suspensionReason: toTrimmedString(body.suspensionReason) || existing.suspensionReason || '',
           });
           const fileName = `Hearing invite - ${hearingScheduledAt}.html`;
           const now = admin.firestore.FieldValue.serverTimestamp();
@@ -1031,16 +1039,87 @@ function createPeopleCasesApi({
           patch.outcomePreset = preset.id;
           patch.outcomePackSteps = buildOutcomePackSteps(preset.id);
           patch.decisionMakerUid = session.profile.uid;
-          if (preset.warning && !body.warningExpiresAt && preset.suggestedExpiryMonths) {
+          if (body.outcomeDetails) patch.outcomeDetails = toTrimmedString(body.outcomeDetails);
+          if (body.warningDurationMonths) patch.warningDurationMonths = Number(body.warningDurationMonths);
+          if (body.warningEffectiveAt) patch.warningEffectiveAt = body.warningEffectiveAt;
+          if (body.warningExpiresAt) patch.warningExpiresAt = body.warningExpiresAt;
+          if (!body.warningExpiresAt && body.warningEffectiveAt && body.warningDurationMonths) {
+            const expires = new Date(body.warningEffectiveAt);
+            expires.setMonth(expires.getMonth() + Number(body.warningDurationMonths));
+            patch.warningExpiresAt = expires.toISOString().slice(0, 10);
+          } else if (preset.warning && !body.warningExpiresAt && preset.suggestedExpiryMonths) {
             const effective = toTrimmedString(body.warningEffectiveAt) || new Date().toISOString().slice(0, 10);
             const expires = new Date(effective);
             expires.setMonth(expires.getMonth() + preset.suggestedExpiryMonths);
             patch.warningEffectiveAt = effective;
             patch.warningExpiresAt = expires.toISOString().slice(0, 10);
           }
-          if (body.warningEffectiveAt) patch.warningEffectiveAt = body.warningEffectiveAt;
-          if (body.warningExpiresAt) patch.warningExpiresAt = body.warningExpiresAt;
           events.push(['outcome_selected', { outcomePreset: preset.id }]);
+
+          // Generate outcome letter document
+          const outcomeDetails = toTrimmedString(body.outcomeDetails) || '';
+          const employeeName = existing.employeeNameSnapshot || '';
+          const durationLabel = body.warningDurationMonths ? `${body.warningDurationMonths} months` : '';
+          const todayLabel = new Date().toLocaleDateString('en-GB');
+          const outcomeLetterHtml = buildOutcomeLetterHtml({
+            employeeName,
+            caseTitle: existing.title || '',
+            presetLabel: preset.label,
+            outcomeDetails,
+            warningEffectiveAt: patch.warningEffectiveAt || '',
+            warningExpiresAt: patch.warningExpiresAt || '',
+            durationLabel,
+            issuedByName: session.profile.fullName || 'Management',
+            issuedAtLabel: todayLabel,
+          });
+          const outcomeNow = admin.firestore.FieldValue.serverTimestamp();
+          await db.collection('disciplinary_documents').add({
+            caseId,
+            employeeUid: existing.employeeUid,
+            documentType: 'outcome',
+            templateId: 'outcome_letter',
+            fileName: `Outcome letter - ${new Date().toISOString().slice(0, 10)}.html`,
+            fileFormat: 'html',
+            mimeType: 'text/html',
+            storageProvider: 'portal',
+            portalHtml: outcomeLetterHtml,
+            uploadedByUid: session.profile.uid,
+            source: 'outcome_selection',
+            createdAt: outcomeNow,
+            updatedAt: outcomeNow,
+          });
+
+          // Generate warning/PIP document if applicable
+          if (['written_warning', 'final_written_warning', 'pip'].includes(preset.id)) {
+            const warningHtml = buildWarningDocumentHtml({
+              employeeName,
+              caseTitle: existing.title || '',
+              presetLabel: preset.label,
+              presetId: preset.id,
+              outcomeDetails,
+              warningEffectiveAt: patch.warningEffectiveAt || '',
+              warningExpiresAt: patch.warningExpiresAt || '',
+              durationLabel,
+              issuedByName: session.profile.fullName || 'Management',
+              issuedAtLabel: todayLabel,
+            });
+            const docTypeName = preset.id === 'pip' ? 'PIP' : preset.label;
+            await db.collection('disciplinary_documents').add({
+              caseId,
+              employeeUid: existing.employeeUid,
+              documentType: 'warning',
+              templateId: `${preset.id}_document`,
+              fileName: `${docTypeName} - ${new Date().toISOString().slice(0, 10)}.html`,
+              fileFormat: 'html',
+              mimeType: 'text/html',
+              storageProvider: 'portal',
+              portalHtml: warningHtml,
+              uploadedByUid: session.profile.uid,
+              source: 'outcome_selection',
+              createdAt: outcomeNow,
+              updatedAt: outcomeNow,
+            });
+          }
         }
 
         if (body.completePackStepId) {

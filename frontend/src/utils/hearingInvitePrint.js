@@ -31,10 +31,14 @@ export function buildHearingInviteHtml({
   issuedAtLabel,
   extraNotes,
   companyName = 'Country Lion',
+  suspensionActive = false,
+  precautionarySuspension = false,
+  suspensionReason = '',
 }) {
   const when = formatHearingWhenLabel(hearingScheduledAt, hearingScheduledTime);
   const location = String(hearingLocation || '').trim() || 'To be confirmed';
   const notes = String(extraNotes || '').trim();
+  const showSuspension = Boolean(suspensionActive || precautionarySuspension);
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -71,6 +75,7 @@ export function buildHearingInviteHtml({
   <p><strong>Summary of the concern</strong></p>
   <p>${escapeHtml(caseSummary || 'See case file / evidence pack for full details.').replace(/\n/g, '<br/>')}</p>
   ${notes ? `<p><strong>Further details</strong></p><p>${escapeHtml(notes).replace(/\n/g, '<br/>')}</p>` : ''}
+  ${showSuspension ? `<p>You should be aware that due to the nature of the concerns raised${suspensionReason ? ` (${escapeHtml(suspensionReason)})` : ''}, you will be suspended on full pay pending the outcome of the disciplinary hearing.</p>` : ''}
   <p><strong>Your rights</strong></p>
   <ul>
     <li>You have the right to be accompanied by a work colleague or trade union representative.</li>

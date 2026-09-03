@@ -129,11 +129,14 @@ export default function DisciplinaryCase() {
   const [acknowledgeSameInvestigator, setAcknowledgeSameInvestigator] = useState(false);
   const [acknowledgeSameAppealOwner, setAcknowledgeSameAppealOwner] = useState(false);
   const [acknowledgeShortNotice, setAcknowledgeShortNotice] = useState(false);
+  const [outcomeModal, setOutcomeModal] = useState(null);
   const [hearingForm, setHearingForm] = useState({
     hearingScheduledAt: '',
     hearingScheduledTime: '10:00',
     hearingLocation: '',
     hearingInviteNotes: '',
+    suspensionPending: false,
+    suspensionReason: '',
   });
   const [employees, setEmployees] = useState([]);
   const [employeesLoading, setEmployeesLoading] = useState(false);
@@ -191,7 +194,7 @@ export default function DisciplinaryCase() {
   }, [caseData?.hearingManagerUid, employees]);
 
   const todayIso = new Date().toISOString().slice(0, 10);
-  const suggestedHearingDate = addWorkingDaysIso(new Date(), RECOMMENDED_HEARING_NOTICE_WORKING_DAYS);
+  // Country Lion policy: minimum 24 working hours (approx 1 working day)
   const hearingNoticeDays = hearingForm.hearingScheduledAt
     ? countWorkingDaysNotice(todayIso, hearingForm.hearingScheduledAt)
     : null;
@@ -221,6 +224,8 @@ export default function DisciplinaryCase() {
         hearingScheduledTime: data.case.hearingScheduledTime || prev.hearingScheduledTime || '10:00',
         hearingLocation: data.case.hearingLocation || prev.hearingLocation || '',
         hearingInviteNotes: data.case.hearingInviteNotes || prev.hearingInviteNotes || '',
+        suspensionPending: data.case.suspensionActive ?? data.case.precautionarySuspension ?? prev.suspensionPending ?? false,
+        suspensionReason: data.case.suspensionReason || prev.suspensionReason || '',
       }));
     }
   };
@@ -634,20 +639,42 @@ export default function DisciplinaryCase() {
     }
   };
 
-  const selectOutcome = async (presetId) => {
+  const DURATION_OPTIONS = [
+    { months: 6, label: '6 months', guidance: 'Acas: appropriate for first written warnings or less serious matters.' },
+    { months: 12, label: '12 months', guidance: 'Acas: appropriate for final written warnings or more serious/repeated concerns.' },
+  ];
+
+  const needsDuration = (presetId) => ['written_warning', 'final_written_warning', 'pip'].includes(presetId);
+
+  const openOutcomeModal = (presetId) => {
     const preset = OUTCOME_PRESETS.find((item) => item.id === presetId);
+    setOutcomeModal({
+      presetId,
+      presetLabel: preset?.label || presetId,
+      outcomeDetails: '',
+      durationMonths: preset?.suggestedExpiryMonths || (needsDuration(presetId) ? 6 : null),
+    });
+  };
+
+  const confirmOutcome = async () => {
+    if (!outcomeModal) return;
+    const { presetId, outcomeDetails, durationMonths } = outcomeModal;
     const today = new Date().toISOString().slice(0, 10);
     const body = {
       outcomePreset: presetId,
-      acknowledgeSameInvestigatorHearer: acknowledgeSameInvestigator,
+      outcomeDetails,
       stage: 'outcome_pack',
     };
-    if (preset?.suggestedExpiryMonths) {
+    if (durationMonths) {
       body.warningEffectiveAt = today;
-      body.warningExpiresAt = addMonthsIso(today, preset.suggestedExpiryMonths);
+      body.warningExpiresAt = addMonthsIso(today, durationMonths);
+      body.warningDurationMonths = durationMonths;
     }
     await apiUpdate(body);
+    setOutcomeModal(null);
   };
+
+  const selectOutcome = (presetId) => openOutcomeModal(presetId);
 
   const closeWithNotes = async () => {
     const result = await apiUpdate({
@@ -851,6 +878,9 @@ export default function DisciplinaryCase() {
     issuedByName: 'Management',
     issuedAtLabel: new Date().toLocaleDateString('en-GB'),
     extraNotes: hearingForm.hearingInviteNotes,
+    suspensionActive: hearingForm.suspensionPending,
+    precautionarySuspension: hearingForm.suspensionPending,
+    suspensionReason: hearingForm.suspensionReason || '',
   });
 
   const handlePrintInvite = async () => {
@@ -871,13 +901,15 @@ export default function DisciplinaryCase() {
       return;
     }
     if (hearingNoticeShort && !acknowledgeShortNotice) {
-      setError(`This date gives only ${hearingNoticeDays} working day(s)’ notice. Acas recommends reasonable notice (around ${RECOMMENDED_HEARING_NOTICE_WORKING_DAYS} working days). Tick the short-notice acknowledgement to continue.`);
+      setError(`This date gives only ${hearingNoticeDays} working day(s)’ notice. Country Lion policy requires a minimum of 24 working hours. Tick the short-notice acknowledgement to continue.`);
       return;
     }
     const result = await apiUpdate({
       issueHearingInvite: true,
       ...hearingForm,
       acknowledgeShortNotice,
+      precautionarySuspension: hearingForm.suspensionPending,
+      suspensionReason: hearingForm.suspensionReason || '',
     });
     if (result?.ok) {
       setAcknowledgeShortNotice(false);
@@ -1136,34 +1168,47 @@ export default function DisciplinaryCase() {
               emptyLabel="Select hearing manager"
             />
           </Field>
-          {caseData?.investigatorUid
-            && caseData?.hearingManagerUid
-            && caseData.investigatorUid === caseData.hearingManagerUid && (
-            <label className="flex items-start gap-2 text-sm text-amber-200">
-              <input
-                type="checkbox"
-                checked={acknowledgeSameInvestigator}
-                onChange={(e) => setAcknowledgeSameInvestigator(e.target.checked)}
-              />
-              Same person investigating and hearing (Acas: where practicable use different people). I acknowledge.
-            </label>
-          )}
-
           <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 p-4 space-y-2">
-            <p className="text-sm font-medium text-amber-100">Acas notice guidance</p>
+            <p className="text-sm font-medium text-amber-100">Country Lion notice policy</p>
             <p className="text-sm text-amber-50/90">
-              Acas does not set a fixed number of days. Notice must be reasonable so the employee can prepare and arrange a companion.
-              A common practice is about <strong>{RECOMMENDED_HEARING_NOTICE_WORKING_DAYS} working days</strong>.
+              Country Lion policy is to give a minimum of <strong>24 working hours</strong> notice so the employee can prepare and arrange a companion.
             </p>
-            <button
-              type="button"
-              className={btnSecondary}
-              disabled={saving}
-              onClick={() => setHearingForm((prev) => ({ ...prev, hearingScheduledAt: suggestedHearingDate }))}
-            >
-              Use suggested date ({suggestedHearingDate})
-            </button>
           </div>
+
+          <Field label="Is the employee to be suspended pending the hearing?">
+            <div className="flex gap-4">
+              <label className="flex items-center gap-2 text-sm text-slate-300">
+                <input
+                  type="radio"
+                  name="suspensionPending"
+                  checked={hearingForm.suspensionPending === true}
+                  onChange={() => setHearingForm((prev) => ({ ...prev, suspensionPending: true }))}
+                />
+                Yes — suspend on full pay
+              </label>
+              <label className="flex items-center gap-2 text-sm text-slate-300">
+                <input
+                  type="radio"
+                  name="suspensionPending"
+                  checked={hearingForm.suspensionPending === false}
+                  onChange={() => setHearingForm((prev) => ({ ...prev, suspensionPending: false }))}
+                />
+                No
+              </label>
+            </div>
+          </Field>
+
+          {hearingForm.suspensionPending && (
+            <Field label="Reason for suspension (optional)">
+              <textarea
+                rows={2}
+                className={inputClass}
+                placeholder="e.g. Nature of allegation requires separation from workplace"
+                value={hearingForm.suspensionReason || ''}
+                onChange={(e) => setHearingForm((prev) => ({ ...prev, suspensionReason: e.target.value }))}
+              />
+            </Field>
+          )}
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <Field label="Hearing date">
@@ -1196,9 +1241,9 @@ export default function DisciplinaryCase() {
           {hearingForm.hearingScheduledAt && (
             <p className={`text-sm ${hearingNoticeVeryShort ? 'text-red-300' : hearingNoticeShort ? 'text-amber-200' : 'text-emerald-300'}`}>
               Notice from today: {hearingNoticeDays} working day{hearingNoticeDays === 1 ? '' : 's'}
-              {hearingNoticeShort
-                ? ` — shorter than the usual ${RECOMMENDED_HEARING_NOTICE_WORKING_DAYS}-day practice.`
-                : ' — within usual reasonable notice.'}
+              {hearingNoticeVeryShort
+                ? ' — less than 24 working hours. Country Lion policy requires a minimum of 24 working hours.'
+                : ' — meets minimum notice requirement.'}
             </p>
           )}
 
@@ -2005,6 +2050,59 @@ export default function DisciplinaryCase() {
           </div>
         )}
       </div>
+
+      {outcomeModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+          <div className="bg-[#0b1220] border border-[#1a2540] rounded-xl p-6 w-full max-w-lg space-y-4 shadow-xl">
+            <h3 className="text-white font-semibold text-lg">Outcome — {outcomeModal.presetLabel}</h3>
+
+            <Field label="Outcome details / reasons">
+              <textarea
+                rows={4}
+                className={inputClass}
+                placeholder="Summarise the outcome and the reasons for this decision…"
+                value={outcomeModal.outcomeDetails}
+                onChange={(e) => setOutcomeModal((prev) => ({ ...prev, outcomeDetails: e.target.value }))}
+              />
+            </Field>
+
+            {needsDuration(outcomeModal.presetId) && (
+              <div className="space-y-3">
+                <p className="text-sm font-medium text-slate-200">Warning / PIP duration</p>
+                {DURATION_OPTIONS.map((opt) => (
+                  <label key={opt.months} className="flex items-start gap-3 rounded-lg border border-[#1a2540] p-3 cursor-pointer hover:bg-[#060e1a]">
+                    <input
+                      type="radio"
+                      name="durationMonths"
+                      checked={outcomeModal.durationMonths === opt.months}
+                      onChange={() => setOutcomeModal((prev) => ({ ...prev, durationMonths: opt.months }))}
+                      className="mt-0.5"
+                    />
+                    <div>
+                      <span className="text-sm text-white font-medium">{opt.label}</span>
+                      <p className="text-xs text-slate-400 mt-0.5">{opt.guidance}</p>
+                    </div>
+                  </label>
+                ))}
+              </div>
+            )}
+
+            <div className="flex gap-3 pt-2">
+              <button
+                type="button"
+                className={btnPrimary}
+                disabled={saving || !outcomeModal.outcomeDetails.trim()}
+                onClick={confirmOutcome}
+              >
+                Confirm outcome
+              </button>
+              <button type="button" className={btnSecondary} onClick={() => setOutcomeModal(null)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
