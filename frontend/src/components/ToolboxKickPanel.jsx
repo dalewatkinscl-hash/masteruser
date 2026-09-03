@@ -35,6 +35,17 @@ const INTRO_STORAGE_KEY = 'toolbox-kick-intro-seen-v4';
 const MAX_ATTEMPTS = 3;
 /** World X where rare smoker drivers can appear (12 km of flight). */
 const SMOKER_FROM_X = BOX_REST_X + 12 * 1000 * PX_PER_METRE;
+/** Even rarer Macan — starts a bit further out than the smoker. */
+const MACAN_FROM_X = BOX_REST_X + 18 * 1000 * PX_PER_METRE;
+/** Ultra-rare Little Dick cameo — further still. */
+const LITTLE_DICK_FROM_X = BOX_REST_X + 25 * 1000 * PX_PER_METRE;
+/** Sea-level-ish: mph ÷ this ≈ Mach. */
+const MPH_PER_MACH = 767.269;
+const MACH_DISPLAY_FROM_MPH = 250;
+/** How far the camera can pull out at top speed. */
+const MIN_ZOOM = 0.42;
+/** Oil spill coating, birds, Julies Car and the Little Dick cameo — live everywhere. */
+export const TOOLBOX_NEW_PROPS_LIVE = true;
 
 /**
  * Real-ish road distances south from Northampton (game km = real km).
@@ -65,12 +76,16 @@ export const DEFAULT_TUNING = {
   sackBoost: 1.28,
   groundDrag: 0.98,
   friction: 0.9975,
+  /** After oil coating — slides much further on the ground. */
+  oilGroundDrag: 0.994,
+  oilFriction: 0.9994,
   bounceDamp: 0.82,
   gravity: 0.2,
   airDrag: 0.9994,
   stopSpeed: 0.08,
   coachSlow: 0.84,
   coachDrag: 0.985,
+  birdSlow: 0.93,
 };
 
 /** Bar oscillation speeds by play mode. */
@@ -107,32 +122,300 @@ function markIntroSeen() {
 /**
  * Metres under 1000; kilometres from 1000+.
  * Extra ! per full km after the first (capped at 5). From 10 km the UI pulses.
+ * Negative distances (Little Dick boot-back) keep the minus sign.
  */
 function formatDistanceParts(metres) {
-  const m = Math.max(0, Math.floor(Number(metres) || 0));
+  const raw = Math.floor(Number(metres) || 0);
+  const neg = raw < 0;
+  const m = Math.abs(raw);
+  const sign = neg ? '−' : '';
   if (m < 1000) {
     return {
-      label: `${m.toLocaleString('en-GB')} m`,
+      label: `${sign}${m.toLocaleString('en-GB')} m`,
       bangs: '',
       pulse: false,
       kmWhole: 0,
+      negative: neg,
     };
   }
   const km = m / 1000;
   const kmWhole = Math.floor(km);
-  const label = `${km.toFixed(1)} km`;
-  const bangs = '!'.repeat(Math.min(5, Math.max(0, kmWhole - 1)));
+  const label = `${sign}${km.toFixed(1)} km`;
+  const bangs = neg ? '' : '!'.repeat(Math.min(5, Math.max(0, kmWhole - 1)));
   return {
     label,
     bangs,
-    pulse: m >= 10000,
+    pulse: !neg && m >= 10000,
     kmWhole,
+    negative: neg,
   };
 }
 
 function formatDistance(metres) {
   const { label, bangs } = formatDistanceParts(metres);
   return `${label}${bangs}`;
+}
+
+const HIT_TALLY_ORDER = [
+  'coach',
+  'sack',
+  'cone',
+  'drum',
+  'bird',
+  'smoker',
+  'macan',
+  'littleDick',
+  'oilSpill',
+];
+
+const HIT_TALLY_LABELS = {
+  coach: 'Coach',
+  sack: 'Sack',
+  cone: 'Cone',
+  drum: 'Drum',
+  bird: 'Bird',
+  smoker: 'Smoker',
+  macan: 'Julies Car',
+  littleDick: 'Little Dick',
+  oilSpill: 'Oil',
+};
+
+function bumpHitTally(st, type) {
+  if (!st.hitTally) st.hitTally = {};
+  st.hitTally[type] = (st.hitTally[type] || 0) + 1;
+}
+
+/**
+ * Arcade mph from toolbox velocity.
+ * Tuned so a full-power launch (~45 px/frame) reads ~95 mph.
+ */
+function speedMphFromBox(box) {
+  if (!box) return 0;
+  const pxPerFrame = Math.hypot(Number(box.vx) || 0, Number(box.vy) || 0);
+  return Math.max(0, Math.round(pxPerFrame * 2.1));
+}
+
+/** Above 250 mph → Mach readout. */
+function formatSpeedReadout(mph) {
+  const n = Math.max(0, Number(mph) || 0);
+  if (n > MACH_DISPLAY_FROM_MPH) {
+    const mach = n / MPH_PER_MACH;
+    return {
+      primary: mach.toFixed(2),
+      unit: 'Mach',
+      label: `Mach ${mach.toFixed(2)}`,
+      mach: true,
+    };
+  }
+  return {
+    primary: String(Math.round(n)),
+    unit: 'mph',
+    label: `${Math.round(n)} mph`,
+    mach: false,
+  };
+}
+
+/** Height above ground (game metres). */
+function altitudeMetresFromBox(box) {
+  if (!box) return 0;
+  const groundY = GROUND_Y - 10;
+  return Math.max(0, (groundY - box.y) / PX_PER_METRE);
+}
+
+/** Altitude readout — m below 1000, km from 1000+. */
+function formatAltitudeReadout(metres) {
+  const m = Math.max(0, Math.floor(Number(metres) || 0));
+  if (m < 1000) {
+    return {
+      primary: m.toLocaleString('en-GB'),
+      unit: 'm',
+      label: `${m.toLocaleString('en-GB')} m`,
+    };
+  }
+  const km = (m / 1000).toFixed(1);
+  return {
+    primary: km,
+    unit: 'km',
+    label: `${km} km`,
+  };
+}
+
+/** Distance value + unit for the centre stat (no bangs). */
+function formatDistanceStat(metres) {
+  const raw = Math.floor(Number(metres) || 0);
+  const neg = raw < 0;
+  const m = Math.abs(raw);
+  const sign = neg ? '−' : '';
+  if (m < 1000) {
+    return {
+      primary: `${sign}${m.toLocaleString('en-GB')}`,
+      unit: 'm',
+      negative: neg,
+    };
+  }
+  return {
+    primary: `${sign}${(m / 1000).toFixed(1)}`,
+    unit: 'km',
+    negative: neg,
+  };
+}
+
+const STAT_PANEL_H = 68;
+const STAT_BAR_H = STAT_PANEL_H + 12;
+const STAT_GAP = 10;
+
+/** Floating RPG damage-number stat — no panel, just glowing text. */
+function drawRpgStatPanel(ctx, x, y, w, h, opts) {
+  const {
+    title,
+    value,
+    unit,
+    color,
+    glow,
+    gold = false,
+    frame = 0,
+    pulse = false,
+  } = opts;
+
+  ctx.save();
+  const cx = x + w / 2;
+  const valY = y + 34;
+  const scale = pulse ? 1 + 0.05 * Math.sin(frame * 0.2) : 1;
+  ctx.translate(cx, valY);
+  ctx.scale(scale, scale);
+  ctx.translate(-cx, -valY);
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  ctx.fillStyle = gold ? 'rgba(253,230,138,0.85)' : 'rgba(226,232,240,0.7)';
+  ctx.font = '800 11px system-ui, Segoe UI, sans-serif';
+  ctx.shadowColor = 'rgba(11,18,32,0.85)';
+  ctx.shadowBlur = 4;
+  ctx.fillText(title.toUpperCase(), cx, y + 12);
+
+  ctx.font = '900 40px system-ui, Segoe UI, sans-serif';
+  ctx.lineWidth = 5;
+  ctx.strokeStyle = 'rgba(11,18,32,0.8)';
+  ctx.shadowBlur = 0;
+  ctx.strokeText(value, cx, valY);
+  ctx.shadowColor = glow;
+  ctx.shadowBlur = gold ? 20 : 12;
+  ctx.fillStyle = color;
+  ctx.fillText(value, cx, valY);
+  ctx.shadowBlur = 0;
+
+  const valueW = ctx.measureText(value).width;
+  ctx.font = '900 15px system-ui, Segoe UI, sans-serif';
+  ctx.textAlign = 'left';
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = 'rgba(11,18,32,0.8)';
+  ctx.strokeText(unit.toUpperCase(), cx + valueW / 2 + 5, valY + 9);
+  ctx.fillStyle = gold ? '#fde68a' : '#e2e8f0';
+  ctx.shadowColor = glow;
+  ctx.shadowBlur = gold ? 12 : 6;
+  ctx.fillText(unit.toUpperCase(), cx + valueW / 2 + 5, valY + 9);
+  ctx.restore();
+}
+
+function drawTopStatsBar(ctx, st) {
+  const box = st.box || {};
+  const mph = speedMphFromBox(box);
+  const speed = formatSpeedReadout(mph);
+  const distStat = formatDistanceStat(st.distance || 0);
+  const alt = formatAltitudeReadout(altitudeMetresFromBox(box));
+  const panelW = (W - STAT_GAP * 4) / 3;
+  const y = 6;
+  const distM = Math.floor(st.distance || 0);
+
+  const speedGold = speed.mach || mph >= 200;
+  const speedColor = speed.mach ? '#f472b6' : mph >= 200 ? '#fbbf24' : '#ffffff';
+  const speedGlow = speed.mach ? '#ec4899' : mph >= 200 ? '#f59e0b' : '#64748b';
+
+  const distGold = !distStat.negative && distM >= 10000;
+  const distColor = distStat.negative ? '#f87171' : distGold ? '#fbbf24' : '#ffffff';
+  const distGlow = distStat.negative ? '#ef4444' : distGold ? '#f59e0b' : '#94a3b8';
+
+  const altM = Math.floor(altitudeMetresFromBox(box));
+  const altGold = altM >= 500;
+  const altColor = altGold ? '#fde68a' : '#bae6fd';
+  const altGlow = altGold ? '#eab308' : '#0ea5e9';
+
+  drawRpgStatPanel(ctx, STAT_GAP, y, panelW, STAT_PANEL_H, {
+    title: 'Speed',
+    value: speed.primary,
+    unit: speed.unit,
+    color: speedColor,
+    glow: speedGlow,
+    gold: speedGold,
+    frame: st.frame,
+    pulse: speedGold,
+  });
+  drawRpgStatPanel(ctx, STAT_GAP * 2 + panelW, y, panelW, STAT_PANEL_H, {
+    title: 'Distance',
+    value: distStat.primary,
+    unit: distStat.unit,
+    color: distColor,
+    glow: distGlow,
+    gold: distGold,
+    frame: st.frame,
+    pulse: distGold || distStat.negative,
+  });
+  drawRpgStatPanel(ctx, STAT_GAP * 3 + panelW * 2, y, panelW, STAT_PANEL_H, {
+    title: 'Altitude',
+    value: alt.primary,
+    unit: alt.unit,
+    color: altColor,
+    glow: altGlow,
+    gold: altGold,
+    frame: st.frame,
+    pulse: altGold,
+  });
+}
+
+function drawHitTally(ctx, st) {
+  const tally = st.hitTally || {};
+  const rows = HIT_TALLY_ORDER
+    .filter((k) => (tally[k] || 0) > 0)
+    .map((k) => `${HIT_TALLY_LABELS[k]} ×${tally[k]}`);
+  const lineH = 18;
+  const x = W - 14;
+  const startY = H - 14 - Math.max(1, rows.length) * lineH;
+
+  ctx.save();
+  ctx.textAlign = 'right';
+  ctx.textBaseline = 'top';
+
+  ctx.font = '800 11px system-ui, Segoe UI, sans-serif';
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = 'rgba(11,18,32,0.8)';
+  ctx.strokeText('HIT', x, startY - 16);
+  ctx.fillStyle = 'rgba(253,230,138,0.85)';
+  ctx.fillText('HIT', x, startY - 16);
+
+  if (rows.length) {
+    ctx.font = '900 17px system-ui, Segoe UI, sans-serif';
+    rows.forEach((line, i) => {
+      const ly = startY + i * lineH;
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = 'rgba(11,18,32,0.8)';
+      ctx.shadowBlur = 0;
+      ctx.strokeText(line, x, ly);
+      ctx.fillStyle = '#fbbf24';
+      ctx.shadowColor = '#f59e0b';
+      ctx.shadowBlur = 10;
+      ctx.fillText(line, x, ly);
+      ctx.shadowBlur = 0;
+    });
+  } else {
+    ctx.font = '800 14px system-ui, Segoe UI, sans-serif';
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(11,18,32,0.8)';
+    ctx.strokeText('none yet', x, startY);
+    ctx.fillStyle = 'rgba(148,163,184,0.9)';
+    ctx.fillText('none yet', x, startY);
+  }
+  ctx.restore();
 }
 
 function clamp(n, lo, hi) {
@@ -148,15 +431,37 @@ function makeRng(seed) {
 }
 
 /** Append randomised props from `fromX` up to `toX`. Returns new cursor x. */
-function appendProps(items, fromX, toX, next) {
+function appendProps(items, fromX, toX, next, features = {}) {
+  const newProps = Boolean(features.newProps);
+  const skipRare = Boolean(features.skipRare);
   let x = Math.max(fromX, 0);
   while (x < toX) {
     if (next() < 0.2) {
       x += 140 + next() * 480;
       continue;
     }
+    // Ultra-rare Little Dick — rarer than Macan, from 25 km
+    if (!skipRare && newProps && x >= LITTLE_DICK_FROM_X && next() < 0.0015) {
+      items.push({
+        type: 'littleDick',
+        x,
+        id: `littledick-${items.length}-${x | 0}`,
+      });
+      x += 600 + next() * 1000;
+      continue;
+    }
+    // Ultra-rare black Macan — rarer than smoker, from 18 km
+    if (!skipRare && newProps && x >= MACAN_FROM_X && next() < 0.004) {
+      items.push({
+        type: 'macan',
+        x,
+        id: `macan-${items.length}-${x | 0}`,
+      });
+      x += 520 + next() * 900;
+      continue;
+    }
     // Very rare smoker break from 12 km onward — enormous bounce if you hit them
-    if (x >= SMOKER_FROM_X && next() < 0.012) {
+    if (!skipRare && x >= SMOKER_FROM_X && next() < 0.012) {
       items.push({
         type: 'smoker',
         x,
@@ -166,7 +471,17 @@ function appendProps(items, fromX, toX, next) {
       continue;
     }
     const roll = next();
-    if (roll < 0.28) {
+    if (newProps && roll < 0.1) {
+      // Airborne birds — small speed tax if hit
+      items.push({
+        type: 'bird',
+        x,
+        y: GROUND_Y - (55 + next() * 110),
+        dir: next() > 0.5 ? 1 : -1,
+        id: `bird-${items.length}-${x | 0}`,
+      });
+      x += 90 + next() * 180;
+    } else if (roll < 0.28) {
       items.push({
         type: 'coach',
         x,
@@ -187,7 +502,12 @@ function appendProps(items, fromX, toX, next) {
       items.push({ type: 'cone', x, id: `cone-${items.length}-${x | 0}` });
       x += 50 + next() * 110;
     } else if (roll < 0.88) {
-      items.push({ type: 'drum', x, id: `drum-${items.length}-${x | 0}` });
+      items.push({
+        type: 'drum',
+        x,
+        spilled: false,
+        id: `drum-${items.length}-${x | 0}`,
+      });
       x += 60 + next() * 130;
     } else {
       items.push({
@@ -211,13 +531,63 @@ function appendProps(items, fromX, toX, next) {
 function ensurePropsAhead(st, lookAheadX) {
   while (st.propCursor < lookAheadX) {
     const target = st.propCursor + CHUNK_SIZE;
-    st.propCursor = appendProps(st.items, st.propCursor, target, st.rng);
+    st.propCursor = appendProps(st.items, st.propCursor, target, st.rng, {
+      newProps: st.newProps,
+    });
   }
-  // Drop far-behind props so the list stays lean on mega flights
-  const cullBefore = st.camX - 800;
-  if (st.items.length > 80 && st.items[0].x < cullBefore) {
-    st.items = st.items.filter((it) => it.x >= cullBefore);
+}
+
+/** Fill regular obstacles on the leg back toward the kick-off (after Little Dick boot). */
+function ensureReturnPathProps(st, boxX) {
+  const fromX = Math.max(BOX_REST_X + 280, boxX - AHEAD_BUFFER);
+  const toX = boxX + 240;
+  let cursor = fromX;
+  while (cursor < toX) {
+    const hasProp = st.items.some((it) => it.x >= cursor && it.x < cursor + 160);
+    if (!hasProp) {
+      appendProps(st.items, cursor, cursor + 900, st.rng, {
+        newProps: st.newProps,
+        skipRare: true,
+      });
+    }
+    cursor += 480;
   }
+  st.items.sort((a, b) => a.x - b.x);
+}
+
+function cullDistantProps(st, box) {
+  const vx = box?.vx || 0;
+  const x = box?.x || 0;
+  const keepMin = vx < -0.5
+    ? Math.max(BOX_REST_X - 160, x - AHEAD_BUFFER)
+    : st.camX - 800;
+  const keepMax = x + AHEAD_BUFFER + 600;
+  if (st.items.length > 100) {
+    st.items = st.items.filter((it) => it.x >= keepMin && it.x <= keepMax);
+  }
+}
+
+function ensurePropsAround(st, box) {
+  ensurePropsAhead(st, box.x + AHEAD_BUFFER);
+  if ((box.vx || 0) < -0.5) {
+    ensureReturnPathProps(st, box.x);
+  }
+  cullDistantProps(st, box);
+}
+
+/** Dev sandbox — drop a rare prop just downrange of the toolbox. */
+function spawnDevPropAhead(st, type) {
+  const baseX = st.phase === PHASE.FLIGHT && st.box ? st.box.x : BOX_REST_X;
+  const spawnX = baseX + 480;
+  st.items = st.items.filter((it) => !(it.type === type && Math.abs(it.x - spawnX) < 320));
+  st.items.push({
+    type,
+    x: spawnX,
+    id: `dev-${type}-${spawnX | 0}-${Date.now()}`,
+  });
+  st.message = type === 'macan'
+    ? 'CHEAT · Julies Car spawned ahead'
+    : 'CHEAT · Little Dick spawned ahead';
 }
 
 function meterValue(t) {
@@ -431,7 +801,7 @@ function drawMechanic(ctx, x, y, frame, { kicking = false, running = false } = {
   ctx.restore();
 }
 
-function drawToolbox(ctx, x, y, rot, flying) {
+function drawToolbox(ctx, x, y, rot, flying, oiled = false) {
   ctx.save();
   ctx.translate(x, y);
   ctx.rotate(rot);
@@ -440,15 +810,15 @@ function drawToolbox(ctx, x, y, rot, flying) {
   ctx.ellipse(0, 10, 16, 5, 0, 0, Math.PI * 2);
   ctx.fill();
 
-  ctx.fillStyle = '#c4a035';
-  ctx.strokeStyle = '#6b5420';
+  ctx.fillStyle = oiled ? '#3f3a1a' : '#c4a035';
+  ctx.strokeStyle = oiled ? '#1a1a0a' : '#6b5420';
   ctx.lineWidth = 2;
   ctx.beginPath();
   ctx.roundRect(-16, -10, 32, 18, 3);
   ctx.fill();
   ctx.stroke();
 
-  ctx.fillStyle = '#8a7028';
+  ctx.fillStyle = oiled ? '#2a2810' : '#8a7028';
   ctx.fillRect(-16, -2, 32, 3);
   ctx.fillStyle = '#2a2a2a';
   ctx.fillRect(-4, -14, 8, 5);
@@ -457,8 +827,22 @@ function drawToolbox(ctx, x, y, rot, flying) {
   ctx.arc(0, -14, 5, Math.PI, 0);
   ctx.stroke();
 
+  if (oiled) {
+    ctx.fillStyle = 'rgba(40, 35, 10, 0.55)';
+    ctx.beginPath();
+    ctx.ellipse(-4, -2, 7, 4, -0.3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(6, 2, 5, 3, 0.4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(180, 160, 40, 0.35)';
+    ctx.beginPath();
+    ctx.ellipse(2, -6, 3, 1.5, 0.2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
   if (flying) {
-    ctx.strokeStyle = 'rgba(255,200,80,0.5)';
+    ctx.strokeStyle = oiled ? 'rgba(80,70,20,0.45)' : 'rgba(255,200,80,0.5)';
     ctx.beginPath();
     ctx.moveTo(-20, 0);
     ctx.lineTo(-32, 4);
@@ -536,93 +920,274 @@ function drawCone(ctx, x, y) {
   ctx.restore();
 }
 
-function drawDrum(ctx, x, y) {
+function drawDrum(ctx, x, y, spilled = false) {
   ctx.save();
   ctx.translate(x, y);
-  ctx.fillStyle = '#b45309';
-  ctx.fillRect(-12, -28, 24, 28);
-  ctx.fillStyle = '#92400e';
-  ctx.fillRect(-12, -20, 24, 4);
-  ctx.fillStyle = '#1d4ed8';
-  ctx.font = 'bold 9px sans-serif';
-  ctx.fillText('OIL', -9, -8);
+
+  if (spilled) {
+    // Oil puddle on the road
+    ctx.fillStyle = 'rgba(20, 18, 8, 0.72)';
+    ctx.beginPath();
+    ctx.ellipse(8, 1, 38, 10, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(60, 50, 15, 0.35)';
+    ctx.beginPath();
+    ctx.ellipse(14, 0, 18, 5, 0.1, 0, Math.PI * 2);
+    ctx.fill();
+    // Tipped barrel
+    ctx.rotate(1.15);
+    ctx.fillStyle = '#92400e';
+    ctx.fillRect(-12, -28, 24, 28);
+    ctx.fillStyle = '#78350f';
+    ctx.fillRect(-12, -20, 24, 4);
+    ctx.fillStyle = '#1e3a8a';
+    ctx.font = 'bold 8px sans-serif';
+    ctx.fillText('OIL', -8, -8);
+  } else {
+    ctx.fillStyle = '#b45309';
+    ctx.fillRect(-12, -28, 24, 28);
+    ctx.fillStyle = '#92400e';
+    ctx.fillRect(-12, -20, 24, 4);
+    ctx.fillStyle = '#1d4ed8';
+    ctx.font = 'bold 9px sans-serif';
+    ctx.fillText('OIL', -9, -8);
+  }
   ctx.restore();
 }
 
-/** Rare boost prop: driver on a smoke break. */
+/** Rare boost prop: driver on a smoke break — big silhouette + thick smoke. */
 function drawSmoker(ctx, x, y, frame = 0) {
   ctx.save();
   ctx.translate(x, y);
 
-  // shadow
-  ctx.fillStyle = 'rgba(0,0,0,0.25)';
+  // soft glow so they read at speed
+  ctx.fillStyle = 'rgba(250, 204, 21, 0.18)';
   ctx.beginPath();
-  ctx.ellipse(0, 2, 16, 5, 0, 0, Math.PI * 2);
+  ctx.arc(0, -36, 42, 0, Math.PI * 2);
+  ctx.fill();
+
+  // shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  ctx.beginPath();
+  ctx.ellipse(0, 2, 22, 6, 0, 0, Math.PI * 2);
   ctx.fill();
 
   // legs
   ctx.strokeStyle = '#1e3a5f';
-  ctx.lineWidth = 5;
+  ctx.lineWidth = 6;
   ctx.lineCap = 'round';
   ctx.beginPath();
-  ctx.moveTo(-4, -8);
-  ctx.lineTo(-8, 0);
-  ctx.moveTo(4, -8);
-  ctx.lineTo(7, 0);
+  ctx.moveTo(-5, -10);
+  ctx.lineTo(-10, 0);
+  ctx.moveTo(5, -10);
+  ctx.lineTo(9, 0);
   ctx.stroke();
 
-  // body / hi-vis jacket
+  // body / hi-vis jacket (larger)
   ctx.fillStyle = '#facc15';
   ctx.beginPath();
-  ctx.roundRect(-11, -40, 22, 34, 4);
+  ctx.roundRect(-14, -48, 28, 40, 5);
   ctx.fill();
   ctx.fillStyle = '#1e293b';
-  ctx.fillRect(-11, -28, 22, 4);
+  ctx.fillRect(-14, -32, 28, 5);
+  // reflective strips
+  ctx.fillStyle = '#fef08a';
+  ctx.fillRect(-14, -40, 28, 3);
+  ctx.fillRect(-14, -24, 28, 3);
 
   // head
   ctx.fillStyle = '#e8b090';
   ctx.beginPath();
-  ctx.arc(0, -48, 8, 0, Math.PI * 2);
+  ctx.arc(0, -56, 10, 0, Math.PI * 2);
   ctx.fill();
 
   // cap
   ctx.fillStyle = '#0f172a';
   ctx.beginPath();
-  ctx.ellipse(0, -52, 8, 4, 0, Math.PI, 0);
+  ctx.ellipse(0, -61, 10, 5, 0, Math.PI, 0);
   ctx.fill();
-  ctx.fillRect(-9, -54, 14, 3);
+  ctx.fillRect(-11, -64, 18, 4);
 
   // arm holding cigarette
   ctx.strokeStyle = '#e8b090';
-  ctx.lineWidth = 4;
+  ctx.lineWidth = 5;
   ctx.beginPath();
-  ctx.moveTo(10, -32);
-  ctx.lineTo(20, -36);
+  ctx.moveTo(12, -36);
+  ctx.lineTo(26, -42);
   ctx.stroke();
 
   // cigarette
   ctx.strokeStyle = '#f5f5f4';
-  ctx.lineWidth = 2;
+  ctx.lineWidth = 2.5;
   ctx.beginPath();
-  ctx.moveTo(20, -36);
-  ctx.lineTo(28, -38);
+  ctx.moveTo(26, -42);
+  ctx.lineTo(38, -45);
   ctx.stroke();
   ctx.fillStyle = '#f97316';
   ctx.beginPath();
-  ctx.arc(28, -38, 1.8, 0, Math.PI * 2);
+  ctx.arc(38, -45, 2.4, 0, Math.PI * 2);
+  ctx.fill();
+  // ember glow
+  ctx.fillStyle = 'rgba(249, 115, 22, 0.45)';
+  ctx.beginPath();
+  ctx.arc(38, -45, 6, 0, Math.PI * 2);
   ctx.fill();
 
-  // smoke puffs
-  const t = frame * 0.12;
-  ctx.strokeStyle = 'rgba(200,200,200,0.55)';
-  ctx.lineWidth = 1.5;
-  for (let i = 0; i < 3; i += 1) {
-    const sy = -40 - i * 8 - (t % 10);
-    const sx = 30 + i * 3 + Math.sin(t + i) * 2;
+  // thick rising smoke
+  const t = frame * 0.14;
+  for (let i = 0; i < 5; i += 1) {
+    const sy = -48 - i * 11 - ((t * 4 + i * 3) % 14);
+    const sx = 40 + i * 4 + Math.sin(t + i * 1.2) * 4;
+    const r = 4 + i * 1.4;
+    ctx.fillStyle = `rgba(210,210,210,${0.55 - i * 0.07})`;
     ctx.beginPath();
-    ctx.arc(sx, sy, 3 + i, 0, Math.PI * 2);
-    ctx.stroke();
+    ctx.arc(sx, sy, r, 0, Math.PI * 2);
+    ctx.fill();
   }
+
+  // floating label
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.75)';
+  ctx.beginPath();
+  ctx.roundRect(-36, -92, 72, 16, 4);
+  ctx.fill();
+  ctx.fillStyle = '#facc15';
+  ctx.font = 'bold 10px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('SMOKE BREAK', 0, -81);
+
+  ctx.restore();
+}
+
+function drawOilSpill(ctx, x, y, frame = 0) {
+  ctx.save();
+  ctx.translate(x, y);
+  const shimmer = 0.08 + 0.04 * Math.sin(frame * 0.15);
+  ctx.fillStyle = `rgba(15, 12, 4, ${0.7 + shimmer})`;
+  ctx.beginPath();
+  ctx.ellipse(0, 0, 44, 12, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = `rgba(80, 70, 20, ${0.25 + shimmer})`;
+  ctx.beginPath();
+  ctx.ellipse(8, -1, 16, 5, 0.15, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = `rgba(120, 100, 30, ${0.2 + shimmer})`;
+  ctx.beginPath();
+  ctx.ellipse(-10, 1, 10, 3, -0.2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawBird(ctx, x, y, frame = 0, dir = 1) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(dir, 1);
+  const flap = Math.sin(frame * 0.45) * 0.55;
+  // body
+  ctx.fillStyle = '#1e293b';
+  ctx.beginPath();
+  ctx.ellipse(0, 0, 8, 4.5, 0, 0, Math.PI * 2);
+  ctx.fill();
+  // head
+  ctx.beginPath();
+  ctx.arc(7, -2, 3.5, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#f59e0b';
+  ctx.beginPath();
+  ctx.moveTo(10, -2);
+  ctx.lineTo(15, -1);
+  ctx.lineTo(10, 0);
+  ctx.fill();
+  // wings
+  ctx.strokeStyle = '#334155';
+  ctx.lineWidth = 2.5;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(-2, -1);
+  ctx.quadraticCurveTo(-6, -14 - flap * 10, -14, -4 + flap * 6);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.quadraticCurveTo(2, 8 + flap * 8, -8, 6 - flap * 4);
+  ctx.stroke();
+  ctx.restore();
+}
+
+/** Ultra-rare black Porsche Macan — canvas silhouette. */
+function drawMacan(ctx, x, y, frame = 0) {
+  ctx.save();
+  ctx.translate(x, y);
+  const w = 92;
+  const h = 38;
+
+  // rare shimmer
+  ctx.fillStyle = `rgba(148, 163, 184, ${0.12 + 0.06 * Math.sin(frame * 0.2)})`;
+  ctx.beginPath();
+  ctx.ellipse(w * 0.45, -h * 0.4, 58, 28, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.35)';
+  ctx.beginPath();
+  ctx.ellipse(w * 0.45, 2, 46, 7, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // body
+  ctx.fillStyle = '#0a0a0a';
+  ctx.strokeStyle = '#27272a';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.moveTo(4, -8);
+  ctx.lineTo(10, -22);
+  ctx.lineTo(28, -34);
+  ctx.lineTo(58, -36);
+  ctx.lineTo(78, -28);
+  ctx.lineTo(88, -14);
+  ctx.lineTo(90, -6);
+  ctx.lineTo(4, -6);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  // windows
+  ctx.fillStyle = '#334155';
+  ctx.beginPath();
+  ctx.moveTo(30, -32);
+  ctx.lineTo(44, -33);
+  ctx.lineTo(44, -20);
+  ctx.lineTo(28, -20);
+  ctx.closePath();
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(46, -33);
+  ctx.lineTo(62, -33);
+  ctx.lineTo(70, -22);
+  ctx.lineTo(46, -20);
+  ctx.closePath();
+  ctx.fill();
+
+  // headlights
+  ctx.fillStyle = '#fef3c7';
+  ctx.fillRect(82, -16, 6, 4);
+  ctx.fillStyle = '#f87171';
+  ctx.fillRect(6, -16, 5, 4);
+
+  // wheels
+  ctx.fillStyle = '#18181b';
+  ctx.beginPath();
+  ctx.arc(22, -2, 9, 0, Math.PI * 2);
+  ctx.arc(70, -2, 9, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#52525b';
+  ctx.beginPath();
+  ctx.arc(22, -2, 4, 0, Math.PI * 2);
+  ctx.arc(70, -2, 4, 0, Math.PI * 2);
+  ctx.fill();
+
+  // badge hint
+  ctx.fillStyle = 'rgba(250, 250, 250, 0.7)';
+  ctx.font = 'bold 8px system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('MACAN', w * 0.45, -12);
 
   ctx.restore();
 }
@@ -634,6 +1199,14 @@ function applySmokerBoost(box) {
   box.onGround = false;
 }
 
+/** Roughly 2× smoker launch — ultra rare Macan hit. */
+function applyMacanBoost(box) {
+  box.vy = -96 * (0.95 + Math.random() * 0.15);
+  box.vx = Math.max(Math.abs(box.vx) * 6.2, 84);
+  box.spin = (Math.random() > 0.5 ? 1 : -1) * 1.45;
+  box.onGround = false;
+}
+
 function smokerBoostGrade(cheat = false) {
   return {
     label: cheat ? 'CHEAT · SMOKE BREAK!' : 'SMOKE BREAK!',
@@ -641,6 +1214,48 @@ function smokerBoostGrade(cheat = false) {
     gold: true,
     color: '#fbbf24',
     glow: '#f97316',
+  };
+}
+
+function macanBoostGrade() {
+  return {
+    label: 'JULIES CAR!',
+    sub: '2× smoke break — absolute rocket',
+    gold: true,
+    epic: true,
+    color: '#e2e8f0',
+    glow: '#94a3b8',
+  };
+}
+
+function littleDickRebootGrade() {
+  return {
+    label: 'LITTLE DICK!',
+    sub: 'Caught it — boots it BACK!',
+    gold: true,
+    epic: true,
+    color: '#fdba74',
+    glow: '#ea580c',
+  };
+}
+
+function oilSpillGrade() {
+  return {
+    label: 'OIL SPILL!',
+    sub: 'Toolbox coated — low friction slide',
+    gold: false,
+    color: '#fde68a',
+    glow: '#a16207',
+  };
+}
+
+function birdHitGrade() {
+  return {
+    label: 'Bird strike!',
+    sub: 'Feathers everywhere — slight slowdown',
+    gold: false,
+    color: '#cbd5e1',
+    glow: '#64748b',
   };
 }
 
@@ -723,17 +1338,22 @@ function ToolboxKickGame({
   onChangeMode,
   competitive = false,
   onRoundComplete = null,
+  devCheats = false,
 }) {
   const canvasRef = useRef(null);
+  const stageRef = useRef(null);
   const stateRef = useRef(null);
   const tuningRef = useRef(DEFAULT_TUNING);
   const modeRef = useRef(mode);
   const competitiveRef = useRef(competitive);
+  const devCheatsRef = useRef(devCheats);
   const onRoundCompleteRef = useRef(onRoundComplete);
   const popupIdRef = useRef(0);
   const [hud, setHud] = useState({
     phase: PHASE.READY,
     distance: 0,
+    speedMph: 0,
+    altitudeM: 0,
     best: Number(localStorage.getItem('toolbox-kick-best') || 0),
     attempt: 1,
     roundBest: 0,
@@ -743,6 +1363,7 @@ function ToolboxKickGame({
   });
   const [popup, setPopup] = useState(null);
   const [roundDone, setRoundDone] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
 
   useEffect(() => {
     modeRef.current = mode;
@@ -751,6 +1372,10 @@ function ToolboxKickGame({
   useEffect(() => {
     competitiveRef.current = competitive;
   }, [competitive]);
+
+  useEffect(() => {
+    devCheatsRef.current = devCheats;
+  }, [devCheats]);
 
   useEffect(() => {
     onRoundCompleteRef.current = onRoundComplete;
@@ -785,7 +1410,8 @@ function ToolboxKickGame({
     const rng = makeRng(Date.now() ^ (Math.random() * 1e9));
     const items = [];
     const startX = 380 + rng() * 220;
-    const propCursor = appendProps(items, startX, startX + CHUNK_SIZE, rng);
+    const newProps = TOOLBOX_NEW_PROPS_LIVE;
+    const propCursor = appendProps(items, startX, startX + CHUNK_SIZE, rng, { newProps });
     const attempts = modeRef.current === 'allOrNothing' ? 1 : MAX_ATTEMPTS;
     const message = attempts === 1
       ? 'All or nothing — one shot. Tap to set POWER'
@@ -800,11 +1426,22 @@ function ToolboxKickGame({
       camX: 0,
       mechX: MECH_START_X,
       runup: 0,
-      box: { x: BOX_REST_X, y: GROUND_Y - 12, vx: 0, vy: 0, rot: 0, spin: 0, onGround: true },
+      box: {
+        x: BOX_REST_X,
+        y: GROUND_Y - 12,
+        vx: 0,
+        vy: 0,
+        rot: 0,
+        spin: 0,
+        onGround: true,
+        oiled: false,
+      },
       items,
       propCursor,
       rng,
+      newProps,
       hitIds: new Set(),
+      hitTally: {},
       distance: 0,
       best,
       attempt,
@@ -815,11 +1452,17 @@ function ToolboxKickGame({
       perfectLaunch: false,
       message,
       kickFlash: 0,
+      zoom: 1,
       hitMilestones: new Set(),
+      launchSpeed: 0,
+      launchAngleDeg: 45,
+      dickCatch: null,
     };
     setHud({
       phase: PHASE.READY,
       distance: 0,
+      speedMph: 0,
+      altitudeM: 0,
       best,
       attempt,
       roundBest,
@@ -873,7 +1516,7 @@ function ToolboxKickGame({
 
   /** Dev cheat (sandbox / practice only): Y = perfect launch, or smoker boost in flight. */
   const doCheatY = useCallback(() => {
-    if (competitiveRef.current) return;
+    if (!devCheatsRef.current || competitiveRef.current) return;
     const st = stateRef.current;
     if (!st) return;
 
@@ -909,6 +1552,55 @@ function ToolboxKickGame({
     }
   }, [showRpgPopup]);
 
+  /** Dev cheat (sandbox / practice only): U = tiny forward nudge to help test rare events. */
+  const doCheatU = useCallback(() => {
+    if (!devCheatsRef.current || competitiveRef.current) return;
+    const st = stateRef.current;
+    if (!st || st.phase !== PHASE.FLIGHT || st.dickCatch) return;
+    st.box.vx += 4.5;
+    st.message = 'CHEAT · little speed nudge';
+    setHud((h) => ({
+      ...h,
+      phase: st.phase,
+      distance: Math.floor(st.distance),
+      speedMph: speedMphFromBox(st.box),
+      altitudeM: Math.floor(altitudeMetresFromBox(st.box)),
+      message: st.message,
+    }));
+  }, []);
+
+  /** Dev cheat: M = spawn Julies Car ahead; L = spawn Little Dick ahead. */
+  const doCheatSpawn = useCallback((type) => {
+    if (!devCheatsRef.current || competitiveRef.current) return;
+    const st = stateRef.current;
+    if (!st) return;
+    if (st.phase === PHASE.FLIGHT && st.dickCatch) return;
+    spawnDevPropAhead(st, type);
+    setHud((h) => ({ ...h, message: st.message }));
+  }, []);
+
+  const toggleFullscreen = useCallback(async () => {
+    const el = stageRef.current;
+    if (!el) return;
+    try {
+      if (document.fullscreenElement === el) {
+        await document.exitFullscreen();
+      } else {
+        await el.requestFullscreen();
+      }
+    } catch {
+      // ignore — browser may block without user gesture
+    }
+  }, []);
+
+  useEffect(() => {
+    const onFullscreenChange = () => {
+      setFullscreen(document.fullscreenElement === stageRef.current);
+    };
+    document.addEventListener('fullscreenchange', onFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', onFullscreenChange);
+  }, []);
+
   useEffect(() => {
     initShot({ keepBest: true, attempt: 1, freshRound: true });
   }, [initShot, mode]);
@@ -923,6 +1615,8 @@ function ToolboxKickGame({
       setHud({
         phase: st.phase,
         distance: Math.floor(st.distance),
+        speedMph: speedMphFromBox(st.box),
+        altitudeM: Math.floor(altitudeMetresFromBox(st.box)),
         best: st.best,
         attempt: st.attempt || 1,
         roundBest: st.roundBest || 0,
@@ -959,18 +1653,67 @@ function ToolboxKickGame({
             speed *= PERFECT_LAUNCH_BOOST;
             popupFnRef.current?.(perfectLaunchGrade(), 1700);
           }
+          st.launchSpeed = speed;
+          st.launchAngleDeg = st.angleDeg;
           st.box.x = BOX_REST_X;
           st.box.y = GROUND_Y - 12;
           st.box.vx = Math.cos(rad) * speed;
           st.box.vy = -Math.sin(rad) * speed;
           st.box.spin = 0.2 + st.power * 0.3;
           st.box.onGround = false;
+          st.dickCatch = null;
           st.phase = PHASE.FLIGHT;
           st.message = st.perfectLaunch
             ? 'Perfect launch!!! Fly, toolbox, fly…'
             : 'Fly, toolbox, fly…';
           syncHud(st);
         }
+      } else if (st.phase === PHASE.FLIGHT && st.dickCatch) {
+        const box = st.box;
+        const catchSt = st.dickCatch;
+        catchSt.frame += 1;
+        const f = catchSt.frame;
+        // Hold toolbox while he catches / winds up / boots BACK toward start
+        box.vx = 0;
+        box.vy = 0;
+        box.onGround = false;
+        box.x = catchSt.x + (catchSt.facing < 0 ? -8 : 8);
+        box.y = GROUND_Y - (f < 14 ? 28 : 18);
+        box.rot = f < 14 ? -0.4 : 0.15;
+        box.spin = 0;
+
+        if (f === 1) {
+          st.message = 'Little Dick caught the toolbox!';
+          popupFnRef.current?.(littleDickRebootGrade(), 2000);
+          syncHud(st);
+        }
+        if (f === 16) {
+          catchSt.facing = -1; // betrayal — turns and boots BACK toward the start
+          st.message = 'Oh no — he boots it BACK toward the start!';
+          syncHud(st);
+        }
+        if (f === 34) {
+          st.kickFlash = 10;
+        }
+        if (f >= 40) {
+          const rad = ((st.launchAngleDeg || 45) * Math.PI) / 180;
+          const speed = st.launchSpeed || launchSpeedForPower(st.power, tun);
+          box.x = catchSt.x - 12;
+          box.y = GROUND_Y - 14;
+          // Same launch force, opposite direction (back toward kick-off)
+          box.vx = -Math.cos(rad) * speed;
+          box.vy = -Math.sin(rad) * speed;
+          box.spin = -(0.2 + (st.power || 0.5) * 0.3);
+          box.onGround = false;
+          st.dickCatch = null;
+          st.hitIds = new Set(); // re-collide with obstacles on the way back
+          ensureReturnPathProps(st, box.x);
+          st.message = 'Little Dick sent it BACK — distance plunging!';
+          syncHud(st);
+        }
+        st.distance = (box.x - BOX_REST_X) / PX_PER_METRE;
+        st.camX = box.x - W * 0.35;
+        if (st.frame % 6 === 0) syncHud(st);
       } else if (st.phase === PHASE.FLIGHT) {
         const box = st.box;
         box.vy += tun.gravity;
@@ -979,7 +1722,7 @@ function ToolboxKickGame({
         box.x += box.vx;
         box.y += box.vy;
         box.rot += box.spin;
-        st.distance = Math.max(0, (box.x - BOX_REST_X) / PX_PER_METRE);
+        st.distance = (box.x - BOX_REST_X) / PX_PER_METRE;
 
         // Northampton milestones
         if (!st.hitMilestones) st.hitMilestones = new Set();
@@ -992,7 +1735,15 @@ function ToolboxKickGame({
           }
         }
 
-        ensurePropsAhead(st, box.x + AHEAD_BUFFER);
+        ensurePropsAround(st, box);
+
+        // Birds drift slowly while you're in flight
+        for (let i = 0; i < st.items.length; i += 1) {
+          const it = st.items[i];
+          if (it.type === 'bird' && !it.hit) {
+            it.x += (it.dir || 1) * 0.35;
+          }
+        }
 
         for (let i = 0; i < st.items.length; i += 1) {
           const it = st.items[i];
@@ -1009,6 +1760,7 @@ function ToolboxKickGame({
             ) {
               if (!st.hitIds.has(id)) {
                 st.hitIds.add(id);
+                bumpHitTally(st, 'coach');
                 box.vx *= tun.coachSlow;
                 box.vy *= tun.coachSlow;
                 box.spin *= 0.55;
@@ -1029,6 +1781,7 @@ function ToolboxKickGame({
               const bounceId = `${id}-${Math.floor(box.x / 40)}`;
               if (!st.hitIds.has(bounceId)) {
                 st.hitIds.add(bounceId);
+                bumpHitTally(st, 'sack');
                 box.vy = -tun.sackBounce * (0.9 + Math.random() * 0.35);
                 box.vx *= tun.sackBoost;
                 box.spin = -box.spin * 1.15;
@@ -1038,15 +1791,73 @@ function ToolboxKickGame({
             }
           } else if (it.type === 'smoker') {
             const dx = box.x - it.x;
-            const dy = box.y - (GROUND_Y - 28);
-            if (dx * dx + dy * dy < 28 ** 2) {
+            const dy = box.y - (GROUND_Y - 34);
+            if (dx * dx + dy * dy < 36 ** 2) {
               if (!st.hitIds.has(id)) {
                 st.hitIds.add(id);
+                bumpHitTally(st, 'smoker');
                 applySmokerBoost(box);
                 st.message = 'Driver on a ciggy break — sent flying!';
                 popupFnRef.current?.(smokerBoostGrade(false), 1600);
                 syncHud(st);
               }
+            }
+          } else if (it.type === 'macan') {
+            const dx = box.x - (it.x + 46);
+            const dy = box.y - (GROUND_Y - 20);
+            if (dx * dx + dy * dy < 48 ** 2) {
+              if (!st.hitIds.has(id)) {
+                st.hitIds.add(id);
+                bumpHitTally(st, 'macan');
+                applyMacanBoost(box);
+                st.message = 'JULIES CAR!';
+                popupFnRef.current?.(macanBoostGrade(), 2000);
+                syncHud(st);
+              }
+            }
+          } else if (it.type === 'littleDick') {
+            // Must land on him (descending) to get the catch-and-reboot
+            const dx = box.x - it.x;
+            const dy = box.y - (GROUND_Y - 30);
+            if (dx * dx + dy * dy < 40 ** 2 && box.vy > 0 && !st.hitIds.has(id)) {
+              st.hitIds.add(id);
+              bumpHitTally(st, 'littleDick');
+              st.dickCatch = {
+                x: it.x,
+                frame: 0,
+                facing: 1, // pretends he'll boot you onward…
+              };
+              box.vx = 0;
+              box.vy = 0;
+              box.x = it.x;
+              box.y = GROUND_Y - 28;
+              st.message = 'Landed on Little Dick!';
+              syncHud(st);
+            }
+          } else if (it.type === 'bird') {
+            const by = it.y ?? (GROUND_Y - 80);
+            const dx = box.x - it.x;
+            const dy = box.y - by;
+            if (dx * dx + dy * dy < 22 ** 2 && !st.hitIds.has(id)) {
+              st.hitIds.add(id);
+              bumpHitTally(st, 'bird');
+              it.hit = true;
+              box.vx *= tun.birdSlow;
+              box.vy *= 0.96;
+              box.spin *= -0.8;
+              st.message = 'Bird strike — feathers everywhere!';
+              popupFnRef.current?.(birdHitGrade(), 900);
+              syncHud(st);
+            }
+          } else if (it.type === 'oilSpill') {
+            const dx = box.x - it.x;
+            const dy = box.y - GROUND_Y;
+            if (Math.abs(dx) < 40 && Math.abs(dy) < 18 && !box.oiled) {
+              box.oiled = true;
+              bumpHitTally(st, 'oilSpill');
+              st.message = 'Drove through the oil spill — coated!';
+              popupFnRef.current?.(oilSpillGrade(), 1100);
+              syncHud(st);
             }
           } else if (it.type === 'cone' || it.type === 'drum') {
             const cx = it.x;
@@ -1055,10 +1866,25 @@ function ToolboxKickGame({
             const dy = box.y - cy;
             if (dx * dx + dy * dy < 18 ** 2 && !st.hitIds.has(id)) {
               st.hitIds.add(id);
-              box.vx *= 0.92;
-              box.vy = Math.min(box.vy, -5);
-              box.spin *= -1;
-              st.message = it.type === 'cone' ? 'Traffic cone ping!' : 'Oil drum clang!';
+              bumpHitTally(st, it.type === 'drum' ? 'drum' : 'cone');
+              if (it.type === 'drum' && st.newProps) {
+                it.spilled = true;
+                box.oiled = true;
+                st.items.push({
+                  type: 'oilSpill',
+                  x: it.x + 10,
+                  id: `spill-${st.items.length}-${it.x | 0}`,
+                });
+                box.vy = Math.min(box.vy, -4);
+                box.spin *= -1.1;
+                st.message = 'Oil drum burst — toolbox coated!';
+                popupFnRef.current?.(oilSpillGrade(), 1200);
+              } else {
+                box.vx *= 0.92;
+                box.vy = Math.min(box.vy, -5);
+                box.spin *= -1;
+                st.message = it.type === 'cone' ? 'Traffic cone ping!' : 'Oil drum clang!';
+              }
               syncHud(st);
             }
           }
@@ -1066,21 +1892,26 @@ function ToolboxKickGame({
 
         if (box.y >= GROUND_Y - 10) {
           box.y = GROUND_Y - 10;
+          const bounceFric = box.oiled ? tun.oilFriction : tun.friction;
+          const slideDrag = box.oiled ? tun.oilGroundDrag : tun.groundDrag;
           if (Math.abs(box.vy) > 1.6) {
             box.vy = -box.vy * tun.bounceDamp;
-            box.vx *= tun.friction;
+            box.vx *= bounceFric;
             box.spin *= 0.92;
           } else {
             box.vy = 0;
-            box.vx *= tun.groundDrag;
-            box.spin *= 0.96;
+            box.vx *= slideDrag;
+            box.spin *= box.oiled ? 0.985 : 0.96;
             box.onGround = true;
             if (Math.abs(box.vx) < tun.stopSpeed) {
               box.vx = 0;
               st.phase = PHASE.LANDED;
               const dist = Math.floor(st.distance);
-              st.roundBest = Math.max(st.roundBest || 0, dist);
               if (!Array.isArray(st.attemptDistances)) st.attemptDistances = [];
+              // Highest distance wins — negatives are valid (and hilarious)
+              st.roundBest = st.attemptDistances.length === 0
+                ? dist
+                : Math.max(st.roundBest, dist);
               st.attemptDistances = [...st.attemptDistances, dist];
               if (dist > st.best) {
                 st.best = dist;
@@ -1100,30 +1931,50 @@ function ToolboxKickGame({
                   });
                 }
               } else {
-                st.message = `Round over · best ${formatDistance(st.roundBest)}. Tap for a new round`;
+                st.message = dist < 0
+                  ? `Round over · best ${formatDistance(st.roundBest)}. (Yes, negative is allowed.) Tap for a new round`
+                  : `Round over · best ${formatDistance(st.roundBest)}. Tap for a new round`;
               }
               syncHud(st);
             }
           }
         }
 
-        st.camX = Math.max(0, box.x - W * 0.35);
+        st.camX = box.x - W * 0.35;
         if (st.frame % 6 === 0) syncHud(st);
       }
 
       if (st.kickFlash > 0) st.kickFlash -= 1;
 
+      // Camera pulls out as the toolbox speeds up
+      const zoomTarget = st.phase === PHASE.FLIGHT
+        ? clamp(Math.sqrt(30 / Math.max(8, Math.hypot(st.box.vx, st.box.vy))), MIN_ZOOM, 1)
+        : 1;
+      st.zoom = (st.zoom || 1) + (zoomTarget - (st.zoom || 1)) * 0.06;
+      const zoom = st.zoom;
+
       const cam = st.camX;
       drawSky(ctx, cam);
       drawGround(ctx, cam);
 
+      const pivotX = W * 0.35;
+      const visMinSx = pivotX + (-200 - pivotX) / zoom;
+      const visMaxSx = pivotX + (W + 200 - pivotX) / zoom;
+
+      ctx.save();
+      ctx.translate(pivotX, GROUND_Y);
+      ctx.scale(zoom, zoom);
+      ctx.translate(-pivotX, -GROUND_Y);
+
       ctx.fillStyle = 'rgba(0,0,0,0.25)';
       ctx.font = '11px ui-monospace, monospace';
       const markEvery = 50;
-      const maxMark = Math.ceil((st.camX + W + 400) / PX_PER_METRE / markEvery) * markEvery + markEvery;
-      for (let m = 0; m <= maxMark; m += markEvery) {
+      const minMark = Math.floor((visMinSx + cam - BOX_REST_X) / PX_PER_METRE / markEvery) * markEvery - markEvery;
+      const maxMark = Math.ceil((visMaxSx + cam - BOX_REST_X) / PX_PER_METRE / markEvery) * markEvery + markEvery;
+      for (let m = minMark; m <= maxMark; m += markEvery) {
         const sx = BOX_REST_X + m * PX_PER_METRE - cam;
-        if (sx < -40 || sx > W + 40) continue;
+        if (sx < visMinSx || sx > visMaxSx) continue;
+        ctx.fillStyle = m < 0 ? 'rgba(248,113,113,0.45)' : 'rgba(0,0,0,0.25)';
         ctx.fillRect(sx, GROUND_Y, 2, 8);
         ctx.fillText(`${m}m`, sx + 4, GROUND_Y + 18);
       }
@@ -1131,77 +1982,96 @@ function ToolboxKickGame({
       for (let i = 0; i < st.items.length; i += 1) {
         const it = st.items[i];
         const sx = it.x - cam;
-        if (sx < -160 || sx > W + 160) continue;
+        if (sx < visMinSx || sx > visMaxSx) continue;
         if (it.type === 'coach') drawCoach(ctx, sx, GROUND_Y, it.w, it.h);
         else if (it.type === 'sack') drawSack(ctx, sx, GROUND_Y, it.r);
         else if (it.type === 'cone') drawCone(ctx, sx, GROUND_Y);
-        else if (it.type === 'drum') drawDrum(ctx, sx, GROUND_Y);
+        else if (it.type === 'drum') drawDrum(ctx, sx, GROUND_Y, Boolean(it.spilled));
+        else if (it.type === 'oilSpill') drawOilSpill(ctx, sx, GROUND_Y, st.frame);
         else if (it.type === 'smoker') drawSmoker(ctx, sx, GROUND_Y, st.frame);
+        else if (it.type === 'macan') drawMacan(ctx, sx, GROUND_Y, st.frame);
+        else if (it.type === 'littleDick') {
+          const catching = st.dickCatch && st.dickCatch.x === it.x;
+          const face = catching ? (st.dickCatch.facing || 1) : 1;
+          const kicking = catching && st.dickCatch.frame >= 30 && st.dickCatch.frame < 42;
+          ctx.save();
+          ctx.translate(sx, GROUND_Y);
+          ctx.scale(face < 0 ? -1 : 1, 1);
+          drawMechanic(ctx, 0, 0, st.frame, { kicking, running: false });
+          ctx.restore();
+          if (!catching) {
+            ctx.fillStyle = 'rgba(15, 23, 42, 0.75)';
+            ctx.beginPath();
+            ctx.roundRect(sx - 40, GROUND_Y - 96, 80, 16, 4);
+            ctx.fill();
+            ctx.fillStyle = '#fdba74';
+            ctx.font = 'bold 10px system-ui, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('LITTLE DICK', sx, GROUND_Y - 85);
+          }
+        }
+        else if (it.type === 'bird' && !it.hit) {
+          drawBird(ctx, sx, it.y ?? (GROUND_Y - 80), st.frame, it.dir || 1);
+        }
       }
 
       const running = st.phase === PHASE.RUNUP && st.runup < KICK_FRAME;
       const kicking = st.phase === PHASE.RUNUP && st.runup >= KICK_FRAME;
-      if (st.mechX - cam > -40 && st.mechX - cam < W + 40) {
+      if (st.mechX - cam > visMinSx && st.mechX - cam < visMaxSx) {
         drawMechanic(ctx, st.mechX - cam, GROUND_Y, st.frame, { kicking, running });
       }
 
+      const oiled = Boolean(st.box.oiled);
       if (st.phase === PHASE.READY || st.phase === PHASE.POWER || st.phase === PHASE.ANGLE) {
-        drawToolbox(ctx, st.box.x - cam, st.box.y, -0.15, false);
+        drawToolbox(ctx, st.box.x - cam, st.box.y, -0.15, false, oiled);
       } else if (st.phase === PHASE.RUNUP && st.runup < LAUNCH_FRAME) {
-        drawToolbox(ctx, BOX_REST_X - cam, GROUND_Y - 12, -0.2, false);
+        drawToolbox(ctx, BOX_REST_X - cam, GROUND_Y - 12, -0.2, false, oiled);
       } else {
-        drawToolbox(ctx, st.box.x - cam, st.box.y, st.box.rot, st.phase === PHASE.FLIGHT);
+        drawToolbox(ctx, st.box.x - cam, st.box.y, st.box.rot, st.phase === PHASE.FLIGHT, oiled);
       }
 
       if (st.kickFlash > 0) {
+        const flashX = st.dickCatch
+          ? st.dickCatch.x - 18 - cam
+          : MECH_KICK_X + 18 - cam;
         ctx.fillStyle = `rgba(255,220,120,${st.kickFlash / 10})`;
         ctx.beginPath();
-        ctx.arc(MECH_KICK_X + 18 - cam, GROUND_Y - 16, 22, 0, Math.PI * 2);
+        ctx.arc(flashX, GROUND_Y - 16, 22, 0, Math.PI * 2);
         ctx.fill();
       }
 
+      ctx.restore();
+
       if (st.phase === PHASE.FLIGHT || st.phase === PHASE.LANDED) {
-        const dist = Math.floor(st.distance);
-        const parts = formatDistanceParts(dist);
-        const grow = Math.min(4.2, 1.15 + dist / 900);
-        const fontPx = Math.floor(26 * grow);
-        const pulse = parts.pulse
-          ? 0.72 + 0.28 * Math.sin(st.frame * 0.22)
-          : 1;
-        const pulseScale = parts.pulse
-          ? 1 + 0.06 * Math.sin(st.frame * 0.22)
-          : 1;
-        ctx.save();
-        ctx.globalAlpha = pulse;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.translate(W * 0.5, 78 + Math.min(36, grow * 8));
-        ctx.scale(pulseScale, pulseScale);
-        ctx.font = `800 ${fontPx}px system-ui, Segoe UI, sans-serif`;
-        ctx.lineWidth = Math.max(3, fontPx * 0.08);
-        ctx.strokeStyle = 'rgba(11,18,32,0.55)';
-        ctx.fillStyle = parts.pulse
-          ? '#fbbf24'
-          : (dist > (st.best || 0) && st.phase === PHASE.FLIGHT ? '#fde68a' : '#ffffff');
-        const full = `${parts.label}${parts.bangs}`;
-        ctx.strokeText(full, 0, 0);
-        ctx.fillText(full, 0, 0);
+        drawTopStatsBar(ctx, st);
         if (st.phase === PHASE.LANDED) {
-          ctx.globalAlpha = 1;
+          const dist = Math.floor(st.distance);
+          const parts = formatDistanceParts(dist);
+          ctx.save();
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
           ctx.font = '600 14px system-ui, sans-serif';
-          ctx.fillStyle = 'rgba(226,232,240,0.9)';
+          ctx.fillStyle = parts.negative
+            ? 'rgba(252,165,165,0.95)'
+            : 'rgba(226,232,240,0.9)';
           ctx.fillText(
-            dist >= st.best ? 'New best!' : `Best ${formatDistance(st.best)}`,
-            0,
-            fontPx * 0.55,
+            parts.negative
+              ? 'Back behind the start…'
+              : (dist >= st.best ? 'New best!' : `Best ${formatDistance(st.best)}`),
+            W * 0.5,
+            STAT_BAR_H + 22,
           );
+          ctx.restore();
         }
-        ctx.restore();
+      }
+
+      if (st.phase === PHASE.FLIGHT || st.phase === PHASE.LANDED) {
+        drawHitTally(ctx, st);
       }
 
       if (st.phase === PHASE.POWER || st.phase === PHASE.ANGLE) {
         const meterX = 24;
-        const meterY = 56;
+        const meterY = STAT_BAR_H + 12;
         ctx.fillStyle = 'rgba(11,18,32,0.75)';
         ctx.beginPath();
         ctx.roundRect(meterX, meterY, 200, 56, 8);
@@ -1267,15 +2137,34 @@ function ToolboxKickGame({
         doSpace();
         return;
       }
+      if (!devCheatsRef.current) return;
       if (e.key === 'y' || e.key === 'Y' || e.code === 'KeyY') {
         if (e.repeat) return;
         e.preventDefault();
         doCheatY();
+        return;
+      }
+      if (e.key === 'u' || e.key === 'U' || e.code === 'KeyU') {
+        if (e.repeat) return;
+        e.preventDefault();
+        doCheatU();
+        return;
+      }
+      if (e.key === 'm' || e.key === 'M' || e.code === 'KeyM') {
+        if (e.repeat) return;
+        e.preventDefault();
+        doCheatSpawn('macan');
+        return;
+      }
+      if (e.key === 'l' || e.key === 'L' || e.code === 'KeyL') {
+        if (e.repeat) return;
+        e.preventDefault();
+        doCheatSpawn('littleDick');
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [doSpace, doCheatY]);
+  }, [doSpace, doCheatY, doCheatU, doCheatSpawn]);
 
   return (
     <div className="space-y-3">
@@ -1286,12 +2175,6 @@ function ToolboxKickGame({
             Attempt{' '}
             <span className="text-orange-200 font-semibold tabular-nums">
               {hud.attempt || 1}/{mode === 'allOrNothing' ? 1 : MAX_ATTEMPTS}
-            </span>
-          </span>
-          <span>
-            Distance{' '}
-            <span className={`text-slate-100 font-semibold tabular-nums ${hud.distance >= 10000 ? 'animate-pulse text-amber-200' : ''}`}>
-              {formatDistance(hud.distance)}
             </span>
           </span>
           <span>
@@ -1309,13 +2192,29 @@ function ToolboxKickGame({
         </div>
       </div>
 
-      <div className="relative overflow-hidden rounded-xl border border-[#1a2540] bg-[#0b1220]">
+      <div
+        ref={stageRef}
+        className="relative overflow-hidden rounded-xl border border-[#1a2540] bg-[#0b1220] [&:fullscreen]:flex [&:fullscreen]:items-center [&:fullscreen]:justify-center [&:fullscreen]:rounded-none [&:fullscreen]:border-0 [&:fullscreen]:min-h-screen [&:fullscreen]:w-screen"
+      >
         <RpgPopup popup={popup} />
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            toggleFullscreen();
+          }}
+          className="absolute top-2 right-2 z-20 px-2.5 py-1.5 rounded-md text-xs font-medium border border-slate-500/40 bg-[#0b1220]/85 text-slate-200 hover:bg-white/10 backdrop-blur-sm"
+          aria-pressed={fullscreen}
+        >
+          {fullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+        </button>
         <canvas
           ref={canvasRef}
           width={W}
           height={H}
-          className="block w-full max-w-full touch-none cursor-pointer"
+          className={`block w-full max-w-full touch-none cursor-pointer${
+            fullscreen ? ' max-h-screen w-auto max-w-[min(100vw,calc(100vh*960/420))]' : ''
+          }`}
           style={{ imageRendering: 'auto' }}
           tabIndex={0}
           role="img"
@@ -1337,13 +2236,20 @@ function ToolboxKickGame({
           Space / tap action
         </button>
         {!competitive ? (
-          <button
-            type="button"
-            onClick={() => initShot({ keepBest: true, attempt: 1, freshRound: true })}
-            className="px-3 py-2 rounded-lg text-sm border border-[#1a2540] text-slate-300 hover:bg-white/[0.04]"
-          >
-            New round
-          </button>
+          <>
+            <button
+              type="button"
+              onClick={() => initShot({ keepBest: true, attempt: 1, freshRound: true })}
+              className="px-3 py-2 rounded-lg text-sm border border-[#1a2540] text-slate-300 hover:bg-white/[0.04]"
+            >
+              New round
+            </button>
+            {devCheats ? (
+              <p className="w-full text-xs text-slate-500">
+                Dev keys: Y perfect/smoker boost · U nudge · M Julies Car · L Little Dick
+              </p>
+            ) : null}
+          </>
         ) : null}
         {!competitive && typeof onChangeMode === 'function' ? (
           <button
@@ -1466,6 +2372,10 @@ export function ToolboxKickSandbox() {
           {' '}— Dev sandbox. Tap for power, then angle. Distance callouts head south from Northampton.
           Competitive Fun from <span className="text-white font-medium">{TOOLBOX_KICK_LIVE_FROM}</span>.
         </p>
+        <p className="text-xs text-amber-200/90">
+          Dev keys (sandbox only): Y · U · M spawn Julies Car · L spawn Little Dick.
+          Fullscreen button on the canvas.
+        </p>
         {!introOpen ? (
           <button
             type="button"
@@ -1483,6 +2393,7 @@ export function ToolboxKickSandbox() {
         <ToolboxKickGame
           key={mode}
           mode={mode}
+          devCheats
           onChangeMode={() => setMode(null)}
         />
       )}

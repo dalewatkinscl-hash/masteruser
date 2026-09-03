@@ -21,14 +21,13 @@ function normalizeMode(mode) {
 }
 
 function serializeToolboxKickGame(data = {}) {
-  const distanceM = Math.max(0, Math.floor(Number(data.distanceM) || 0));
   return {
     dayKey: data.dayKey || '',
     status: data.status || 'in_progress',
     mode: normalizeMode(data.mode),
-    distanceM,
+    distanceM: clampDistance(data.distanceM),
     attempts: Array.isArray(data.attempts)
-      ? data.attempts.map((n) => Math.max(0, Math.floor(Number(n) || 0)))
+      ? data.attempts.map((n) => clampDistance(n))
       : [],
     completedAt: data.completedAt?.toDate?.()?.toISOString?.() || data.completedAt || null,
   };
@@ -41,10 +40,13 @@ function compareToolboxKickRows(a, b) {
   return String(aAt).localeCompare(String(bAt));
 }
 
+/** Negative distances are valid — Little Dick can boot the toolbox back past the start. */
 function formatDistanceLabel(metres) {
-  const m = Math.max(0, Math.floor(Number(metres) || 0));
-  if (m < 1000) return `${m.toLocaleString('en-GB')} m`;
-  return `${(m / 1000).toFixed(1)} km`;
+  const raw = clampDistance(metres);
+  const m = Math.abs(raw);
+  const sign = raw < 0 ? '−' : '';
+  if (m < 1000) return `${sign}${m.toLocaleString('en-GB')} m`;
+  return `${sign}${(m / 1000).toFixed(1)} km`;
 }
 
 function toolboxKickResultLabel(row) {
@@ -53,8 +55,8 @@ function toolboxKickResultLabel(row) {
 
 function clampDistance(value) {
   const n = Math.floor(Number(value));
-  if (!Number.isFinite(n) || n < 0) return 0;
-  return Math.min(MAX_DISTANCE_M, n);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(-MAX_DISTANCE_M, Math.min(MAX_DISTANCE_M, n));
 }
 
 module.exports = {
