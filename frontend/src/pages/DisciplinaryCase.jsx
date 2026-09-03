@@ -112,6 +112,8 @@ export default function DisciplinaryCase() {
   const [sharePointFolderConfirmed, setSharePointFolderConfirmed] = useState(false);
   const [documentTemplates, setDocumentTemplates] = useState([]);
   const [missingDocuments, setMissingDocuments] = useState([]);
+  const [informalHistory, setInformalHistory] = useState([]);
+  const [informalHistoryLoading, setInformalHistoryLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadType, setUploadType] = useState('evidence');
   const [closeNotes, setCloseNotes] = useState('');
@@ -293,6 +295,15 @@ export default function DisciplinaryCase() {
         ? prev.title
         : (employee?.fullName ? `Case: ${employee.fullName}` : prev.title),
     }));
+    setInformalHistory([]);
+    if (uid) {
+      setInformalHistoryLoading(true);
+      fetch(`/api/getEmployeeInformalHistory?employeeUid=${encodeURIComponent(uid)}`, { credentials: 'include' })
+        .then((r) => readJsonResponse(r).then((d) => ({ ok: r.ok, d })))
+        .then(({ ok, d }) => { if (ok) setInformalHistory((d || {}).items || []); })
+        .catch(() => {})
+        .finally(() => setInformalHistoryLoading(false));
+    }
   };
 
   const apiUpdate = async (body) => {
@@ -1786,6 +1797,49 @@ export default function DisciplinaryCase() {
                     This records your initial approach. Informal resolution is decided later on the case, after interviews and notes.
                   </p>
                 </div>
+
+                {form.employeeUid && (
+                  <div className="rounded-lg border border-[#1a2540] bg-[#060e1a]/60 p-3 space-y-2">
+                    <p className="text-xs uppercase tracking-wide text-slate-500">
+                      Informal resolutions — past 12 months
+                    </p>
+                    {informalHistoryLoading && (
+                      <p className="text-xs text-slate-400">Loading…</p>
+                    )}
+                    {!informalHistoryLoading && informalHistory.length === 0 && (
+                      <p className="text-xs text-slate-400">None on record in the last 12 months.</p>
+                    )}
+                    {!informalHistoryLoading && informalHistory.length > 0 && (
+                      <ul className="space-y-2">
+                        {informalHistory.map((item) => {
+                          const outcomeLabels = {
+                            informal_action: 'Informal action',
+                            file_note_for_improvement: 'File note for improvement',
+                            no_further_action: 'No further action',
+                            verbal_warning: 'Verbal warning',
+                            written_warning: 'Written warning',
+                            final_written_warning: 'Final written warning',
+                          };
+                          const dateStr = item.closedAt
+                            ? String(item.closedAt).slice(0, 10).split('-').reverse().join('/')
+                            : '—';
+                          const detail = item.informalActionDetails || item.fileNoteReason || item.closeNotes || '';
+                          return (
+                            <li key={item.id} className="text-xs border-l-2 border-amber-500/30 pl-2.5 space-y-0.5">
+                              <p className="text-amber-200 font-medium">
+                                {outcomeLabels[item.outcomePreset] || item.outcomePreset}
+                                <span className="text-slate-400 font-normal"> · {dateStr}</span>
+                              </p>
+                              <p className="text-slate-300 truncate">{item.title}</p>
+                              {detail && <p className="text-slate-500 line-clamp-2">{detail}</p>}
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
+                  </div>
+                )}
+
                 <div className="space-y-3">
                   {INFORMAL_RESOLUTION_OPTIONS.map((option) => (
                     <label

@@ -2092,6 +2092,70 @@ function createPeopleCasesApi({
     }),
   );
 
+  const getEmployeeInformalHistory = onRequest(
+    { region: 'europe-west2' },
+    withCors(async (req, res) => {
+      if (req.method !== 'GET') {
+        res.status(405).json({ error: 'Method not allowed.' });
+        return;
+      }
+      const session = await getVerifiedSessionUser(req);
+      if (!assertManager(session, res)) return;
+
+      const employeeUid = toTrimmedString(req.query?.employeeUid);
+      if (!employeeUid) {
+        res.status(400).json({ error: 'employeeUid is required.' });
+        return;
+      }
+
+      try {
+        const cutoff = new Date();
+        cutoff.setFullYear(cutoff.getFullYear() - 1);
+        const cutoffIso = cutoff.toISOString();
+
+        const snap = await db.collection('disciplinary_cases')
+          .where('employeeUid', '==', employeeUid)
+          .where('stage', '==', 'closed')
+          .get();
+
+        const INFORMAL_OUTCOMES = new Set([
+          'informal_action',
+          'file_note_for_improvement',
+          'no_further_action',
+          'verbal_warning',
+          'written_warning',
+          'final_written_warning',
+        ]);
+
+        const items = snap.docs
+          .map((doc) => serializeCase(doc))
+          .filter((item) => {
+            if (!item.outcomePreset || !INFORMAL_OUTCOMES.has(item.outcomePreset)) return false;
+            const closedAt = item.closedAt || item.updatedAt || item.createdAt || '';
+            return String(closedAt) >= cutoffIso;
+          })
+          .sort((a, b) => String(b.closedAt || b.createdAt || '').localeCompare(String(a.closedAt || a.createdAt || '')))
+          .map((item) => ({
+            id: item.id,
+            title: item.title || '',
+            processFamily: item.processFamily || 'disciplinary',
+            caseType: item.caseType || '',
+            outcomePreset: item.outcomePreset,
+            closeNotes: item.closeNotes || '',
+            informalActionDetails: item.informalActionDetails || '',
+            closedAt: item.closedAt || item.updatedAt || '',
+            informalResolutionPath: item.informalResolutionPath || '',
+            fileNoteReason: item.fileNoteReason || '',
+          }));
+
+        res.status(200).json({ items });
+      } catch (error) {
+        console.error('getEmployeeInformalHistory failed', error);
+        res.status(500).json({ error: 'Failed to load informal history.' });
+      }
+    }),
+  );
+
   const deletePeopleCase = onRequest(
     { region: 'europe-west2' },
     withCors(async (req, res) => {
@@ -2144,6 +2208,7 @@ function createPeopleCasesApi({
     exportPeopleCase,
     clearExpiredWarnings,
     deletePeopleCase,
+    getEmployeeInformalHistory,
     DOCUMENT_TYPES,
   };
 }

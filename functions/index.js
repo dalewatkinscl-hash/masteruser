@@ -3815,6 +3815,7 @@ exports.submitBumpCard = peopleCasesApi.submitBumpCard;
 exports.exportPeopleCase = peopleCasesApi.exportPeopleCase;
 exports.clearExpiredWarnings = peopleCasesApi.clearExpiredWarnings;
 exports.deletePeopleCase = peopleCasesApi.deletePeopleCase;
+exports.getEmployeeInformalHistory = peopleCasesApi.getEmployeeInformalHistory;
 exports.downloadCaseDocumentTemplate = peopleCasesApi.downloadCaseDocumentTemplate;
 
 // GET → verify SharePoint connectivity and return the resolved folder path for an employee.

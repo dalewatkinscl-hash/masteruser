@@ -277,6 +277,11 @@
         "region": "europe-west2"
       },
       {
+        "source": "/api/getEmployeeInformalHistory",
+        "function": "getEmployeeInformalHistory",
+        "region": "europe-west2"
+      },
+      {
         "source": "/api/getSharePointDisciplinaryPath",
         "function": "getSharePointDisciplinaryPath",
         "region": "europe-west2"
