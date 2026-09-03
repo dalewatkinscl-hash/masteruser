@@ -1831,13 +1831,21 @@ export default function DisciplinaryCase() {
                             : '—';
                           const detail = item.informalActionDetails || item.fileNoteReason || item.closeNotes || '';
                           return (
-                            <li key={item.id} className="text-xs border-l-2 border-amber-500/30 pl-2.5 space-y-0.5">
-                              <p className="text-amber-200 font-medium">
-                                {outcomeLabels[item.outcomePreset] || item.outcomePreset}
-                                <span className="text-slate-400 font-normal"> · {dateStr}</span>
-                              </p>
-                              <p className="text-slate-300 truncate">{item.title}</p>
-                              {detail && <p className="text-slate-500 line-clamp-2">{detail}</p>}
+                            <li key={item.id}>
+                              <a
+                                href={`/dashboard/cases/${item.id}`}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="block text-xs border-l-2 border-amber-500/30 pl-2.5 space-y-0.5 hover:border-amber-400/70 hover:bg-amber-500/5 rounded-r-md pr-1 py-0.5 transition-colors"
+                              >
+                                <p className="text-amber-200 font-medium">
+                                  {outcomeLabels[item.outcomePreset] || item.outcomePreset}
+                                  <span className="text-slate-400 font-normal"> · {dateStr}</span>
+                                  <span className="text-slate-600 ml-1">↗</span>
+                                </p>
+                                <p className="text-slate-300 truncate">{item.title}</p>
+                                {detail && <p className="text-slate-500 line-clamp-2">{detail}</p>}
+                              </a>
                             </li>
                           );
                         })}
