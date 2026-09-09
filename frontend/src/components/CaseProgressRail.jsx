@@ -40,6 +40,11 @@ export default function CaseProgressRail({
       <div>
         <p className="text-xs uppercase text-slate-500 mb-1">Case progress</p>
         <p className="text-xs text-slate-400">Click a stage to view dates, choices, and who actioned them.</p>
+        {!stages.includes('hearing_invite') && !stages.includes('hearing') && !stages.includes('outcome_pack') && (
+          <p className="text-xs text-amber-200/90 mt-1">
+            Resolved without a formal hearing — hearing invite, hearing, and outcome pack steps do not apply.
+          </p>
+        )}
       </div>
 
       <ol className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">

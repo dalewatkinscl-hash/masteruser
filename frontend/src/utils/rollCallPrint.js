@@ -1,3 +1,5 @@
+import { groupEmployees, sortEmployees } from './employeeDirectory';
+
 function escapeHtml(value) {
   return String(value || '')
     .replace(/&/g, '&amp;')
@@ -14,7 +16,44 @@ function getPrintFontSize(count, includeSignature) {
   return 8;
 }
 
-export function buildRollCallHtml({ title, employees, includeSignature }) {
+function buildEmployeeRow(employee, includeSignature) {
+  const name = escapeHtml(employee.fullName || employee.email || 'Unknown');
+  const signatureCell = includeSignature
+    ? '<td class="signature"></td>'
+    : '';
+
+  return `
+      <tr>
+        <td class="tick">&#9744;</td>
+        <td class="name">${name}</td>
+        ${signatureCell}
+      </tr>
+    `;
+}
+
+function buildGroupedRows(employees, groupBy, includeSignature, colSpan) {
+  const groups = groupEmployees(
+    sortEmployees(employees, 'name', 'asc'),
+    groupBy,
+  ).filter((group) => group.employees.length > 0);
+
+  return groups.map((group) => {
+    const header = `
+      <tr class="group-header">
+        <td colspan="${colSpan}">
+          ${escapeHtml(group.label)}
+          <span class="group-count">(${group.employees.length})</span>
+        </td>
+      </tr>
+    `;
+    const rows = group.employees
+      .map((employee) => buildEmployeeRow(employee, includeSignature))
+      .join('');
+    return header + rows;
+  }).join('');
+}
+
+export function buildRollCallHtml({ title, employees, includeSignature, groupBy = '' }) {
   const safeTitle = escapeHtml(title?.trim() || 'Roll call');
   const dateLabel = new Date().toLocaleDateString('en-GB', {
     weekday: 'long',
@@ -24,21 +63,14 @@ export function buildRollCallHtml({ title, employees, includeSignature }) {
   });
   const fontSize = getPrintFontSize(employees.length, includeSignature);
   const rowPadding = includeSignature ? '7px 0' : '5px 0';
+  const colSpan = includeSignature ? 3 : 2;
+  const useGroups = Boolean(groupBy);
 
-  const rows = employees.map((employee) => {
-    const name = escapeHtml(employee.fullName || employee.email || 'Unknown');
-    const signatureCell = includeSignature
-      ? '<td class="signature"></td>'
-      : '';
-
-    return `
-      <tr>
-        <td class="tick">&#9744;</td>
-        <td class="name">${name}</td>
-        ${signatureCell}
-      </tr>
-    `;
-  }).join('');
+  const rows = useGroups
+    ? buildGroupedRows(employees, groupBy, includeSignature, colSpan)
+    : sortEmployees(employees, 'name', 'asc')
+      .map((employee) => buildEmployeeRow(employee, includeSignature))
+      .join('');
 
   const signatureHeader = includeSignature
     ? '<th class="signature">Signature</th>'
@@ -97,6 +129,24 @@ export function buildRollCallHtml({ title, employees, includeSignature }) {
         width: 40%;
         min-height: 18px;
       }
+      tr.group-header td {
+        padding: ${includeSignature ? '16px 0 8px' : '14px 0 7px'};
+        border-bottom: 2px solid #333;
+        font-weight: 700;
+        font-size: ${Math.min(fontSize + 4, 14)}pt;
+        letter-spacing: 0.01em;
+        color: #111;
+        background: #f3f3f3;
+      }
+      tr.group-header:not(:first-child) td {
+        padding-top: ${includeSignature ? '22px' : '20px'};
+      }
+      tr.group-header .group-count {
+        font-weight: 400;
+        font-size: ${Math.min(fontSize + 1, 11)}pt;
+        color: #555;
+        margin-left: 8px;
+      }
       tr:last-child td {
         border-bottom: none;
       }
@@ -136,8 +186,8 @@ function removePrintFrame(iframe) {
   }, 1000);
 }
 
-export function printRollCall({ title, employees, includeSignature }) {
-  const html = buildRollCallHtml({ title, employees, includeSignature });
+export function printRollCall({ title, employees, includeSignature, groupBy = '' }) {
+  const html = buildRollCallHtml({ title, employees, includeSignature, groupBy });
 
   return new Promise((resolve, reject) => {
     const iframe = document.createElement('iframe');

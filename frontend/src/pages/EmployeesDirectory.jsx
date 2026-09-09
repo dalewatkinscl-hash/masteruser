@@ -571,6 +571,13 @@ export default function EmployeesDirectory() {
           >
             Birthdays and anniversaries
           </button>
+          <button
+            type="button"
+            onClick={() => navigate('/dashboard/roll-calls')}
+            className="px-4 py-2.5 rounded-lg border border-[#1a2540] text-slate-200 text-sm font-medium hover:bg-[#0b1220] transition-colors"
+          >
+            Roll calls
+          </button>
           {isAdmin && (
             <>
               <button
@@ -699,7 +706,7 @@ export default function EmployeesDirectory() {
           disabled={selectedEmployees.length === 0}
           className="px-4 py-2.5 rounded-lg text-sm font-medium bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed text-white transition-colors"
         >
-          Generate printable roll call
+          Generate roll call
         </button>
       </div>
 
@@ -759,7 +766,8 @@ export default function EmployeesDirectory() {
 
       {showRollCallModal && (
         <RollCallModal
-          employees={sortEmployees(selectedEmployees, 'name', 'asc')}
+          employees={selectedEmployees}
+          groupBy={groupBy}
           onClose={() => setShowRollCallModal(false)}
         />
       )}

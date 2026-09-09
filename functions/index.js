@@ -33,6 +33,7 @@ const {
   resolveBusinessContactEmail,
 } = require('./employeeProfile');
 const { createPeopleCasesApi } = require('./peopleCasesApi');
+const { createRollCallListsApi } = require('./rollCallLists');
 const { canManageCases } = require('./peopleCases');
 const {
   getLondonDayKey,
@@ -61,6 +62,7 @@ const {
 const {
   getLondonDayKey: getWordleDayKey,
   getAnswerForDay,
+  getTrapAnswerForDay,
   isValidGuess,
   evaluateGuess,
   normalizeWord,
@@ -157,6 +159,29 @@ const {
   TOOLBOX_KICK_LIVE_FROM,
 } = require('./toolboxKick');
 const {
+  getLondonDayKey: getCoinFlipDayKey,
+  serializeCoinFlipGame,
+  compareCoinFlipRows,
+  coinFlipResultLabel,
+  clampStreak: clampCoinFlipStreak,
+  clampRunsUsed: clampCoinFlipRunsUsed,
+  COIN_FLIP_LIVE_FROM,
+  MAX_RUNS: COIN_FLIP_MAX_RUNS,
+} = require('./coinFlip');
+const {
+  getLondonDayKey: getWantedDayKey,
+  serializeWantedGame,
+  compareWantedRows,
+  wantedResultLabel,
+  clampTimeMs: clampWantedTimeMs,
+  clampPenalties: clampWantedPenalties,
+  normalizeChallenge: normalizeWantedChallenge,
+  gradeForTimeMs: wantedGradeForTimeMs,
+  gradeForCombinedTimeMs: wantedGradeForCombinedTimeMs,
+  WANTED_LIVE_FROM,
+  PENALTY_MS: WANTED_PENALTY_MS,
+} = require('./wanted');
+const {
   recordFunStreakWin,
   recordFunStreakFail,
   loadFunStreaks,
@@ -167,6 +192,9 @@ const {
   assertFunGamePlayable,
   FUN_GAME_ROSTER,
   ROTATION_START_DAY_KEY,
+  loadFunRotationSettings,
+  saveFunRotationSettings,
+  getDefaultRotationSettings,
 } = require('./funRotation');
 const {
   listFunContent,
@@ -2557,7 +2585,7 @@ exports.getEmployeeProfiles = onRequest(
     try {
       const snapshot = await db.collection('users').get();
       const employees = snapshot.docs
-        .map((doc) => buildEmployeeProfileResponse({ uid: doc.id, ...doc.data() }))
+        .map((doc) => buildEmployeeProfileResponse({ ...doc.data(), uid: doc.id }))
         .sort((a, b) => (a.fullName || a.email).localeCompare(b.fullName || b.email));
 
       if (session.verified?.sessionCookie) {
@@ -3197,7 +3225,7 @@ exports.adminRunHrMilestoneAlerts = onRequest(
   }),
 );
 
-// GET → disciplinary case summaries for HR managers/admins and master admins.
+// GET → disciplinary case summaries. Requires an explicit People Cases role.
 exports.getDisciplinaryCases = onRequest(
   { region: 'europe-west2' },
   withCors(async (req, res) => {
@@ -3212,11 +3240,8 @@ exports.getDisciplinaryCases = onRequest(
       return;
     }
 
-    if (
-      !canViewAllEmployeeProfiles(session.profile, getEffectivePortalRole)
-      && !canManageCases(session.profile, getEffectivePortalRole)
-    ) {
-      res.status(403).json({ error: 'Insufficient access.' });
+    if (!canManageCases(session.profile, getEffectivePortalRole)) {
+      res.status(403).json({ error: 'Cases manager access required.' });
       return;
     }
 
@@ -3266,11 +3291,8 @@ exports.getDisciplinaryCase = onRequest(
       return;
     }
 
-    if (
-      !canViewAllEmployeeProfiles(session.profile, getEffectivePortalRole)
-      && !canManageCases(session.profile, getEffectivePortalRole)
-    ) {
-      res.status(403).json({ error: 'Insufficient access.' });
+    if (!canManageCases(session.profile, getEffectivePortalRole)) {
+      res.status(403).json({ error: 'Cases manager access required.' });
       return;
     }
 
@@ -3339,11 +3361,8 @@ exports.createDisciplinaryCase = onRequest(
       return;
     }
 
-    if (
-      !canViewAllEmployeeProfiles(session.profile, getEffectivePortalRole)
-      && !canManageCases(session.profile, getEffectivePortalRole)
-    ) {
-      res.status(403).json({ error: 'Insufficient access.' });
+    if (!canManageCases(session.profile, getEffectivePortalRole)) {
+      res.status(403).json({ error: 'Cases manager access required.' });
       return;
     }
 
@@ -3571,11 +3590,8 @@ exports.uploadDisciplinaryDocument = onRequest(
       return;
     }
 
-    if (
-      !canViewAllEmployeeProfiles(session.profile, getEffectivePortalRole)
-      && !canManageCases(session.profile, getEffectivePortalRole)
-    ) {
-      res.status(403).json({ error: 'Insufficient access.' });
+    if (!canManageCases(session.profile, getEffectivePortalRole)) {
+      res.status(403).json({ error: 'Cases manager access required.' });
       return;
     }
 
@@ -3809,6 +3825,7 @@ exports.respondCaseMinutes = peopleCasesApi.respondCaseMinutes;
 exports.createCaseReview = peopleCasesApi.createCaseReview;
 exports.completeCaseReview = peopleCasesApi.completeCaseReview;
 exports.getEmployeeCaseActions = peopleCasesApi.getEmployeeCaseActions;
+exports.downloadEmployeeCaseDocument = peopleCasesApi.downloadEmployeeCaseDocument;
 exports.signFileNoteDocument = peopleCasesApi.signFileNoteDocument;
 exports.createBumpCardPrompt = peopleCasesApi.createBumpCardPrompt;
 exports.submitBumpCard = peopleCasesApi.submitBumpCard;
@@ -3817,6 +3834,23 @@ exports.clearExpiredWarnings = peopleCasesApi.clearExpiredWarnings;
 exports.deletePeopleCase = peopleCasesApi.deletePeopleCase;
 exports.getEmployeeInformalHistory = peopleCasesApi.getEmployeeInformalHistory;
 exports.downloadCaseDocumentTemplate = peopleCasesApi.downloadCaseDocumentTemplate;
+
+const rollCallListsApi = createRollCallListsApi({
+  admin,
+  db,
+  onRequest,
+  withCors,
+  getVerifiedSessionUser,
+  getEffectivePortalRole,
+  canViewAllEmployeeProfiles,
+});
+
+exports.getRollCallLists = rollCallListsApi.getRollCallLists;
+exports.getRollCallList = rollCallListsApi.getRollCallList;
+exports.createRollCallList = rollCallListsApi.createRollCallList;
+exports.updateRollCallList = rollCallListsApi.updateRollCallList;
+exports.setRollCallMemberTick = rollCallListsApi.setRollCallMemberTick;
+exports.deleteRollCallList = rollCallListsApi.deleteRollCallList;
 
 // GET → verify SharePoint connectivity and return the resolved folder path for an employee.
 exports.getSharePointDisciplinaryPath = onRequest(
@@ -3833,11 +3867,8 @@ exports.getSharePointDisciplinaryPath = onRequest(
       return;
     }
 
-    if (
-      !canViewAllEmployeeProfiles(session.profile, getEffectivePortalRole)
-      && !canManageCases(session.profile, getEffectivePortalRole)
-    ) {
-      res.status(403).json({ error: 'Insufficient access.' });
+    if (!canManageCases(session.profile, getEffectivePortalRole)) {
+      res.status(403).json({ error: 'Cases manager access required.' });
       return;
     }
 
@@ -4158,7 +4189,8 @@ function parseSandboxFlag(req) {
  * Sandbox / practice / admin preview skip the gate.
  * Soft GETs return a closed payload for weekends and sit-outs instead of throwing.
  */
-function enforceFunGameAccess(gameKey, { dayKey, practice, sandbox }, { softWeekend = false } = {}) {
+async function enforceFunGameAccess(gameKey, { dayKey, practice, sandbox }, { softWeekend = false } = {}) {
+  await loadFunRotationSettings(db);
   if (sandbox || practice) {
     return { closed: false, rotation: getFunRotationForDay(dayKey) };
   }
@@ -4296,7 +4328,7 @@ exports.getDailyTrivia = onRequest(
         sandbox: sandbox && isAdmin,
         allowFuturePreview: sandbox && isAdmin,
       });
-      const access = enforceFunGameAccess('trivia', {
+      const access = await enforceFunGameAccess('trivia', {
         dayKey,
         practice,
         sandbox: sandbox && isAdmin,
@@ -4393,7 +4425,7 @@ exports.submitTriviaAnswer = onRequest(
         sandbox,
         allowFuturePreview: sandbox,
       });
-      enforceFunGameAccess('trivia', { dayKey, practice, sandbox });
+      await enforceFunGameAccess('trivia', { dayKey, practice, sandbox });
       const question = await resolveTriviaQuestion(dayKey);
 
       // Past-day practice: grade only — never write leaderboard/streak data.
@@ -5104,8 +5136,94 @@ function serializeWordleGame(data = {}, { includeAnswer = false, answer = '' } =
     maxGuesses: MAX_GUESSES,
     guessCount: Array.isArray(data.guesses) ? data.guesses.length : 0,
     answer: includeAnswer && finished ? answer || data.answer || null : null,
+    failReason: data.failReason || null,
     completedAt: data.completedAt?.toDate?.()?.toISOString?.() || null,
   };
+}
+
+function isWordleSuspectProfile(profile = {}) {
+  return profile?.funFlags?.wordleSuspect === true;
+}
+
+async function listWordleSuspectRecords() {
+  const snap = await db.collection('fun_wordle_suspects').limit(200).get().catch(() => ({ docs: [] }));
+  return snap.docs.map((doc) => {
+    const data = doc.data() || {};
+    return {
+      uid: data.uid || doc.id,
+      fullName: data.fullName || 'Colleague',
+      email: data.email || '',
+      markedAt: data.markedAt?.toDate?.()?.toISOString?.() || data.markedAt || null,
+      markedByUid: data.markedByUid || '',
+      markedByName: data.markedByName || '',
+    };
+  }).sort((a, b) => String(a.fullName).localeCompare(String(b.fullName)));
+}
+
+async function listWordleSuspectUids() {
+  const records = await listWordleSuspectRecords();
+  return records.map((row) => row.uid).filter(Boolean);
+}
+
+/**
+ * Resolve the answer this player should be scored against.
+ * Suspects get a trap word; lock it onto the game doc once play starts.
+ */
+function resolveWordlePlayAnswer({ dayKey, uid, profile, existingGame = null, practice = false, sandbox = false }) {
+  const realAnswer = getAnswerForDay(dayKey);
+  if (practice || sandbox) {
+    return {
+      answer: realAnswer,
+      realAnswer,
+      isSuspect: false,
+      isTrapGame: false,
+    };
+  }
+  if (existingGame?.effectiveAnswer && String(existingGame.effectiveAnswer).length === 5) {
+    const locked = normalizeWord(existingGame.effectiveAnswer);
+    return {
+      answer: locked,
+      realAnswer,
+      isSuspect: Boolean(existingGame.isSuspectGame),
+      isTrapGame: Boolean(existingGame.isSuspectGame) || locked !== realAnswer,
+    };
+  }
+  // Already started against the public word before trap locking existed / before flagging.
+  const priorGuesses = Array.isArray(existingGame?.guesses) ? existingGame.guesses.length : 0;
+  if (priorGuesses > 0) {
+    return {
+      answer: realAnswer,
+      realAnswer,
+      isSuspect: false,
+      isTrapGame: false,
+    };
+  }
+  const isSuspect = isWordleSuspectProfile(profile);
+  if (!isSuspect) {
+    return {
+      answer: realAnswer,
+      realAnswer,
+      isSuspect: false,
+      isTrapGame: false,
+    };
+  }
+  const trapAnswer = getTrapAnswerForDay(dayKey, uid);
+  return {
+    answer: trapAnswer,
+    realAnswer,
+    isSuspect: true,
+    isTrapGame: true,
+  };
+}
+
+async function buildWordleForbiddenGuesses(dayKey, uid, realAnswer) {
+  const forbidden = new Set([normalizeWord(realAnswer)]);
+  const suspectUids = await listWordleSuspectUids();
+  for (const otherUid of suspectUids) {
+    if (!otherUid || otherUid === uid) continue;
+    forbidden.add(getTrapAnswerForDay(dayKey, otherUid));
+  }
+  return forbidden;
 }
 
 async function buildWordleLeaderboard(dayKey) {
@@ -5122,6 +5240,7 @@ async function buildWordleLeaderboard(dayKey) {
       fullName: data.fullName || 'Colleague',
       status: data.status || 'in_progress',
       guessCount: Array.isArray(data.guesses) ? data.guesses.length : data.guessCount || 6,
+      failReason: data.failReason || null,
       completedAt: data.completedAt?.toDate?.()?.toISOString?.() || null,
       updatedAt: data.updatedAt?.toDate?.()?.toISOString?.() || null,
     };
@@ -5169,8 +5288,11 @@ async function buildWordleLeaderboard(dayKey) {
     fullName: row.fullName,
     status: row.status,
     guessCount: row.guessCount,
+    failReason: row.failReason || null,
     completedAt: row.completedAt,
-    resultLabel: row.status === 'won' ? `${row.guessCount}/6` : '💩 Failed',
+    resultLabel: row.status === 'won'
+      ? `${row.guessCount}/6`
+      : (row.failReason === 'cheat_caught' ? '💩 Caught' : '💩 Failed'),
   }));
 }
 
@@ -5196,7 +5318,7 @@ exports.getDailyWordle = onRequest(
         sandbox,
         allowFuturePreview: sandbox,
       });
-      const access = enforceFunGameAccess('wordle', { dayKey, practice, sandbox }, { softWeekend: true });
+      const access = await enforceFunGameAccess('wordle', { dayKey, practice, sandbox }, { softWeekend: true });
       if (access.closed) {
         res.status(200).json({
           ...funAccessClosedPayload(dayKey, access),
@@ -5205,7 +5327,6 @@ exports.getDailyWordle = onRequest(
         });
         return;
       }
-      const answer = getAnswerForDay(dayKey);
       const leaderboard = practice ? [] : await buildWordleLeaderboard(dayKey);
 
       let data = {
@@ -5221,11 +5342,20 @@ exports.getDailyWordle = onRequest(
         if (snap.exists) data = snap.data();
       }
 
+      const play = resolveWordlePlayAnswer({
+        dayKey,
+        uid: session.profile.uid,
+        profile: session.profile,
+        existingGame: data,
+        practice,
+        sandbox,
+      });
+
       res.status(200).json({
         practice,
         weekend: false,
         rotation: access.rotation,
-        game: serializeWordleGame(data, { includeAnswer: true, answer }),
+        game: serializeWordleGame(data, { includeAnswer: true, answer: play.answer }),
         leaderboard,
         totalSolved: countLeaderboardRows(leaderboard, 'won'),
         totalFailed: countLeaderboardRows(leaderboard, 'lost'),
@@ -5265,11 +5395,12 @@ exports.submitWordleGuess = onRequest(
         sandbox,
         allowFuturePreview: sandbox,
       });
-      enforceFunGameAccess('wordle', { dayKey, practice, sandbox });
-      const answer = getAnswerForDay(dayKey);
+      await enforceFunGameAccess('wordle', { dayKey, practice, sandbox });
 
       // Practice: client holds board state via priorGuesses — no Firestore writes.
+      // Sandbox/practice always uses the public shared word.
       if (practice) {
+        const answer = getAnswerForDay(dayKey);
         const priorGuesses = Array.isArray(req.body?.priorGuesses)
           ? req.body.priorGuesses.map(normalizeWord).filter((word) => word.length === 5)
           : [];
@@ -5320,6 +5451,17 @@ exports.submitWordleGuess = onRequest(
             createdAt: admin.firestore.FieldValue.serverTimestamp(),
           };
 
+      const play = resolveWordlePlayAnswer({
+        dayKey,
+        uid: session.profile.uid,
+        profile: session.profile,
+        existingGame: current,
+        practice: false,
+        sandbox,
+      });
+      const answer = play.answer;
+      const realAnswer = play.realAnswer;
+
       if (current.status === 'won' || current.status === 'lost') {
         const leaderboard = await buildWordleLeaderboard(dayKey);
         res.status(200).json({
@@ -5343,14 +5485,24 @@ exports.submitWordleGuess = onRequest(
         return;
       }
 
+      let cheatCaught = false;
+      if (play.isSuspect || play.isTrapGame) {
+        const forbidden = await buildWordleForbiddenGuesses(dayKey, session.profile.uid, realAnswer);
+        // Own trap is the real win condition — never treat it as forbidden.
+        forbidden.delete(answer);
+        if (forbidden.has(guess)) {
+          cheatCaught = true;
+        }
+      }
+
       const evaluation = evaluateGuess(guess, answer);
       guesses.push(guess);
       const previousEvaluations = Array.isArray(current.evaluations)
         ? current.evaluations.map(encodeWordleEvaluation)
         : [];
       const evaluations = [...previousEvaluations, encodeWordleEvaluation(evaluation)];
-      const won = guess === answer;
-      const lost = !won && guesses.length >= MAX_GUESSES;
+      const won = !cheatCaught && guess === answer;
+      const lost = cheatCaught || (!won && guesses.length >= MAX_GUESSES);
       const status = won ? 'won' : lost ? 'lost' : 'in_progress';
 
       const next = {
@@ -5362,10 +5514,16 @@ exports.submitWordleGuess = onRequest(
         evaluations,
         status,
         guessCount: guesses.length,
+        effectiveAnswer: answer,
+        isSuspectGame: Boolean(play.isTrapGame),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       };
       if (!existing.exists) {
         next.createdAt = admin.firestore.FieldValue.serverTimestamp();
+      }
+      if (cheatCaught) {
+        next.failReason = 'cheat_caught';
+        next.cheatCaughtGuess = guess;
       }
       if (won || lost) {
         next.completedAt = admin.firestore.FieldValue.serverTimestamp();
@@ -5591,7 +5749,7 @@ exports.getDailySokoban = onRequest(
         allowFuturePreview: isAdmin,
         sandbox,
       });
-      const access = enforceFunGameAccess('sokoban', { dayKey, practice, sandbox }, { softWeekend: true });
+      const access = await enforceFunGameAccess('sokoban', { dayKey, practice, sandbox }, { softWeekend: true });
       if (access.closed) {
         res.status(200).json(funAccessClosedPayload(dayKey, access));
         return;
@@ -5696,7 +5854,7 @@ exports.submitSokobanMove = onRequest(
         allowFuturePreview: isAdmin,
         sandbox,
       });
-      enforceFunGameAccess('sokoban', { dayKey, practice, sandbox });
+      await enforceFunGameAccess('sokoban', { dayKey, practice, sandbox });
       const puzzle = await resolveSokobanPuzzle(dayKey);
       const action = String(req.body?.action || 'sync').trim().toLowerCase();
       const direction = req.body?.direction;
@@ -6045,7 +6203,7 @@ exports.getDailyNonogram = onRequest(
       });
       const practice = resolved.practice || Boolean(requestedPuzzleId);
       const dayKey = resolved.dayKey;
-      const access = enforceFunGameAccess('nonogram', { dayKey, practice, sandbox }, { softWeekend: true });
+      const access = await enforceFunGameAccess('nonogram', { dayKey, practice, sandbox }, { softWeekend: true });
       if (access.closed) {
         res.status(200).json(funAccessClosedPayload(dayKey, access));
         return;
@@ -6249,7 +6407,7 @@ exports.submitNonogramState = onRequest(
       });
       const practice = resolved.practice || Boolean(requestedPuzzleId);
       const dayKey = resolved.dayKey;
-      enforceFunGameAccess('nonogram', { dayKey, practice, sandbox });
+      await enforceFunGameAccess('nonogram', { dayKey, practice, sandbox });
 
       // Past-day practice never syncs to the competitive leaderboard / streaks.
       if (practice) {
@@ -6559,7 +6717,7 @@ exports.getDailyBoggle = onRequest(
         sandbox,
         allowFuturePreview: sandbox,
       });
-      const access = enforceFunGameAccess('boggle', { dayKey, practice, sandbox }, { softWeekend: true });
+      const access = await enforceFunGameAccess('boggle', { dayKey, practice, sandbox }, { softWeekend: true });
       if (access.closed) {
         res.status(200).json({
           ...funAccessClosedPayload(dayKey, access),
@@ -6665,7 +6823,7 @@ exports.submitBoggleResult = onRequest(
         sandbox,
         allowFuturePreview: sandbox,
       });
-      enforceFunGameAccess('boggle', { dayKey, practice, sandbox });
+      await enforceFunGameAccess('boggle', { dayKey, practice, sandbox });
       const puzzle = publicBogglePuzzle(dayKey);
       const bucket = admin.storage().bucket();
       // Warm/cache dictionary once per instance; validates submit against Storage-backed set.
@@ -6805,7 +6963,7 @@ exports.getDailyConnections = onRequest(
         sandbox,
         allowFuturePreview: sandbox,
       });
-      const access = enforceFunGameAccess('connections', { dayKey, practice, sandbox }, { softWeekend: true });
+      const access = await enforceFunGameAccess('connections', { dayKey, practice, sandbox }, { softWeekend: true });
       if (access.closed) {
         res.status(200).json({
           ...funAccessClosedPayload(dayKey, access),
@@ -6861,7 +7019,7 @@ exports.submitConnectionsResult = onRequest(
         sandbox,
         allowFuturePreview: sandbox,
       });
-      enforceFunGameAccess('connections', { dayKey, practice, sandbox });
+      await enforceFunGameAccess('connections', { dayKey, practice, sandbox });
       const puzzle = await resolveConnectionsPuzzle(dayKey);
       const evaluated = evaluateConnectionsGuesses(puzzle, req.body?.guesses || []);
 
@@ -7013,7 +7171,7 @@ exports.getDailyEnclose = onRequest(
         sandbox,
         allowFuturePreview: sandbox,
       });
-      const access = enforceFunGameAccess('enclose', { dayKey, practice, sandbox }, { softWeekend: true });
+      const access = await enforceFunGameAccess('enclose', { dayKey, practice, sandbox }, { softWeekend: true });
       if (access.closed) {
         res.status(200).json({
           ...funAccessClosedPayload(dayKey, access),
@@ -7075,7 +7233,7 @@ exports.submitEncloseResult = onRequest(
         sandbox,
         allowFuturePreview: sandbox,
       });
-      enforceFunGameAccess('enclose', { dayKey, practice, sandbox });
+      await enforceFunGameAccess('enclose', { dayKey, practice, sandbox });
       const puzzle = await resolveEnclosePuzzle(dayKey);
       const evaluated = evaluateEncloseSubmission(puzzle, req.body?.walls || []);
 
@@ -7226,7 +7384,7 @@ exports.getDailyLetterbox = onRequest(
         sandbox,
         allowFuturePreview: sandbox,
       });
-      const access = enforceFunGameAccess('letterbox', { dayKey, practice, sandbox }, { softWeekend: true });
+      const access = await enforceFunGameAccess('letterbox', { dayKey, practice, sandbox }, { softWeekend: true });
       if (access.closed) {
         res.status(200).json({
           ...funAccessClosedPayload(dayKey, access),
@@ -7298,7 +7456,7 @@ exports.submitLetterboxResult = onRequest(
         sandbox,
         allowFuturePreview: sandbox,
       });
-      enforceFunGameAccess('letterbox', { dayKey, practice, sandbox });
+      await enforceFunGameAccess('letterbox', { dayKey, practice, sandbox });
 
       const puzzle = getLetterboxPuzzleForDay(dayKey);
       const bucket = admin.storage().bucket();
@@ -7467,7 +7625,7 @@ exports.getDailyPipes = onRequest(
         sandbox,
         allowFuturePreview: sandbox,
       });
-      const access = enforceFunGameAccess('pipes', { dayKey, practice, sandbox }, { softWeekend: true });
+      const access = await enforceFunGameAccess('pipes', { dayKey, practice, sandbox }, { softWeekend: true });
       if (access.closed) {
         res.status(200).json({
           ...funAccessClosedPayload(dayKey, access),
@@ -7536,7 +7694,7 @@ exports.submitPipesResult = onRequest(
         sandbox,
         allowFuturePreview: sandbox,
       });
-      enforceFunGameAccess('pipes', { dayKey, practice, sandbox });
+      await enforceFunGameAccess('pipes', { dayKey, practice, sandbox });
 
       const puzzle = getPipesPuzzleForDay(dayKey);
       const evaluated = evaluatePipesRotations(puzzle, req.body?.rotations || []);
@@ -7676,7 +7834,7 @@ exports.getDailyToolboxKick = onRequest(
         sandbox,
         allowFuturePreview: sandbox,
       });
-      const access = enforceFunGameAccess('toolboxkick', { dayKey, practice, sandbox }, { softWeekend: true });
+      const access = await enforceFunGameAccess('toolboxkick', { dayKey, practice, sandbox }, { softWeekend: true });
       if (access.closed) {
         res.status(200).json({
           ...funAccessClosedPayload(dayKey, access),
@@ -7741,7 +7899,7 @@ exports.submitToolboxKickResult = onRequest(
         sandbox,
         allowFuturePreview: sandbox,
       });
-      enforceFunGameAccess('toolboxkick', { dayKey, practice, sandbox });
+      await enforceFunGameAccess('toolboxkick', { dayKey, practice, sandbox });
 
       const mode = normalizeToolboxKickMode(req.body?.mode);
       const distanceM = clampToolboxKickDistance(req.body?.distanceM);
@@ -7839,6 +7997,552 @@ exports.submitToolboxKickResult = onRequest(
   }),
 );
 
+// GET → Coin Flip Streak state + leaderboard for a London day.
+exports.getDailyCoinFlip = onRequest(
+  { region: 'europe-west2' },
+  withCors(async (req, res) => {
+    if (req.method !== 'GET') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
+
+    const session = await getVerifiedSessionUser(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+
+    try {
+      const todayKey = getCoinFlipDayKey();
+      const sandbox = parseSandboxFlag(req) && canManagePortalAccess(session.profile);
+      if (todayKey < COIN_FLIP_LIVE_FROM && !sandbox) {
+        res.status(403).json({
+          error: `Coin Flip goes live ${COIN_FLIP_LIVE_FROM}.`,
+          coinFlipLiveFrom: COIN_FLIP_LIVE_FROM,
+        });
+        return;
+      }
+      const { dayKey, practice } = resolvePlayableDayKey(req.query?.dayKey, todayKey, {
+        sandbox,
+        allowFuturePreview: sandbox,
+      });
+      const access = await enforceFunGameAccess('coinflip', { dayKey, practice, sandbox }, { softWeekend: true });
+      if (access.closed) {
+        res.status(200).json({
+          ...funAccessClosedPayload(dayKey, access),
+          totalSolved: 0,
+        });
+        return;
+      }
+
+      const leaderboard = practice ? [] : await buildCoinFlipLeaderboard(dayKey);
+      let gameData = {
+        dayKey,
+        status: 'in_progress',
+        bestStreak: 0,
+        runsUsed: 0,
+      };
+      if (!practice) {
+        const snap = await db.collection('coin_flip_games').doc(`${dayKey}_${session.profile.uid}`).get();
+        if (snap.exists) gameData = snap.data() || gameData;
+      }
+
+      res.status(200).json({
+        practice,
+        weekend: false,
+        rotation: access.rotation,
+        coinFlipLiveFrom: COIN_FLIP_LIVE_FROM,
+        game: serializeCoinFlipGame(gameData),
+        leaderboard,
+        totalSolved: leaderboard.length,
+      });
+    } catch (error) {
+      console.error('getDailyCoinFlip failed', error);
+      res.status(error.status || 500).json({ error: error.message || 'Failed to load Coin Flip.' });
+    }
+  }),
+);
+
+// POST { bestStreak?, runComplete?, dayKey?, sandbox? }
+// Improves today's best streak; runComplete marks one of the 3 daily runs as used.
+exports.submitCoinFlipResult = onRequest(
+  { region: 'europe-west2' },
+  withCors(async (req, res) => {
+    if (req.method !== 'POST') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
+
+    const session = await getVerifiedSessionUser(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+
+    try {
+      const todayKey = getCoinFlipDayKey();
+      const sandbox = parseSandboxFlag(req) && canManagePortalAccess(session.profile);
+      if (todayKey < COIN_FLIP_LIVE_FROM && !sandbox) {
+        res.status(403).json({
+          error: `Coin Flip goes live ${COIN_FLIP_LIVE_FROM}. Practice scores are not submitted.`,
+          coinFlipLiveFrom: COIN_FLIP_LIVE_FROM,
+        });
+        return;
+      }
+      const { dayKey, practice } = resolvePlayableDayKey(req.body?.dayKey, todayKey, {
+        sandbox,
+        allowFuturePreview: sandbox,
+      });
+      await enforceFunGameAccess('coinflip', { dayKey, practice, sandbox });
+
+      const runComplete = req.body?.runComplete === true || req.body?.runComplete === 'true';
+      const bestStreak = clampCoinFlipStreak(req.body?.bestStreak);
+      if (!runComplete && (!Number.isFinite(Number(req.body?.bestStreak)) || bestStreak < 1)) {
+        res.status(400).json({ error: 'Need a streak of at least 1.' });
+        return;
+      }
+
+      if (practice || sandbox) {
+        res.status(200).json({
+          practice: true,
+          sandbox: Boolean(sandbox),
+          game: serializeCoinFlipGame({
+            dayKey,
+            status: 'won',
+            bestStreak,
+            runsUsed: runComplete ? 1 : 0,
+            completedAt: new Date().toISOString(),
+          }),
+          leaderboard: [],
+          totalSolved: 0,
+        });
+        return;
+      }
+
+      const gameId = `${dayKey}_${session.profile.uid}`;
+      const ref = db.collection('coin_flip_games').doc(gameId);
+      const existing = await ref.get();
+      const prev = existing.exists ? existing.data() || {} : {};
+      const prevBest = clampCoinFlipStreak(prev.bestStreak);
+      const prevRuns = clampCoinFlipRunsUsed(prev.runsUsed);
+      const nextBest = Math.max(prevBest, bestStreak);
+      const nextRuns = runComplete
+        ? Math.min(COIN_FLIP_MAX_RUNS, prevRuns + 1)
+        : prevRuns;
+      const dayComplete = nextRuns >= COIN_FLIP_MAX_RUNS;
+      const hadWin = existing.exists && (prev.status === 'won' || prev.status === 'complete') && prevBest >= 1;
+      const firstWin = !hadWin && nextBest >= 1;
+
+      if (!runComplete && nextBest <= prevBest && prevRuns >= COIN_FLIP_MAX_RUNS) {
+        const leaderboard = await buildCoinFlipLeaderboard(dayKey);
+        res.status(200).json({
+          practice: false,
+          game: serializeCoinFlipGame(prev),
+          leaderboard,
+          totalSolved: leaderboard.length,
+          alreadySubmitted: true,
+        });
+        return;
+      }
+
+      if (!runComplete && nextBest <= prevBest) {
+        const leaderboard = await buildCoinFlipLeaderboard(dayKey);
+        res.status(200).json({
+          practice: false,
+          game: serializeCoinFlipGame(prev),
+          leaderboard,
+          totalSolved: leaderboard.length,
+          alreadySubmitted: true,
+        });
+        return;
+      }
+
+      const payload = {
+        uid: session.profile.uid,
+        fullName: session.profile.fullName || session.profile.email || 'Colleague',
+        email: session.profile.email || '',
+        dayKey,
+        status: dayComplete ? 'complete' : (nextBest >= 1 ? 'won' : 'in_progress'),
+        bestStreak: nextBest,
+        runsUsed: nextRuns,
+        completedAt: prev.completedAt || admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+      if (nextBest > prevBest || (runComplete && dayComplete)) {
+        payload.completedAt = admin.firestore.FieldValue.serverTimestamp();
+      }
+      await ref.set(payload, { merge: true });
+
+      let achievements = null;
+      if (firstWin) {
+        const streaks = await recordFunStreakWin(db, {
+          uid: session.profile.uid,
+          fullName: payload.fullName,
+          email: payload.email,
+          gameKey: 'coinflip',
+          dayKey,
+          FieldValue: admin.firestore.FieldValue,
+        });
+        const all = await loadFunStreaks(db, session.profile.uid, {
+          todayKey: dayKey,
+          fullName: payload.fullName,
+          email: payload.email,
+          FieldValue: admin.firestore.FieldValue,
+        });
+        achievements = serializeAchievements({ ...all, coinflip: streaks }, dayKey);
+      }
+
+      const snap = await ref.get();
+      const leaderboard = await buildCoinFlipLeaderboard(dayKey);
+      await syncDayMedals(db, {
+        gameKey: 'coinflip',
+        dayKey,
+        leaderboardRows: leaderboard,
+        FieldValue: admin.firestore.FieldValue,
+      });
+
+      res.status(200).json({
+        practice: false,
+        game: serializeCoinFlipGame(snap.data() || {}),
+        leaderboard,
+        totalSolved: leaderboard.length,
+        achievements,
+      });
+    } catch (error) {
+      console.error('submitCoinFlipResult failed', error);
+      res.status(error.status || 500).json({ error: error.message || 'Failed to submit Coin Flip.' });
+    }
+  }),
+);
+
+async function buildWantedChallengeLeaderboard(dayKey, challenge) {
+  const challengeKey = normalizeWantedChallenge(challenge);
+  const snap = await db.collection('wanted_games').where('dayKey', '==', dayKey).limit(200).get();
+  const rows = snap.docs.map((doc) => {
+    const data = doc.data() || {};
+    const best = data[challengeKey] || null;
+    if (!best || best.timeMs == null) return null;
+    return {
+      uid: data.uid || doc.id,
+      fullName: data.fullName || 'Colleague',
+      status: 'won',
+      challenge: challengeKey,
+      timeMs: clampWantedTimeMs(best.timeMs),
+      penalties: clampWantedPenalties(best.penalties),
+      grade: best.grade || wantedGradeForTimeMs(best.timeMs),
+      completedAt: best.completedAt?.toDate?.()?.toISOString?.() || best.completedAt || null,
+    };
+  }).filter(Boolean);
+
+  rows.sort(compareWantedRows);
+  assignJointRanks(rows, (a, b) => a.timeMs === b.timeMs && a.penalties === b.penalties);
+
+  return rows.map((row) => ({
+    uid: row.uid,
+    fullName: row.fullName,
+    status: row.status,
+    challenge: row.challenge,
+    timeMs: row.timeMs,
+    penalties: row.penalties,
+    grade: row.grade,
+    rank: row.rank,
+    joint: row.joint,
+    medal: row.medal,
+    completedAt: row.completedAt,
+    resultLabel: wantedResultLabel(row),
+  }));
+}
+
+async function buildWantedCombinedLeaderboard(dayKey) {
+  const snap = await db.collection('wanted_games').where('dayKey', '==', dayKey).limit(200).get();
+  const rows = snap.docs.map((doc) => {
+    const data = doc.data() || {};
+    const standard = data.standard;
+    const impossible = data.impossible;
+    if (!standard?.timeMs || !impossible?.timeMs) return null;
+    const timeMs = clampWantedTimeMs(Number(standard.timeMs) + Number(impossible.timeMs));
+    const penalties = clampWantedPenalties(
+      (Number(standard.penalties) || 0) + (Number(impossible.penalties) || 0),
+    );
+    return {
+      uid: data.uid || doc.id,
+      fullName: data.fullName || 'Colleague',
+      status: 'won',
+      timeMs,
+      penalties,
+      grade: wantedGradeForCombinedTimeMs(timeMs),
+      completedAt: data.completedAt?.toDate?.()?.toISOString?.()
+        || impossible.completedAt?.toDate?.()?.toISOString?.()
+        || impossible.completedAt
+        || null,
+    };
+  }).filter(Boolean);
+
+  rows.sort(compareWantedRows);
+  assignJointRanks(rows, (a, b) => a.timeMs === b.timeMs && a.penalties === b.penalties);
+
+  return rows.map((row) => ({
+    uid: row.uid,
+    fullName: row.fullName,
+    status: row.status,
+    timeMs: row.timeMs,
+    penalties: row.penalties,
+    grade: row.grade,
+    rank: row.rank,
+    joint: row.joint,
+    medal: row.medal,
+    completedAt: row.completedAt,
+    resultLabel: wantedResultLabel(row),
+  }));
+}
+
+async function buildWantedLeaderboards(dayKey) {
+  const [standard, impossible, combined] = await Promise.all([
+    buildWantedChallengeLeaderboard(dayKey, 'standard'),
+    buildWantedChallengeLeaderboard(dayKey, 'impossible'),
+    buildWantedCombinedLeaderboard(dayKey),
+  ]);
+  return { standard, impossible, combined };
+}
+
+/** Combined LB for medals/reset — both challenges required. */
+async function buildWantedLeaderboard(dayKey) {
+  return buildWantedCombinedLeaderboard(dayKey);
+}
+
+// GET → Wanted state + dual challenge leaderboards for a London day.
+exports.getDailyWanted = onRequest(
+  { region: 'europe-west2' },
+  withCors(async (req, res) => {
+    if (req.method !== 'GET') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
+
+    const session = await getVerifiedSessionUser(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+
+    try {
+      const todayKey = getWantedDayKey();
+      const sandbox = parseSandboxFlag(req) && canManagePortalAccess(session.profile);
+      if (todayKey < WANTED_LIVE_FROM && !sandbox) {
+        res.status(403).json({
+          error: `Wanted goes live ${WANTED_LIVE_FROM}.`,
+          wantedLiveFrom: WANTED_LIVE_FROM,
+        });
+        return;
+      }
+      const { dayKey, practice } = resolvePlayableDayKey(req.query?.dayKey, todayKey, {
+        sandbox,
+        allowFuturePreview: sandbox,
+      });
+      const access = await enforceFunGameAccess('wanted', { dayKey, practice, sandbox }, { softWeekend: true });
+      if (access.closed) {
+        res.status(200).json({
+          ...funAccessClosedPayload(dayKey, access),
+          leaderboards: { standard: [], impossible: [], combined: [] },
+          leaderboard: [],
+          totalSolved: 0,
+        });
+        return;
+      }
+
+      const leaderboards = practice
+        ? { standard: [], impossible: [], combined: [] }
+        : await buildWantedLeaderboards(dayKey);
+      let gameData = { dayKey, status: 'in_progress' };
+      if (!practice) {
+        const snap = await db.collection('wanted_games').doc(`${dayKey}_${session.profile.uid}`).get();
+        if (snap.exists) gameData = snap.data() || gameData;
+      }
+
+      res.status(200).json({
+        practice,
+        weekend: false,
+        rotation: access.rotation,
+        wantedLiveFrom: WANTED_LIVE_FROM,
+        game: serializeWantedGame(gameData),
+        leaderboards,
+        leaderboard: leaderboards.combined,
+        totalSolved: leaderboards.combined.length,
+      });
+    } catch (error) {
+      console.error('getDailyWanted failed', error);
+      res.status(error.status || 500).json({ error: error.message || 'Failed to load Wanted.' });
+    }
+  }),
+);
+
+// POST { challenge, timeMs, penalties?, elapsedMs?, grade?, dayKey?, sandbox? }
+exports.submitWantedResult = onRequest(
+  { region: 'europe-west2' },
+  withCors(async (req, res) => {
+    if (req.method !== 'POST') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
+
+    const session = await getVerifiedSessionUser(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+
+    try {
+      const todayKey = getWantedDayKey();
+      const sandbox = parseSandboxFlag(req) && canManagePortalAccess(session.profile);
+      if (todayKey < WANTED_LIVE_FROM && !sandbox) {
+        res.status(403).json({
+          error: `Wanted goes live ${WANTED_LIVE_FROM}. Practice scores are not submitted.`,
+          wantedLiveFrom: WANTED_LIVE_FROM,
+        });
+        return;
+      }
+      const { dayKey, practice } = resolvePlayableDayKey(req.body?.dayKey, todayKey, {
+        sandbox,
+        allowFuturePreview: sandbox,
+      });
+      await enforceFunGameAccess('wanted', { dayKey, practice, sandbox });
+
+      const challenge = normalizeWantedChallenge(req.body?.challenge);
+      const penalties = clampWantedPenalties(req.body?.penalties);
+      let timeMs = clampWantedTimeMs(req.body?.timeMs);
+      const elapsedMs = clampWantedTimeMs(
+        req.body?.elapsedMs != null ? req.body.elapsedMs : timeMs - penalties * WANTED_PENALTY_MS,
+      );
+      // Prefer corrected time from client; re-derive if missing/inconsistent
+      if (!Number.isFinite(Number(req.body?.timeMs))) {
+        timeMs = clampWantedTimeMs(elapsedMs + penalties * WANTED_PENALTY_MS);
+      }
+      const grade = String(req.body?.grade || wantedGradeForTimeMs(timeMs)).slice(0, 2);
+
+      if (!Number.isFinite(timeMs)) {
+        res.status(400).json({ error: 'timeMs is required.' });
+        return;
+      }
+
+      const challengeBest = {
+        timeMs,
+        penalties,
+        elapsedMs,
+        grade,
+        completedAt: new Date().toISOString(),
+      };
+
+      if (practice || sandbox) {
+        res.status(200).json({
+          practice: true,
+          sandbox: Boolean(sandbox),
+          game: serializeWantedGame({
+            dayKey,
+            status: 'in_progress',
+            [challenge]: challengeBest,
+          }),
+          leaderboards: { standard: [], impossible: [], combined: [] },
+          leaderboard: [],
+          totalSolved: 0,
+        });
+        return;
+      }
+
+      const gameId = `${dayKey}_${session.profile.uid}`;
+      const ref = db.collection('wanted_games').doc(gameId);
+      const existing = await ref.get();
+      const prev = existing.exists ? existing.data() || {} : {};
+      const prevChallenge = prev[challenge] || null;
+
+      // One attempt per challenge for the leaderboard — first submit locks it in.
+      if (prevChallenge?.timeMs != null) {
+        const leaderboards = await buildWantedLeaderboards(dayKey);
+        res.status(200).json({
+          practice: false,
+          game: serializeWantedGame(prev),
+          leaderboards,
+          leaderboard: leaderboards.combined,
+          totalSolved: leaderboards.combined.length,
+          alreadySubmitted: true,
+        });
+        return;
+      }
+
+      // Enforce flow: Impossible only after Standard exists
+      if (challenge === 'impossible' && !(prev.standard?.timeMs != null)) {
+        res.status(400).json({ error: 'Clear Standard before Impossible.' });
+        return;
+      }
+
+      const nextChallenge = challengeBest;
+      const nextStandard = challenge === 'standard' ? nextChallenge : (prev.standard || null);
+      const nextImpossible = challenge === 'impossible' ? nextChallenge : (prev.impossible || null);
+      const bothComplete = Boolean(nextStandard?.timeMs != null && nextImpossible?.timeMs != null);
+      const hadBoth = Boolean(prev.standard?.timeMs != null && prev.impossible?.timeMs != null);
+      const firstFullWin = bothComplete && !hadBoth;
+
+      const payload = {
+        dayKey,
+        uid: session.profile.uid,
+        fullName: session.profile.fullName || session.profile.email || 'Colleague',
+        email: session.profile.email || '',
+        standard: nextStandard,
+        impossible: nextImpossible,
+        status: bothComplete ? 'won' : 'in_progress',
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+      if (!existing.exists) {
+        payload.createdAt = admin.firestore.FieldValue.serverTimestamp();
+      }
+      if (bothComplete && !prev.completedAt) {
+        payload.completedAt = admin.firestore.FieldValue.serverTimestamp();
+      }
+
+      await ref.set(payload, { merge: true });
+
+      let achievements = null;
+      if (firstFullWin) {
+        const streaks = await recordFunStreakWin(db, {
+          uid: session.profile.uid,
+          fullName: payload.fullName,
+          email: payload.email,
+          gameKey: 'wanted',
+          dayKey,
+          FieldValue: admin.firestore.FieldValue,
+        });
+        const all = await loadFunStreaks(db, session.profile.uid, {
+          todayKey: dayKey,
+          fullName: payload.fullName,
+          email: payload.email,
+          FieldValue: admin.firestore.FieldValue,
+        });
+        achievements = serializeAchievements({ ...all, wanted: streaks }, dayKey);
+      }
+
+      const leaderboards = await buildWantedLeaderboards(dayKey);
+      await syncDayMedals(db, {
+        gameKey: 'wanted',
+        dayKey,
+        leaderboardRows: leaderboards.combined,
+        FieldValue: admin.firestore.FieldValue,
+      });
+
+      const snap = await ref.get();
+      res.status(200).json({
+        practice: false,
+        game: serializeWantedGame(snap.data() || {}),
+        leaderboards,
+        leaderboard: leaderboards.combined,
+        totalSolved: leaderboards.combined.length,
+        achievements,
+      });
+    } catch (error) {
+      console.error('submitWantedResult failed', error);
+      res.status(error.status || 500).json({ error: error.message || 'Failed to submit Wanted.' });
+    }
+  }),
+);
+
 const FUN_GAME_COLLECTIONS = {
   trivia: 'trivia_answers',
   wordle: 'wordle_games',
@@ -7850,6 +8554,8 @@ const FUN_GAME_COLLECTIONS = {
   letterbox: 'letterbox_games',
   pipes: 'pipes_games',
   toolboxkick: 'toolbox_kick_games',
+  coinflip: 'coin_flip_games',
+  wanted: 'wanted_games',
 };
 
 async function buildPipesLeaderboard(dayKey) {
@@ -7916,6 +8622,35 @@ async function buildToolboxKickLeaderboard(dayKey) {
     medal: row.medal,
     completedAt: row.completedAt,
     resultLabel: toolboxKickResultLabel(row),
+  }));
+}
+
+async function buildCoinFlipLeaderboard(dayKey) {
+  const snap = await db.collection('coin_flip_games').where('dayKey', '==', dayKey).limit(200).get();
+  const rows = snap.docs.map((doc) => {
+    const data = doc.data() || {};
+    return {
+      uid: data.uid || doc.id,
+      fullName: data.fullName || 'Colleague',
+      status: data.status || 'in_progress',
+      bestStreak: clampCoinFlipStreak(data.bestStreak),
+      completedAt: data.completedAt?.toDate?.()?.toISOString?.() || null,
+    };
+  }).filter((row) => (row.status === 'won' || row.status === 'complete') && row.bestStreak >= 1);
+
+  rows.sort(compareCoinFlipRows);
+  assignJointRanks(rows, (a, b) => a.bestStreak === b.bestStreak);
+
+  return rows.map((row) => ({
+    uid: row.uid,
+    fullName: row.fullName,
+    status: row.status,
+    bestStreak: row.bestStreak,
+    rank: row.rank,
+    joint: row.joint,
+    medal: row.medal,
+    completedAt: row.completedAt,
+    resultLabel: coinFlipResultLabel(row),
   }));
 }
 
@@ -8036,6 +8771,8 @@ async function buildLeaderboardForGame(gameKey, dayKey) {
   if (gameKey === 'letterbox') return buildLetterboxLeaderboard(dayKey);
   if (gameKey === 'pipes') return buildPipesLeaderboard(dayKey);
   if (gameKey === 'toolboxkick') return buildToolboxKickLeaderboard(dayKey);
+  if (gameKey === 'coinflip') return buildCoinFlipLeaderboard(dayKey);
+  if (gameKey === 'wanted') return buildWantedLeaderboard(dayKey);
   return [];
 }
 
@@ -8053,13 +8790,14 @@ exports.getFunRotation = onRequest(
       return;
     }
     try {
+      const settings = await loadFunRotationSettings(db);
       const todayKey = getLondonDayKey();
       const dayKey = String(req.query?.dayKey || todayKey).trim() || todayKey;
-      const rotation = getFunRotationForDay(dayKey);
+      const rotation = getFunRotationForDay(dayKey, settings);
       const upcoming = [];
       let cursor = dayKey;
       for (let i = 0; i < 14; i += 1) {
-        upcoming.push(getFunRotationForDay(cursor));
+        upcoming.push(getFunRotationForDay(cursor, settings));
         const [y, m, d] = cursor.split('-').map(Number);
         const date = new Date(Date.UTC(y, m - 1, d, 12));
         date.setUTCDate(date.getUTCDate() + 1);
@@ -8069,6 +8807,7 @@ exports.getFunRotation = onRequest(
         todayKey,
         rotationStart: ROTATION_START_DAY_KEY,
         games: FUN_GAME_ROSTER,
+        settings,
         rotation,
         upcoming,
         achievements: serializeAchievements(
@@ -8090,6 +8829,203 @@ exports.getFunRotation = onRequest(
 
 // Alias used by hosting rewrite /api/getFunSchedule
 exports.getFunSchedule = exports.getFunRotation;
+
+// GET → current Fun rotation settings (admin).
+exports.adminGetFunRotationSettings = onRequest(
+  { region: 'europe-west2' },
+  withCors(async (req, res) => {
+    if (req.method !== 'GET') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
+    const session = await getVerifiedSessionUser(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+    if (!canManagePortalAccess(session.profile)) {
+      res.status(403).json({ error: 'Admin access is required.' });
+      return;
+    }
+    try {
+      const settings = await loadFunRotationSettings(db, { force: true });
+      const todayKey = getLondonDayKey();
+      const preview = [];
+      let cursor = todayKey;
+      for (let i = 0; i < 14; i += 1) {
+        preview.push(getFunRotationForDay(cursor, settings));
+        const [y, m, d] = cursor.split('-').map(Number);
+        const date = new Date(Date.UTC(y, m - 1, d, 12));
+        date.setUTCDate(date.getUTCDate() + 1);
+        cursor = date.toISOString().slice(0, 10);
+      }
+      res.status(200).json({
+        settings,
+        defaults: getDefaultRotationSettings(),
+        games: FUN_GAME_ROSTER,
+        preview,
+      });
+    } catch (error) {
+      console.error('adminGetFunRotationSettings failed', error);
+      res.status(500).json({ error: error.message || 'Failed to load Fun rotation settings.' });
+    }
+  }),
+);
+
+// POST { permanentGameKeys, rotatedDailyCount } → save Fun rotation settings.
+exports.adminSaveFunRotationSettings = onRequest(
+  { region: 'europe-west2' },
+  withCors(async (req, res) => {
+    if (req.method !== 'POST') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
+    const session = await getVerifiedSessionUser(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+    if (!canManagePortalAccess(session.profile)) {
+      res.status(403).json({ error: 'Admin access is required.' });
+      return;
+    }
+    try {
+      const settings = await saveFunRotationSettings(db, {
+        permanentGameKeys: req.body?.permanentGameKeys,
+        rotatedDailyCount: req.body?.rotatedDailyCount,
+      }, {
+        uid: session.profile.uid,
+        fullName: session.profile.fullName || session.profile.email || '',
+        FieldValue: admin.firestore.FieldValue,
+      });
+      const todayKey = getLondonDayKey();
+      const preview = [];
+      let cursor = todayKey;
+      for (let i = 0; i < 14; i += 1) {
+        preview.push(getFunRotationForDay(cursor, settings));
+        const [y, m, d] = cursor.split('-').map(Number);
+        const date = new Date(Date.UTC(y, m - 1, d, 12));
+        date.setUTCDate(date.getUTCDate() + 1);
+        cursor = date.toISOString().slice(0, 10);
+      }
+      res.status(200).json({
+        settings,
+        games: FUN_GAME_ROSTER,
+        preview,
+      });
+    } catch (error) {
+      console.error('adminSaveFunRotationSettings failed', error);
+      res.status(error.status || 500).json({ error: error.message || 'Failed to save Fun rotation settings.' });
+    }
+  }),
+);
+
+// GET → list Wordle suspected cheaters (Fun Admin).
+exports.adminListWordleSuspects = onRequest(
+  { region: 'europe-west2' },
+  withCors(async (req, res) => {
+    if (req.method !== 'GET') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
+    const session = await getVerifiedSessionUser(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+    if (!canManagePortalAccess(session.profile)) {
+      res.status(403).json({ error: 'Admin access is required.' });
+      return;
+    }
+    try {
+      const suspects = await listWordleSuspectRecords();
+      res.status(200).json({ suspects });
+    } catch (error) {
+      console.error('adminListWordleSuspects failed', error);
+      res.status(error.status || 500).json({ error: error.message || 'Failed to list Wordle suspects.' });
+    }
+  }),
+);
+
+// POST { uid, suspected } → mark / unmark a Wordle suspected cheater.
+exports.adminSetWordleSuspect = onRequest(
+  { region: 'europe-west2' },
+  withCors(async (req, res) => {
+    if (req.method !== 'POST') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
+    const session = await getVerifiedSessionUser(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+    if (!canManagePortalAccess(session.profile)) {
+      res.status(403).json({ error: 'Admin access is required.' });
+      return;
+    }
+
+    const uid = String(req.body?.uid || '').trim();
+    const suspected = Boolean(req.body?.suspected);
+    if (!uid) {
+      res.status(400).json({ error: 'uid is required.' });
+      return;
+    }
+
+    try {
+      const userRef = db.collection('users').doc(uid);
+      const userSnap = await userRef.get();
+      if (!userSnap.exists) {
+        res.status(404).json({ error: 'User not found.' });
+        return;
+      }
+      const userData = userSnap.data() || {};
+      const fullName = userData.fullName || userData.email || 'Colleague';
+      const email = userData.email || '';
+      const suspectRef = db.collection('fun_wordle_suspects').doc(uid);
+
+      if (suspected) {
+        await userRef.set({
+          funFlags: {
+            ...(userData.funFlags || {}),
+            wordleSuspect: true,
+            wordleSuspectMarkedAt: admin.firestore.FieldValue.serverTimestamp(),
+            wordleSuspectMarkedByUid: session.profile.uid,
+          },
+        }, { merge: true });
+        await suspectRef.set({
+          uid,
+          fullName,
+          email,
+          markedAt: admin.firestore.FieldValue.serverTimestamp(),
+          markedByUid: session.profile.uid,
+          markedByName: session.profile.fullName || session.profile.email || '',
+        }, { merge: true });
+      } else {
+        await userRef.set({
+          funFlags: {
+            ...(userData.funFlags || {}),
+            wordleSuspect: false,
+            wordleSuspectClearedAt: admin.firestore.FieldValue.serverTimestamp(),
+            wordleSuspectClearedByUid: session.profile.uid,
+          },
+        }, { merge: true });
+        await suspectRef.delete().catch(() => null);
+      }
+
+      const suspects = await listWordleSuspectRecords();
+      res.status(200).json({
+        ok: true,
+        uid,
+        suspected,
+        suspects,
+      });
+    } catch (error) {
+      console.error('adminSetWordleSuspect failed', error);
+      res.status(error.status || 500).json({ error: error.message || 'Failed to update Wordle suspect.' });
+    }
+  }),
+);
 
 // GET → list admin-authored fun_content rows.
 exports.adminListFunContent = onRequest(
@@ -8379,6 +9315,8 @@ exports.adminBackfillFunMedals = onRequest(
         letterbox: (dayKey) => buildLetterboxLeaderboard(dayKey),
         pipes: (dayKey) => buildPipesLeaderboard(dayKey),
         toolboxkick: (dayKey) => buildToolboxKickLeaderboard(dayKey),
+        coinflip: (dayKey) => buildCoinFlipLeaderboard(dayKey),
+        wanted: (dayKey) => buildWantedLeaderboard(dayKey),
       };
       const dayKeysByGame = {};
       await Promise.all(Object.entries(FUN_GAME_COLLECTIONS).map(async ([gameKey, collectionName]) => {

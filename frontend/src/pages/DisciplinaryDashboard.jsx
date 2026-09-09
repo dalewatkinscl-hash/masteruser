@@ -2,20 +2,33 @@ import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { readJsonResponse } from '../utils/employeeProfile';
 import WorkspaceTabs from '../components/WorkspaceTabs';
-import { PROCESS_FAMILIES, caseProgressToneClass, getCaseProgressStatus, stageLabel } from '../utils/peopleCasesAccess';
+import { PROCESS_FAMILIES, caseProgressToneClass, formatCaseTimeToResolution, getCaseProgressStatus, stageLabel } from '../utils/peopleCasesAccess';
 import { ALLOW_DELETE_CASES } from '../utils/featureFlags';
 
 const STATUS_OPTIONS = ['', 'open', 'pending_manager', 'pending_hr', 'pending_employee', 'reopened_on_appeal', 'closed'];
 
 const STATUS_FILTER_LABELS = {
   '': 'All workflow statuses',
-  open: 'Open',
+  open: 'Open (all active)',
   pending_manager: 'Pending manager',
   pending_hr: 'Pending HR',
   pending_employee: 'Pending employee',
   reopened_on_appeal: 'Reopened on appeal',
   closed: 'Closed',
 };
+
+function matchesStatusFilter(item, statusFilter) {
+  if (!statusFilter) return true;
+  const isClosed = item.status === 'closed' || item.stage === 'closed';
+  if (statusFilter === 'open') {
+    // "Open" means still active — includes pending manager/employee/HR queues.
+    return !isClosed;
+  }
+  if (statusFilter === 'closed') {
+    return isClosed;
+  }
+  return item.status === statusFilter;
+}
 
 export default function DisciplinaryDashboard() {
   const navigate = useNavigate();
@@ -82,11 +95,12 @@ export default function DisciplinaryDashboard() {
   const filteredCases = useMemo(() => {
     const query = search.trim().toLowerCase();
     return cases.filter((item) => {
-      if (statusFilter && item.status !== statusFilter) return false;
+      if (!matchesStatusFilter(item, statusFilter)) return false;
       if (!query) return true;
       const haystack = [
         item.title,
         item.employeeNameSnapshot,
+        item.managerNameSnapshot,
         item.departmentSnapshot,
         item.caseType,
         item.processFamily,
@@ -201,8 +215,10 @@ export default function DisciplinaryDashboard() {
                 <tr className="bg-[#0b1220] border-b border-[#1a2540]">
                   <th className="px-5 py-3 text-left text-xs text-slate-400 uppercase">Title</th>
                   <th className="px-5 py-3 text-left text-xs text-slate-400 uppercase">Employee</th>
+                  <th className="px-5 py-3 text-left text-xs text-slate-400 uppercase">Owner</th>
                   <th className="px-5 py-3 text-left text-xs text-slate-400 uppercase">Family</th>
                   <th className="px-5 py-3 text-left text-xs text-slate-400 uppercase">Progress</th>
+                  <th className="px-5 py-3 text-left text-xs text-slate-400 uppercase">Time to resolution</th>
                   <th className="px-5 py-3 text-left text-xs text-slate-400 uppercase">SLA</th>
                   <th className="px-5 py-3 text-right text-xs text-slate-400 uppercase">Actions</th>
                 </tr>
@@ -219,6 +235,9 @@ export default function DisciplinaryDashboard() {
                       )}
                     </td>
                     <td className="px-5 py-3 text-sm text-slate-300">{item.employeeNameSnapshot || '—'}</td>
+                    <td className="px-5 py-3 text-sm text-slate-300 whitespace-nowrap">
+                      {item.managerNameSnapshot || '—'}
+                    </td>
                     <td className="px-5 py-3 text-sm text-slate-300 capitalize">
                       {String(item.processFamily || 'disciplinary').replace(/_/g, ' ')}
                     </td>
@@ -230,6 +249,9 @@ export default function DisciplinaryDashboard() {
                           {progress.hint ? ` · ${progress.hint}` : ''}
                         </span>
                       </div>
+                    </td>
+                    <td className="px-5 py-3 text-sm text-slate-300 whitespace-nowrap">
+                      {formatCaseTimeToResolution(item)}
                     </td>
                     <td className="px-5 py-3 text-sm text-slate-300">{item.slaDueAt || '—'}</td>
                     <td className="px-5 py-3 text-right">
@@ -258,7 +280,7 @@ export default function DisciplinaryDashboard() {
                 })}
                 {filteredCases.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="px-5 py-6 text-sm text-slate-500 text-center">
+                    <td colSpan={8} className="px-5 py-6 text-sm text-slate-500 text-center">
                       No cases found.
                     </td>
                   </tr>

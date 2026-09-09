@@ -681,4 +681,5 @@ module.exports = {
   suggestEmployeeFolders,
   uploadDisciplinaryDocument,
   validateEmployeeFolder,
+  downloadDriveItemContent,
 };

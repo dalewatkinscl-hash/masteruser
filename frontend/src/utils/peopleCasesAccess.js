@@ -1,9 +1,8 @@
+/** People Cases hub access requires an explicit cases_app role (or master admin). Headcount/HR does not grant it. */
 export function getCasesRole(user) {
   if (user?.portalsAccess?.master_admin === 'admin') return 'admin';
   const role = user?.portalsAccess?.cases_app;
   if (role === 'manager' || role === 'admin' || role === 'hr') return role;
-  const hrRole = user?.portalsAccess?.hr_app;
-  if (hrRole === 'manager' || hrRole === 'admin') return 'hr';
   return '';
 }
 
@@ -47,6 +46,30 @@ export function stagesForFamily(processFamily) {
   if (processFamily === 'grievance') return GRIEVANCE_STAGES;
   if (processFamily === 'vehicle_accident') return ACCIDENT_STAGES;
   return DISCIPLINARY_STAGES;
+}
+
+/** Informal / file-note closures skip hearing + outcome stages — don't show them as completed. */
+export function isEarlyInformalStyleClose(caseItem = {}) {
+  const preset = caseItem.outcomePreset || '';
+  if (preset === 'informal_action' || preset === 'file_note_for_improvement') return true;
+  const closed = caseItem.stage === 'closed' || caseItem.status === 'closed';
+  if (!closed) return false;
+  const wentFormal = Boolean(
+    caseItem.hearingInviteIssuedAt
+    || caseItem.hearingScheduledAt
+    || (preset && !['informal_action', 'file_note_for_improvement', 'no_further_action'].includes(preset)),
+  );
+  return !wentFormal;
+}
+
+/** Stages to show on the progress rail for this case's actual path. */
+export function stagesForCaseDisplay(processFamily, caseItem = {}) {
+  const all = stagesForFamily(processFamily);
+  if (!isEarlyInformalStyleClose(caseItem)) return all;
+  const first = all[0] || 'fact_finding';
+  const stages = [first, 'closed'];
+  if (caseItem.stage === 'appeal' || caseItem.appealedAt) stages.push('appeal');
+  return stages;
 }
 
 /** Map legacy stage names onto the current wizard (matches backend). */
@@ -99,9 +122,58 @@ export function documentationEmptyMessage(processFamily, stage, listFilter = 'st
   return 'No documentation or interviews recorded for this stage yet.';
 }
 
-function packIncomplete(caseItem) {
-  const steps = Array.isArray(caseItem?.outcomePackSteps) ? caseItem.outcomePackSteps : [];
-  return steps.some((step) => step.id !== 'mark_complete' && !step.done);
+function formatProgressDateUk(value) {
+  const text = String(value || '').slice(0, 10);
+  const match = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return text || '—';
+  return `${match[3]}/${match[2]}/${match[1]}`;
+}
+
+/** Compact hearing date for progress labels (e.g. 8 Sep 2026 at 10:00). */
+export function formatHearingScheduleLabel(caseItem = {}) {
+  const isoDate = String(caseItem.hearingScheduledAt || '').slice(0, 10);
+  const time = String(caseItem.hearingScheduledTime || '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(isoDate)) {
+    return isoDate || time || '';
+  }
+  const date = new Date(`${isoDate}T00:00:00`);
+  if (Number.isNaN(date.getTime())) return isoDate;
+  const datePart = date.toLocaleDateString('en-GB', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
+  return time ? `${datePart} at ${time}` : datePart;
+}
+
+export function isHearingScheduleOverdue(caseItem = {}, now = new Date()) {
+  const isoDate = String(caseItem.hearingScheduledAt || '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(isoDate)) return false;
+  const hearingAt = parseHearingDateTime(caseItem.hearingScheduledAt, caseItem.hearingScheduledTime);
+  if (!hearingAt) return false;
+  return hearingAt.getTime() < now.getTime();
+}
+
+function hearingScheduledProgress(prefix, caseItem, stage) {
+  const when = formatHearingScheduleLabel(caseItem);
+  if (isHearingScheduleOverdue(caseItem)) {
+    return {
+      label: when
+        ? `${prefix} — hearing overdue (scheduled for ${when})`
+        : `${prefix} — hearing overdue`,
+      hint: 'The hearing date has passed — hold the hearing and record the outcome',
+      tone: 'rose',
+      stage,
+    };
+  }
+  return {
+    label: when
+      ? `${prefix} — hearing scheduled for ${when}`
+      : `${prefix} — hearing scheduled`,
+    hint: 'Invite issued — hold the hearing on the scheduled date',
+    tone: 'emerald',
+    stage,
+  };
 }
 
 /**
@@ -116,12 +188,19 @@ export function getCaseProgressStatus(caseItem = {}) {
   const tone = isClosed ? 'slate' : 'indigo';
 
   if (!isClosed && caseItem.status === 'pending_employee') {
-    return {
-      label: `${prefix} — awaiting employee response`,
-      hint: 'Minutes or invite awaiting the employee in the portal',
-      tone: 'amber',
-      stage,
-    };
+    // Fact-finding interview notes are non-blocking (employee may amend/sign asynchronously).
+    // Keep "awaiting employee response" for true waits — but not once a hearing is scheduled.
+    const hearingScheduled = Boolean(caseItem.hearingScheduledAt) && (
+      stage === 'hearing_invite' || stage === 'hearing'
+    );
+    if (stage !== 'fact_finding' && !hearingScheduled) {
+      return {
+        label: `${prefix} — awaiting employee response`,
+        hint: 'Invite or document awaiting the employee in the portal',
+        tone: 'amber',
+        stage,
+      };
+    }
   }
 
   if (family === 'grievance') {
@@ -135,18 +214,26 @@ export function getCaseProgressStatus(caseItem = {}) {
       return { label: `${prefix} — awaiting grievance meeting`, hint: 'Hold meeting and issue minutes', tone, stage };
     }
     if (stage === 'outcome_pack') {
-      if (!caseItem.outcomePreset) {
-        return { label: `${prefix} — awaiting outcome`, hint: 'Select outcome and create outcome documents', tone: 'amber', stage };
-      }
-      if (packIncomplete(caseItem)) {
-        return { label: `${prefix} — awaiting outcome documents`, hint: 'Complete the outcome document pack', tone: 'amber', stage };
-      }
-      return { label: `${prefix} — ready to close`, hint: 'Outcome pack complete — close the case', tone: 'emerald', stage };
+      return {
+        label: `${prefix} — awaiting outcome`,
+        hint: 'Choose an outcome and complete the outcome letter form',
+        tone: 'amber',
+        stage,
+      };
     }
     if (stage === 'appeal') {
       return { label: `${prefix} — on appeal — awaiting outcome`, hint: 'Complete appeal and close', tone: 'amber', stage };
     }
     if (stage === 'closed') {
+      if (caseItem.nextReviewDueAt) {
+        const reviewDate = formatProgressDateUk(caseItem.nextReviewDueAt);
+        return {
+          label: `${prefix} — closed — review scheduled for ${reviewDate}`,
+          hint: 'Case closed with follow-up review',
+          tone: 'slate',
+          stage,
+        };
+      }
       const outcome = caseItem.outcomePreset ? stageLabel(caseItem.outcomePreset) : 'recorded';
       return { label: `${prefix} — ${outcome}`, hint: 'Case closed', tone: 'slate', stage };
     }
@@ -170,6 +257,14 @@ export function getCaseProgressStatus(caseItem = {}) {
 
   // disciplinary (default)
   if (stage === 'fact_finding') {
+    if (caseItem.interviewNotesIssuedAt) {
+      return {
+        label: `${prefix} — awaiting outcome after initial fact-finding`,
+        hint: 'Choose informal action, file note, NFA, or move to a formal hearing',
+        tone: 'amber',
+        stage,
+      };
+    }
     return {
       label: `${prefix} — awaiting fact-finding`,
       hint: 'Hold interview, issue minutes, then close with notes or schedule a hearing',
@@ -178,7 +273,7 @@ export function getCaseProgressStatus(caseItem = {}) {
     };
   }
   if (stage === 'hearing_invite') {
-    if (!caseItem.hearingInviteIssuedAt) {
+    if (!caseItem.hearingInviteIssuedAt && !caseItem.hearingScheduledAt) {
       return {
         label: `${prefix} — awaiting hearing invite`,
         hint: 'Set date and send invite via portal (and print if needed)',
@@ -186,14 +281,20 @@ export function getCaseProgressStatus(caseItem = {}) {
         stage,
       };
     }
+    if (caseItem.hearingScheduledAt) {
+      return hearingScheduledProgress(prefix, caseItem, stage);
+    }
     return {
       label: `${prefix} — hearing invite sent`,
-      hint: 'Invite issued — proceed to hold the hearing',
+      hint: 'Invite issued — set or confirm the hearing date',
       tone: 'emerald',
       stage,
     };
   }
   if (stage === 'hearing') {
+    if (caseItem.hearingScheduledAt) {
+      return hearingScheduledProgress(prefix, caseItem, stage);
+    }
     return {
       label: `${prefix} — awaiting hearing`,
       hint: 'Hold hearing and issue minutes',
@@ -202,33 +303,17 @@ export function getCaseProgressStatus(caseItem = {}) {
     };
   }
   if (stage === 'outcome_pack') {
-    if (!caseItem.outcomePreset) {
-      return {
-        label: `${prefix} — awaiting outcome`,
-        hint: 'Select outcome and create required outcome documents',
-        tone: 'amber',
-        stage,
-      };
-    }
-    if (packIncomplete(caseItem)) {
-      return {
-        label: `${prefix} — awaiting outcome documents`,
-        hint: 'Finish outcome pack letters / documents before closing',
-        tone: 'amber',
-        stage,
-      };
-    }
     return {
-      label: `${prefix} — ready to close`,
-      hint: 'Outcome and documents complete — close the case',
-      tone: 'emerald',
+      label: `${prefix} — awaiting outcome`,
+      hint: 'Choose an outcome and complete the outcome letter form',
+      tone: 'amber',
       stage,
     };
   }
   if (stage === 'appeal') {
     return {
       label: `${prefix} — on appeal — awaiting outcome`,
-      hint: 'Complete appeal hearing and outcome documents',
+      hint: 'Complete appeal hearing and issue outcome letter',
       tone: 'amber',
       stage,
     };
@@ -248,9 +333,32 @@ export function getCaseProgressStatus(caseItem = {}) {
       }
       return { label: `${prefix} — file note for improvement`, hint: 'File note issued and signed', tone: 'slate', stage };
     }
+    if (
+      ['written_warning', 'final_written_warning', 'pip'].includes(caseItem.outcomePreset)
+      && (caseItem.warningEmployeeSignStatus === 'pending' || caseItem.status === 'pending_employee')
+    ) {
+      const outcomeLabel = stageLabel(caseItem.outcomePreset);
+      return {
+        label: `${prefix} — ${outcomeLabel} awaiting employee signature`,
+        hint: 'Outcome letter issued; employee must digitally sign in the portal',
+        tone: 'amber',
+        stage,
+      };
+    }
+    if (caseItem.nextReviewDueAt) {
+      const reviewDate = formatProgressDateUk(caseItem.nextReviewDueAt);
+      return {
+        label: `${prefix} — closed — review scheduled for ${reviewDate}`,
+        hint: caseItem.appealWindowEndsAt
+          ? `Appeal window to ${formatProgressDateUk(caseItem.appealWindowEndsAt)}`
+          : 'Case closed with follow-up review',
+        tone: 'slate',
+        stage,
+      };
+    }
     const outcome = caseItem.outcomePreset ? stageLabel(caseItem.outcomePreset) : 'no further action';
     const appealNote = caseItem.appealWindowEndsAt
-      ? `Appeal window to ${String(caseItem.appealWindowEndsAt).slice(0, 10)}`
+      ? `Appeal window to ${formatProgressDateUk(caseItem.appealWindowEndsAt)}`
       : 'Case closed';
     return { label: `${prefix} — ${outcome}`, hint: appealNote, tone: 'slate', stage };
   }
@@ -265,9 +373,31 @@ export function getCaseProgressStatus(caseItem = {}) {
 
 export function caseProgressToneClass(tone) {
   if (tone === 'amber') return 'text-amber-200 border-amber-500/30 bg-amber-500/10';
+  if (tone === 'rose') return 'text-rose-200 border-rose-500/30 bg-rose-500/10';
   if (tone === 'emerald') return 'text-emerald-200 border-emerald-500/30 bg-emerald-500/10';
   if (tone === 'slate') return 'text-slate-300 border-[#1a2540] bg-[#060e1a]/50';
   return 'text-indigo-100 border-indigo-500/30 bg-indigo-500/10';
+}
+
+/** Calendar days from case open to close. Null if still open or dates missing. */
+export function caseTimeToResolutionDays(caseItem = {}) {
+  const isClosed = caseItem.status === 'closed' || caseItem.stage === 'closed';
+  if (!isClosed || !caseItem.closedAt) return null;
+  const startRaw = caseItem.openedAt || caseItem.createdAt;
+  if (!startRaw) return null;
+  const start = new Date(startRaw);
+  const end = new Date(caseItem.closedAt);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return null;
+  const startDay = Date.UTC(start.getFullYear(), start.getMonth(), start.getDate());
+  const endDay = Date.UTC(end.getFullYear(), end.getMonth(), end.getDate());
+  return Math.max(0, Math.round((endDay - startDay) / 86400000));
+}
+
+export function formatCaseTimeToResolution(caseItem = {}) {
+  const days = caseTimeToResolutionDays(caseItem);
+  if (days === null) return '—';
+  if (days === 0) return 'Same day';
+  return days === 1 ? '1 day' : `${days} days`;
 }
 
 export const OUTCOME_PRESETS = [
@@ -279,7 +409,6 @@ export const OUTCOME_PRESETS = [
   { id: 'final_written_warning', label: 'Final written warning', suggestedExpiryMonths: 12 },
   { id: 'pip', label: 'Performance improvement plan', suggestedExpiryMonths: null },
   { id: 'training_required', label: 'Training required', suggestedExpiryMonths: null },
-  { id: 'suspension', label: 'Suspension', suggestedExpiryMonths: null },
   { id: 'dismissal', label: 'Dismissal', suggestedExpiryMonths: null },
 ];
 
@@ -334,6 +463,34 @@ export function countWorkingDaysNotice(fromIso, toIso) {
   return count;
 }
 
-/** Acas does not fix a number; 5 working days is a common reasonable target. */
+/** Clock hours on weekdays (Mon–Fri) between two datetimes — for 24 working hours policy. */
+export function countWorkingHoursNotice(fromDate, toDate) {
+  const from = fromDate instanceof Date ? new Date(fromDate) : new Date(fromDate);
+  const to = toDate instanceof Date ? new Date(toDate) : new Date(toDate);
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || to <= from) return 0;
+  let hours = 0;
+  const cursor = new Date(from);
+  while (cursor < to) {
+    const day = cursor.getDay();
+    const nextHour = new Date(cursor.getTime() + 60 * 60 * 1000);
+    const sliceEnd = nextHour < to ? nextHour : to;
+    if (day !== 0 && day !== 6) {
+      hours += (sliceEnd.getTime() - cursor.getTime()) / (60 * 60 * 1000);
+    }
+    cursor.setTime(nextHour.getTime());
+  }
+  return hours;
+}
+
+export function parseHearingDateTime(isoDate, time) {
+  const datePart = String(isoDate || '').slice(0, 10);
+  const timePart = String(time || '09:00').trim() || '09:00';
+  const parsed = new Date(`${datePart}T${timePart}:00`);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+/** Country Lion policy: minimum 24 working hours' notice (weekends excluded). */
+export const MINIMUM_HEARING_NOTICE_WORKING_HOURS = 24;
+/** @deprecated kept for older call sites; prefer MINIMUM_HEARING_NOTICE_WORKING_HOURS */
 export const RECOMMENDED_HEARING_NOTICE_WORKING_DAYS = 5;
-export const MINIMUM_HEARING_NOTICE_WORKING_DAYS = 2;
+export const MINIMUM_HEARING_NOTICE_WORKING_DAYS = 1;

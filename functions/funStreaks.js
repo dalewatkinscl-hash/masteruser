@@ -197,7 +197,7 @@ async function recordFunStreakFail(db, {
 }
 
 async function collectOutcomeEvents(db, uid) {
-  const [triviaSnap, wordleSnap, nonogramSnap, sokobanSnap, boggleSnap, connectionsSnap, encloseSnap, letterboxSnap, pipesSnap, toolboxKickSnap] = await Promise.all([
+  const [triviaSnap, wordleSnap, nonogramSnap, sokobanSnap, boggleSnap, connectionsSnap, encloseSnap, letterboxSnap, pipesSnap, toolboxKickSnap, coinFlipSnap, wantedSnap] = await Promise.all([
     db.collection('trivia_answers').where('uid', '==', uid).limit(400).get().catch(() => ({ docs: [] })),
     db.collection('wordle_games').where('uid', '==', uid).limit(400).get().catch(() => ({ docs: [] })),
     db.collection('nonogram_games').where('uid', '==', uid).limit(400).get().catch(() => ({ docs: [] })),
@@ -208,6 +208,8 @@ async function collectOutcomeEvents(db, uid) {
     db.collection('letterbox_games').where('uid', '==', uid).limit(400).get().catch(() => ({ docs: [] })),
     db.collection('pipes_games').where('uid', '==', uid).limit(400).get().catch(() => ({ docs: [] })),
     db.collection('toolbox_kick_games').where('uid', '==', uid).limit(400).get().catch(() => ({ docs: [] })),
+    db.collection('coin_flip_games').where('uid', '==', uid).limit(400).get().catch(() => ({ docs: [] })),
+    db.collection('wanted_games').where('uid', '==', uid).limit(400).get().catch(() => ({ docs: [] })),
   ]);
 
   const fromTrivia = triviaSnap.docs.map((doc) => {
@@ -221,8 +223,29 @@ async function collectOutcomeEvents(db, uid) {
   const fromStatus = (snap) => snap.docs.map((doc) => {
     const row = doc.data() || {};
     if (!row.dayKey) return null;
-    if (row.status === 'won') return { dayKey: row.dayKey, outcome: 'win' };
+    if (row.status === 'won' || row.status === 'complete') return { dayKey: row.dayKey, outcome: 'win' };
     if (row.status === 'lost') return { dayKey: row.dayKey, outcome: 'fail' };
+    return null;
+  }).filter(Boolean);
+
+  const fromCoinFlip = coinFlipSnap.docs.map((doc) => {
+    const row = doc.data() || {};
+    if (!row.dayKey) return null;
+    const best = Math.floor(Number(row.bestStreak) || 0);
+    if ((row.status === 'won' || row.status === 'complete') && best >= 1) {
+      return { dayKey: row.dayKey, outcome: 'win' };
+    }
+    return null;
+  }).filter(Boolean);
+
+  const fromWanted = wantedSnap.docs.map((doc) => {
+    const row = doc.data() || {};
+    if (!row.dayKey) return null;
+    const hasWin = Boolean(
+      row.status === 'won'
+      || (row.standard?.timeMs != null && row.impossible?.timeMs != null),
+    );
+    if (hasWin) return { dayKey: row.dayKey, outcome: 'win' };
     return null;
   }).filter(Boolean);
 
@@ -237,6 +260,8 @@ async function collectOutcomeEvents(db, uid) {
     letterbox: fromStatus(letterboxSnap),
     pipes: fromStatus(pipesSnap),
     toolboxkick: fromStatus(toolboxKickSnap),
+    coinflip: fromCoinFlip,
+    wanted: fromWanted,
   };
 }
 
@@ -259,6 +284,8 @@ async function backfillFunStreaksFromHistory(db, {
       letterbox: emptyGameStreak(),
       pipes: emptyGameStreak(),
       toolboxkick: emptyGameStreak(),
+      coinflip: emptyGameStreak(),
+      wanted: emptyGameStreak(),
     };
   }
 
@@ -273,6 +300,8 @@ async function backfillFunStreaksFromHistory(db, {
   const letterbox = computeStreakFromOutcomes(events.letterbox, todayKey);
   const pipes = computeStreakFromOutcomes(events.pipes, todayKey);
   const toolboxkick = computeStreakFromOutcomes(events.toolboxkick, todayKey);
+  const coinflip = computeStreakFromOutcomes(events.coinflip, todayKey);
+  const wanted = computeStreakFromOutcomes(events.wanted, todayKey);
 
   await db.collection('fun_streaks').doc(uid).set({
     uid,
@@ -288,13 +317,15 @@ async function backfillFunStreaksFromHistory(db, {
     letterbox,
     pipes,
     toolboxkick,
+    coinflip,
+    wanted,
     streakWeekdayAware: true,
     streakFailAware: true,
     backfilledAt: FieldValue.serverTimestamp(),
     updatedAt: FieldValue.serverTimestamp(),
   }, { merge: true });
 
-  return { trivia, wordle, nonogram, sokoban, boggle, connections, enclose, letterbox, pipes, toolboxkick };
+  return { trivia, wordle, nonogram, sokoban, boggle, connections, enclose, letterbox, pipes, toolboxkick, coinflip, wanted };
 }
 
 async function loadFunStreaks(db, uid, {
@@ -316,6 +347,8 @@ async function loadFunStreaks(db, uid, {
       letterbox: emptyGameStreak(),
       pipes: emptyGameStreak(),
       toolboxkick: emptyGameStreak(),
+      coinflip: emptyGameStreak(),
+      wanted: emptyGameStreak(),
     };
   }
 
@@ -332,6 +365,8 @@ async function loadFunStreaks(db, uid, {
     || !data.letterbox
     || !data.pipes
     || !data.toolboxkick
+    || !data.coinflip
+    || !data.wanted
     || !data.streakWeekdayAware
     || !data.streakFailAware;
 
@@ -356,6 +391,8 @@ async function loadFunStreaks(db, uid, {
     letterbox: normalizeGameStreak(data.letterbox),
     pipes: normalizeGameStreak(data.pipes),
     toolboxkick: normalizeGameStreak(data.toolboxkick),
+    coinflip: normalizeGameStreak(data.coinflip),
+    wanted: normalizeGameStreak(data.wanted),
   };
 }
 
@@ -371,6 +408,8 @@ function serializeAchievements(streaks = {}, dayKey = '') {
     { key: 'letterbox', label: 'Letter Box' },
     { key: 'pipes', label: 'Pipes' },
     { key: 'toolboxkick', label: 'Little Dicks Toolbox' },
+    { key: 'coinflip', label: 'Coin Flip Streak' },
+    { key: 'wanted', label: 'Wanted' },
   ];
 
   return games.map((game) => {

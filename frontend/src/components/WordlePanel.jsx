@@ -286,7 +286,12 @@ export default function WordlePanel({
               {practice ? ' Practice only — not on the leaderboard.' : ' Nice one.'}
             </p>
           )}
-          {game?.status === 'lost' && (
+          {game?.status === 'lost' && game?.failReason === 'cheat_caught' && (
+            <p className="text-center text-sm text-rose-300">
+              💩 Game over.
+            </p>
+          )}
+          {game?.status === 'lost' && game?.failReason !== 'cheat_caught' && (
             <p className="text-center text-sm text-rose-300">
               Out of guesses. The word was <span className="font-semibold uppercase">{game.answer}</span>.
             </p>

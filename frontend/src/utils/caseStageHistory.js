@@ -52,8 +52,8 @@ export function buildStageHistory({
       case 'case_created':
         pushEntry(map, firstStage, {
           at,
-          who,
-          text: `Case opened${data.informalResolutionPath
+          who: payload.createdByName || who,
+          text: `Case opened by ${payload.createdByName || who}${data.informalResolutionPath
             ? ` — ${informalPathLabel(data.informalResolutionPath)}`
             : ''}`,
         });
@@ -93,19 +93,19 @@ export function buildStageHistory({
       case 'informal_action_recorded_and_closed':
         pushEntry(map, 'closed', {
           at,
-          who,
+          who: payload.closedByName || who,
           text: `Closed as informal action${payload.informalActionDetails ? `: ${payload.informalActionDetails}` : ''}`,
         });
         break;
       case 'file_note_for_improvement_issued':
         pushEntry(map, 'fact_finding', {
           at,
-          who,
+          who: payload.closedByName || who,
           text: `File note for improvement issued${payload.reason ? `: ${payload.reason}` : ''} (manager digitally signed; awaiting employee)`,
         });
         pushEntry(map, 'closed', {
           at,
-          who,
+          who: payload.closedByName || who,
           text: 'Case closed — file note for improvement issued to employee portal',
         });
         break;
@@ -136,6 +136,19 @@ export function buildStageHistory({
           });
         }
         break;
+    }
+  }
+
+  if (data.createdByUid || data.createdByName) {
+    const opener = data.createdByName || nameForUid(data.createdByUid, employees);
+    if (opener && opener !== 'Unknown' && !events.some((e) => e.eventType === 'case_created')) {
+      pushEntry(map, firstStage, {
+        at: data.openedAt || data.createdAt,
+        who: opener,
+        text: `Case opened by ${opener}${data.informalResolutionPath
+          ? ` — ${informalPathLabel(data.informalResolutionPath)}`
+          : ''}`,
+      });
     }
   }
 

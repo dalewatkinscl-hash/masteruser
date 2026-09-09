@@ -5,9 +5,11 @@ const inputClass = 'w-full bg-[#060e1a] border border-[#1a2540] text-slate-100 t
 export function isCasesManagerCandidate(employee) {
   const access = employee?.portalsAccess || {};
   if (access.master_admin === 'admin') return true;
-  if (['manager', 'hr', 'admin'].includes(access.cases_app)) return true;
-  if (['manager', 'admin'].includes(access.hr_app)) return true;
-  return false;
+  return ['manager', 'hr', 'admin'].includes(access.cases_app);
+}
+
+function personId(employee) {
+  return String(employee?.uid || employee?.id || '').trim();
 }
 
 function labelFor(employee) {
@@ -33,15 +35,17 @@ export default function EmployeeSelect({
 }) {
   const [search, setSearch] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
+  const [picked, setPicked] = useState(null);
 
-  const selected = employees.find((employee) => employee.uid === value) || null;
+  const selected = employees.find((employee) => personId(employee) === String(value || '').trim())
+    || (picked && personId(picked) === String(value || '').trim() ? picked : null);
 
   // When a value is set externally (e.g. prefill), clear any stale search text.
   const displaySearch = selected ? '' : search;
 
   const suggestions = useMemo(() => {
     const query = (selected ? '' : search).trim().toLowerCase();
-    if (!query) return [];
+    const selectedId = String(value || '').trim();
 
     let list = employees.filter((employee) => employee.isActive !== false);
     if (mode === 'managers') {
@@ -49,7 +53,9 @@ export default function EmployeeSelect({
     }
 
     list = list.filter((employee) => {
-      if (value && employee.uid === value) return false; // already selected
+      const id = personId(employee);
+      if (selectedId && id === selectedId) return false;
+      if (!query) return true;
       const haystack = [
         employee.fullName,
         employee.email,
@@ -64,13 +70,17 @@ export default function EmployeeSelect({
       .slice(0, 10);
   }, [employees, mode, search, value, selected]);
 
-  const select = (uid) => {
-    onChange?.(uid);
+  const select = (employee) => {
+    const uid = personId(employee);
+    if (!uid) return;
+    setPicked(employee);
+    onChange?.(uid, employee);
     setSearch('');
     setMenuOpen(false);
   };
 
   const clear = () => {
+    setPicked(null);
     onChange?.('');
     setSearch('');
   };
@@ -96,25 +106,36 @@ export default function EmployeeSelect({
       ) : (
         <div className="relative">
           <input
-            type="search"
+            type="text"
             value={displaySearch || search}
             onChange={(e) => { setSearch(e.target.value); setMenuOpen(true); }}
             onFocus={() => setMenuOpen(true)}
-            onBlur={() => window.setTimeout(() => setMenuOpen(false), 150)}
+            onBlur={() => window.setTimeout(() => setMenuOpen(false), 200)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                if (suggestions[0]) select(suggestions[0]);
+              }
+            }}
             className={inputClass}
-            placeholder={loading ? 'Loading…' : `Search by name, email or department…`}
-            disabled={disabled || loading}
+            placeholder={loading ? 'Loading staff list…' : 'Click or type a name, email or department'}
+            disabled={disabled}
             autoComplete="off"
+            role="combobox"
+            aria-expanded={menuOpen}
+            aria-label={emptyLabel}
           />
-          {menuOpen && search.trim() && !loading && suggestions.length > 0 && (
+          {menuOpen && suggestions.length > 0 && (
             <ul className="absolute z-20 mt-1 max-h-56 w-full overflow-auto rounded-lg border border-[#1a2540] bg-[#0b1220] shadow-xl py-1">
               {suggestions.map((employee) => (
-                <li key={employee.uid}>
+                <li key={personId(employee) || employee.email}>
                   <button
                     type="button"
                     className="block w-full px-3 py-2 text-left text-sm text-slate-200 hover:bg-[#060e1a]"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => select(employee.uid)}
+                    onPointerDown={(e) => {
+                      e.preventDefault();
+                      select(employee);
+                    }}
                   >
                     <span className="block">{labelFor(employee)}</span>
                     <span className="block text-xs text-slate-500">
@@ -126,7 +147,12 @@ export default function EmployeeSelect({
               ))}
             </ul>
           )}
-          {menuOpen && search.trim() && !loading && suggestions.length === 0 && (
+          {menuOpen && !loading && employees.length === 0 && (
+            <p className="absolute z-20 mt-1 w-full rounded-lg border border-[#1a2540] bg-[#0b1220] px-3 py-2 text-xs text-amber-300 shadow-xl">
+              Staff list did not load. Refresh the page and try again.
+            </p>
+          )}
+          {menuOpen && !loading && employees.length > 0 && suggestions.length === 0 && (
             <p className="absolute z-20 mt-1 w-full rounded-lg border border-[#1a2540] bg-[#0b1220] px-3 py-2 text-xs text-amber-300 shadow-xl">
               {mode === 'managers'
                 ? 'No People Cases managers match. Grant the People Cases role in the portal matrix.'
@@ -247,8 +273,10 @@ export function ManagerMultiSelect({
                 <button
                   type="button"
                   className="block w-full px-3 py-2 text-left text-sm text-slate-200 hover:bg-[#060e1a]"
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={() => addUid(employee.uid)}
+                  onPointerDown={(event) => {
+                    event.preventDefault();
+                    addUid(employee.uid);
+                  }}
                 >
                   {labelFor(employee)}
                 </button>

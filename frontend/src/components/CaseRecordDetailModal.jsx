@@ -176,26 +176,59 @@ export default function CaseRecordDetailModal({
             </>
           )}
 
-          {(document?.fileName || document?.sharePointWebUrl) && (
-            <div className="rounded-lg border border-indigo-500/25 bg-indigo-500/5 p-3">
+          {(document?.fileName || document?.sharePointWebUrl || document?.portalHtml) && (
+            <div className="rounded-lg border border-indigo-500/25 bg-indigo-500/5 p-3 space-y-3">
               <p className="text-indigo-100 font-medium">{document.fileName || 'Attached file'}</p>
-              {document.sharePointWebUrl && (
-                <a
-                  href={document.sharePointWebUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex mt-2 text-sm text-indigo-300 underline"
-                >
-                  Open in SharePoint
-                </a>
-              )}
               {document.documentType && (
-                <p className="text-xs text-slate-400 mt-2">Type: {document.documentType}</p>
+                <p className="text-xs text-slate-400">Type: {document.documentType}</p>
+              )}
+              {document.employeeSignStatus === 'pending' && (
+                <p className="text-xs text-amber-200">Awaiting employee digital signature</p>
+              )}
+              {document.employeeSignStatus === 'signed' && (
+                <p className="text-xs text-emerald-200">Employee digitally signed</p>
+              )}
+              <div className="flex flex-wrap gap-2">
+                {document.portalHtml && (
+                  <button
+                    type="button"
+                    className={btnPrimary}
+                    onClick={() => {
+                      const win = window.open('', '_blank', 'noopener,noreferrer');
+                      if (!win) return;
+                      win.document.open();
+                      win.document.write(document.portalHtml);
+                      win.document.close();
+                    }}
+                  >
+                    Open document
+                  </button>
+                )}
+                {document.sharePointWebUrl && (
+                  <a
+                    href={document.sharePointWebUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className={`${btnSecondary} inline-flex items-center`}
+                  >
+                    Open in SharePoint
+                  </a>
+                )}
+              </div>
+              {document.portalHtml && (
+                <div className="rounded-lg border border-[#1a2540] bg-white overflow-hidden">
+                  <iframe
+                    title={document.fileName || 'Case document'}
+                    srcDoc={document.portalHtml}
+                    className="w-full min-h-[520px] bg-white"
+                    style={{ display: 'block' }}
+                  />
+                </div>
               )}
             </div>
           )}
 
-          {!minute && document && !document.sharePointWebUrl && (
+          {!minute && document && !document.sharePointWebUrl && !document.portalHtml && (
             <p className="text-slate-500">No additional preview available for this upload.</p>
           )}
         </div>

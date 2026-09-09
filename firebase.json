@@ -242,6 +242,11 @@
         "region": "europe-west2"
       },
       {
+        "source": "/api/downloadEmployeeCaseDocument",
+        "function": "downloadEmployeeCaseDocument",
+        "region": "europe-west2"
+      },
+      {
         "source": "/api/signFileNoteDocument",
         "function": "signFileNoteDocument",
         "region": "europe-west2"
@@ -467,6 +472,26 @@
         "region": "europe-west2"
       },
       {
+        "source": "/api/getDailyCoinFlip",
+        "function": "getDailyCoinFlip",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/submitCoinFlipResult",
+        "function": "submitCoinFlipResult",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getDailyWanted",
+        "function": "getDailyWanted",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/submitWantedResult",
+        "function": "submitWantedResult",
+        "region": "europe-west2"
+      },
+      {
         "source": "/api/adminResetFunGame",
         "function": "adminResetFunGame",
         "region": "europe-west2"
@@ -487,8 +512,28 @@
         "region": "europe-west2"
       },
       {
+        "source": "/api/adminGetFunRotationSettings",
+        "function": "adminGetFunRotationSettings",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/adminSaveFunRotationSettings",
+        "function": "adminSaveFunRotationSettings",
+        "region": "europe-west2"
+      },
+      {
         "source": "/api/adminListFunContent",
         "function": "adminListFunContent",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/adminListWordleSuspects",
+        "function": "adminListWordleSuspects",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/adminSetWordleSuspect",
+        "function": "adminSetWordleSuspect",
         "region": "europe-west2"
       },
       {
@@ -544,6 +589,36 @@
       {
         "source": "/api/deleteEmergencyPhoneShift",
         "function": "deleteEmergencyPhoneShift",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getRollCallLists",
+        "function": "getRollCallLists",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getRollCallList{,/**}",
+        "function": "getRollCallList",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/createRollCallList",
+        "function": "createRollCallList",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/updateRollCallList",
+        "function": "updateRollCallList",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/setRollCallMemberTick",
+        "function": "setRollCallMemberTick",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/deleteRollCallList",
+        "function": "deleteRollCallList",
         "region": "europe-west2"
       },
       {

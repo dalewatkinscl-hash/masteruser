@@ -5,22 +5,26 @@ import CaseGuidePanel from '../components/CaseGuidePanel';
 import CaseDocumentationHub from '../components/CaseDocumentationHub';
 import CaseProgressRail from '../components/CaseProgressRail';
 import EmployeeSelect from '../components/EmployeeSelect';
+import { useAuth } from '../context/AuthContext';
 import {
   INFORMAL_RESOLUTION_OPTIONS,
-  MINIMUM_HEARING_NOTICE_WORKING_DAYS,
+  MINIMUM_HEARING_NOTICE_WORKING_HOURS,
   OUTCOME_PRESETS,
   PROCESS_FAMILIES,
-  RECOMMENDED_HEARING_NOTICE_WORKING_DAYS,
   addMonthsIso,
   addWorkingDaysIso,
   countWorkingDaysNotice,
+  countWorkingHoursNotice,
+  parseHearingDateTime,
   normalizeStage,
   stageAllowsDocumentation,
   stageLabel,
   stagesForFamily,
+  stagesForCaseDisplay,
   getCaseProgressStatus,
   caseProgressToneClass,
 } from '../utils/peopleCasesAccess';
+import { nameForUid } from '../utils/caseStageHistory';
 import { buildHearingInviteHtml, printHearingInvite } from '../utils/hearingInvitePrint';
 import { buildFileNoteForImprovementHtml, printHtmlDocument } from '../utils/fileNoteForImprovementPrint';
 import { ALLOW_DELETE_CASES } from '../utils/featureFlags';
@@ -92,6 +96,7 @@ export default function DisciplinaryCase() {
   const [searchParams] = useSearchParams();
   const isNew = !caseId || caseId === 'new';
   const navigate = useNavigate();
+  const { user } = useAuth();
   const prefilledEmployeeUid = searchParams.get('employeeUid') || '';
   const prefilledEmployeeName = searchParams.get('employeeName') || '';
   const prefilledFamily = searchParams.get('processFamily') || 'disciplinary';
@@ -106,7 +111,6 @@ export default function DisciplinaryCase() {
   const [minutes, setMinutes] = useState([]);
   const [reviews, setReviews] = useState([]);
   const [history, setHistory] = useState([]);
-  const [consistency, setConsistency] = useState([]);
   const [sharePointConfigured, setSharePointConfigured] = useState(false);
   const [sharePointPath, setSharePointPath] = useState('');
   const [sharePointFolderConfirmed, setSharePointFolderConfirmed] = useState(false);
@@ -124,12 +128,11 @@ export default function DisciplinaryCase() {
   const signedFileNoteInputRef = useRef(null);
   const [viewStage, setViewStage] = useState(null);
   const [showExtras, setShowExtras] = useState(false);
-  const [reviewDueAt, setReviewDueAt] = useState('');
-  const [reviewTitle, setReviewTitle] = useState('Scheduled review');
   const [acknowledgeSameInvestigator, setAcknowledgeSameInvestigator] = useState(false);
   const [acknowledgeSameAppealOwner, setAcknowledgeSameAppealOwner] = useState(false);
   const [acknowledgeShortNotice, setAcknowledgeShortNotice] = useState(false);
   const [outcomeModal, setOutcomeModal] = useState(null);
+  const [outcomeShowErrors, setOutcomeShowErrors] = useState(false);
   const [hearingForm, setHearingForm] = useState({
     hearingScheduledAt: '',
     hearingScheduledTime: '10:00',
@@ -156,7 +159,10 @@ export default function DisciplinaryCase() {
   });
 
   const family = caseData?.processFamily || form.processFamily || 'disciplinary';
-  const stages = useMemo(() => stagesForFamily(family), [family]);
+  const stages = useMemo(
+    () => (isNew ? stagesForFamily(family) : stagesForCaseDisplay(family, caseData || {})),
+    [isNew, family, caseData],
+  );
   const currentStage = useMemo(
     () => (isNew ? null : normalizeStage(family, caseData?.stage)),
     [isNew, family, caseData?.stage],
@@ -165,6 +171,12 @@ export default function DisciplinaryCase() {
   useEffect(() => {
     if (currentStage) setViewStage(currentStage);
   }, [currentStage]);
+
+  useEffect(() => {
+    if (viewStage && stages.length && !stages.includes(viewStage)) {
+      setViewStage(currentStage || stages[stages.length - 1] || null);
+    }
+  }, [stages, viewStage, currentStage]);
 
   const displayStage = viewStage || currentStage;
   const viewingPastStage = Boolean(displayStage && currentStage && displayStage !== currentStage);
@@ -193,13 +205,40 @@ export default function DisciplinaryCase() {
     return employees.find((item) => item.uid === uid)?.fullName || '';
   }, [caseData?.hearingManagerUid, employees]);
 
+  const recordedByName = useMemo(() => {
+    if (!caseData) return '';
+    if (caseData.createdByName) return caseData.createdByName;
+    return nameForUid(caseData.createdByUid, employees);
+  }, [caseData, employees]);
+
+  const closedByName = useMemo(() => {
+    if (!caseData) return '';
+    if (caseData.outcomePreset === 'file_note_for_improvement') {
+      return caseData.fileNoteIssuedByName
+        || nameForUid(caseData.fileNoteIssuedByUid, employees)
+        || '';
+    }
+    if (caseData.closedByName) return caseData.closedByName;
+    if (caseData.decisionMakerUid) return nameForUid(caseData.decisionMakerUid, employees);
+    return nameForUid(caseData.updatedByUid, employees);
+  }, [caseData, employees]);
+
+  const ownerManagerName = useMemo(() => {
+    if (!caseData) return '';
+    if (caseData.managerNameSnapshot) return caseData.managerNameSnapshot;
+    return nameForUid(caseData.ownerManagerUid || caseData.managerUid, employees);
+  }, [caseData, employees]);
+
   const todayIso = new Date().toISOString().slice(0, 10);
-  // Country Lion policy: minimum 24 working hours (approx 1 working day)
+  const hearingAt = hearingForm.hearingScheduledAt
+    ? parseHearingDateTime(hearingForm.hearingScheduledAt, hearingForm.hearingScheduledTime)
+    : null;
+  const hearingNoticeHours = hearingAt ? countWorkingHoursNotice(new Date(), hearingAt) : null;
   const hearingNoticeDays = hearingForm.hearingScheduledAt
     ? countWorkingDaysNotice(todayIso, hearingForm.hearingScheduledAt)
     : null;
-  const hearingNoticeShort = hearingNoticeDays !== null && hearingNoticeDays < RECOMMENDED_HEARING_NOTICE_WORKING_DAYS;
-  const hearingNoticeVeryShort = hearingNoticeDays !== null && hearingNoticeDays < MINIMUM_HEARING_NOTICE_WORKING_DAYS;
+  const hearingNoticeShort = hearingNoticeHours !== null
+    && hearingNoticeHours < MINIMUM_HEARING_NOTICE_WORKING_HOURS;
 
   const reload = async (id = caseId) => {
     const response = await fetch(`/api/getPeopleCase/${id}`, { credentials: 'include' });
@@ -212,7 +251,6 @@ export default function DisciplinaryCase() {
     setMinutes(data.minutes || []);
     setReviews(data.reviews || []);
     setHistory(data.history || []);
-    setConsistency(data.consistency || []);
     setSharePointConfigured(Boolean(data.sharePointConfigured));
     setSharePointPath(data.sharePointPath || '');
     setSharePointFolderConfirmed(Boolean(data.sharePointFolderConfirmed));
@@ -291,19 +329,20 @@ export default function DisciplinaryCase() {
     setForm((prev) => ({ ...prev, [name]: type === 'checkbox' ? checked : value }));
   };
 
-  const handleEmployeeSelect = (uid) => {
-    const employee = employees.find((item) => item.uid === uid);
+  const handleEmployeeSelect = (uid, employee) => {
+    const person = employee || employees.find((item) => item.uid === uid || item.id === uid);
+    const resolvedUid = String(person?.uid || uid || '').trim();
     setForm((prev) => ({
       ...prev,
-      employeeUid: uid,
+      employeeUid: resolvedUid,
       title: prev.title?.trim()
         ? prev.title
-        : (employee?.fullName ? `Case: ${employee.fullName}` : prev.title),
+        : (person?.fullName ? `Case: ${person.fullName}` : prev.title),
     }));
     setInformalHistory([]);
-    if (uid) {
+    if (resolvedUid) {
       setInformalHistoryLoading(true);
-      fetch(`/api/getEmployeeInformalHistory?employeeUid=${encodeURIComponent(uid)}`, { credentials: 'include' })
+      fetch(`/api/getEmployeeInformalHistory?employeeUid=${encodeURIComponent(resolvedUid)}`, { credentials: 'include' })
         .then((r) => readJsonResponse(r).then((d) => ({ ok: r.ok, d })))
         .then(({ ok, d }) => { if (ok) setInformalHistory((d || {}).items || []); })
         .catch(() => {})
@@ -332,7 +371,7 @@ export default function DisciplinaryCase() {
           setError(data.error || 'Upload required documents before continuing.');
           return { ok: false, code: 'missing_documents', data };
         }
-        throw new Error(data.error || 'Update failed.');
+        throw new Error(data.error || `Update failed (${response.status}).`);
       }
       setMessage(data.message || 'Updated.');
       await reload();
@@ -346,6 +385,14 @@ export default function DisciplinaryCase() {
   };
 
   const handleCreate = async () => {
+    if (!form.employeeUid) {
+      setError('Select the employee this case is about, then open the case.');
+      return;
+    }
+    if ((form.processFamily === 'disciplinary' || form.processFamily === 'grievance') && !form.informalResolutionPath) {
+      setError('Choose how you are starting the case before opening it.');
+      return;
+    }
     setSaving(true);
     setError('');
     try {
@@ -569,27 +616,6 @@ export default function DisciplinaryCase() {
     />
   ) : null;
 
-  const scheduleReview = async () => {
-    setSaving(true);
-    setError('');
-    try {
-      const response = await fetch('/api/createCaseReview', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ caseId, dueAt: reviewDueAt, title: reviewTitle }),
-      });
-      const data = (await readJsonResponse(response)) || {};
-      if (!response.ok) throw new Error(data.error || 'Failed to schedule review.');
-      setMessage('Review scheduled.');
-      await reload();
-    } catch (err) {
-      setError(err.message || 'Failed to schedule review.');
-    } finally {
-      setSaving(false);
-    }
-  };
-
   const exportCase = async () => {
     setSaving(true);
     setError('');
@@ -644,37 +670,202 @@ export default function DisciplinaryCase() {
     { months: 12, label: '12 months', guidance: 'Acas: appropriate for final written warnings or more serious/repeated concerns.' },
   ];
 
+  const formatWarningExpiry = (value) => {
+    if (!value) return 'n/a';
+    const text = String(value).slice(0, 10);
+    const match = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (!match) return text;
+    return `${match[3]}/${match[2]}/${match[1].slice(2)}`;
+  };
+
+  const formatActiveWarning = (item) => {
+    const title = item.warningTitle || item.title || 'Untitled';
+    const outcome = stageLabel(item.outcomePreset || 'warning');
+    const expires = formatWarningExpiry(item.warningExpiresAt);
+    return `${title} — ${outcome} — expires ${expires}`;
+  };
+
+  const openActiveWarningCase = (item) => {
+    if (!item?.id) return;
+    window.open(`/dashboard/cases/${item.id}`, '_blank', 'noopener,noreferrer');
+  };
+
   const needsDuration = (presetId) => ['written_warning', 'final_written_warning', 'pip'].includes(presetId);
 
   const openOutcomeModal = (presetId) => {
     const preset = OUTCOME_PRESETS.find((item) => item.id === presetId);
+    setOutcomeShowErrors(false);
     setOutcomeModal({
       presetId,
       presetLabel: preset?.label || presetId,
-      outcomeDetails: '',
-      durationMonths: preset?.suggestedExpiryMonths || (needsDuration(presetId) ? 6 : null),
+      warningTitle: caseData?.warningTitle || '',
+      outcomeDetails: caseData?.outcomeDetails || '',
+      evidenceConsideration: caseData?.evidenceConsideration || '',
+      expectedStandard: caseData?.expectedStandard || '',
+      supportMonitoringRetraining: caseData?.supportMonitoringRetraining || '',
+      appealRecipientUid: caseData?.appealRecipientUid || caseData?.appealOwnerUid || '',
+      durationMonths: caseData?.warningDurationMonths
+        || preset?.suggestedExpiryMonths
+        || (needsDuration(presetId) ? 6 : null),
+      reviews: [{ title: 'Review meeting', dueAt: '', notes: '' }],
+      supersedeCaseIds: [],
     });
   };
 
+  const toggleSupersedeCase = (caseId) => {
+    setOutcomeModal((prev) => {
+      if (!prev) return prev;
+      const selected = new Set(prev.supersedeCaseIds || []);
+      if (selected.has(caseId)) selected.delete(caseId);
+      else selected.add(caseId);
+      return { ...prev, supersedeCaseIds: [...selected] };
+    });
+  };
+
+  const updateOutcomeReview = (index, patch) => {
+    setOutcomeModal((prev) => {
+      if (!prev) return prev;
+      const reviews = [...(prev.reviews || [])];
+      reviews[index] = { ...reviews[index], ...patch };
+      return { ...prev, reviews };
+    });
+  };
+
+  const addOutcomeReviewRow = () => {
+    setOutcomeModal((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        reviews: [...(prev.reviews || []), { title: 'Review meeting', dueAt: '', notes: '' }],
+      };
+    });
+  };
+
+  const removeOutcomeReviewRow = (index) => {
+    setOutcomeModal((prev) => {
+      if (!prev) return prev;
+      const reviews = [...(prev.reviews || [])];
+      reviews.splice(index, 1);
+      return { ...prev, reviews: reviews.length ? reviews : [{ title: 'Review meeting', dueAt: '', notes: '' }] };
+    });
+  };
+
+  const outcomeFormReady = (modal) => {
+    if (!modal) return false;
+    if (needsDuration(modal.presetId) && !String(modal.warningTitle || '').trim()) return false;
+    if (!String(modal.outcomeDetails || '').trim()) return false;
+    if (!String(modal.evidenceConsideration || '').trim()) return false;
+    if (!String(modal.expectedStandard || '').trim()) return false;
+    if (!String(modal.supportMonitoringRetraining || '').trim()) return false;
+    if (!String(modal.appealRecipientUid || '').trim()) return false;
+    if (needsDuration(modal.presetId) && !modal.durationMonths) return false;
+    return true;
+  };
+
+  const outcomeFieldInvalid = (key) => {
+    if (!outcomeShowErrors || !outcomeModal) return false;
+    if (key === 'warningTitle') {
+      return needsDuration(outcomeModal.presetId) && !String(outcomeModal.warningTitle || '').trim();
+    }
+    if (key === 'durationMonths') {
+      return needsDuration(outcomeModal.presetId) && !outcomeModal.durationMonths;
+    }
+    if (key === 'appealRecipientUid') {
+      return !String(outcomeModal.appealRecipientUid || '').trim();
+    }
+    return !String(outcomeModal[key] || '').trim();
+  };
+
+  const outcomeInputClass = (key) => (
+    outcomeFieldInvalid(key)
+      ? `${inputClass} border-red-500 ring-1 ring-red-500/60`
+      : inputClass
+  );
+
   const confirmOutcome = async () => {
     if (!outcomeModal) return;
-    const { presetId, outcomeDetails, durationMonths } = outcomeModal;
+    if (!outcomeFormReady(outcomeModal)) {
+      setOutcomeShowErrors(true);
+      return;
+    }
+    const {
+      presetId,
+      warningTitle,
+      outcomeDetails,
+      evidenceConsideration,
+      expectedStandard,
+      supportMonitoringRetraining,
+      appealRecipientUid,
+      durationMonths,
+      supersedeCaseIds,
+      reviews,
+    } = outcomeModal;
     const today = new Date().toISOString().slice(0, 10);
     const body = {
+      finalizeOutcome: true,
       outcomePreset: presetId,
+      warningTitle: String(warningTitle || '').trim(),
       outcomeDetails,
-      stage: 'outcome_pack',
+      evidenceConsideration,
+      expectedStandard,
+      supportMonitoringRetraining,
+      appealRecipientUid,
+      supersedeCaseIds: supersedeCaseIds || [],
+      reviews: (reviews || [])
+        .filter((item) => String(item.dueAt || '').trim())
+        .map((item) => ({
+          title: item.title || 'Review meeting',
+          dueAt: item.dueAt,
+          notes: item.notes || '',
+        })),
     };
     if (durationMonths) {
       body.warningEffectiveAt = today;
       body.warningExpiresAt = addMonthsIso(today, durationMonths);
       body.warningDurationMonths = durationMonths;
     }
-    await apiUpdate(body);
-    setOutcomeModal(null);
+    const result = await apiUpdate(body);
+    if (result?.ok) {
+      setOutcomeModal(null);
+      setOutcomeShowErrors(false);
+    }
   };
 
   const selectOutcome = (presetId) => openOutcomeModal(presetId);
+
+  const activeWarningsPanel = (
+    <div className="rounded-lg border border-[#1a2540] p-3 space-y-3">
+      <div>
+        <p className="text-sm font-medium text-slate-200">Current active disciplinaries</p>
+        <p className="text-xs text-slate-500 mt-1">
+          Live warnings on this employee&apos;s record. Click a warning to open that case. When confirming an outcome you can choose which ones the new decision supersedes.
+        </p>
+      </div>
+      {history.length === 0 ? (
+        <p className="text-sm text-slate-500">No active warnings on record.</p>
+      ) : (
+        <ul className="space-y-2">
+          {history.map((item) => (
+            <li key={item.id}>
+              <button
+                type="button"
+                className="w-full text-left text-sm text-slate-300 border border-[#1a2540] rounded-lg px-3 py-2 hover:border-indigo-500/40 hover:bg-indigo-500/10 hover:text-indigo-100"
+                onClick={() => openActiveWarningCase(item)}
+              >
+                {formatActiveWarning(item)}
+                <span className="block text-[11px] text-indigo-300 mt-1">Open case ↗</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {Array.isArray(caseData?.supersededWarnings) && caseData.supersededWarnings.length > 0 && (
+        <p className="text-xs text-emerald-300">
+          This outcome superseded: {caseData.supersededWarnings.map((item) => item.warningTitle || item.title || item.id).join(', ')}
+        </p>
+      )}
+    </div>
+  );
 
   const closeWithNotes = async () => {
     const result = await apiUpdate({
@@ -775,6 +966,11 @@ export default function DisciplinaryCase() {
             Primary process: issued to the employee portal for digital signature.
             Your manager signature was applied when the note was created.
           </p>
+          {(caseData?.fileNoteIssuedByName || closedByName) && (
+            <p className="text-xs text-indigo-100/80 mt-1">
+              Recorded by {caseData?.fileNoteIssuedByName || closedByName}
+            </p>
+          )}
         </div>
 
         <div className="rounded-lg border border-indigo-500/20 bg-[#0b1220]/40 p-3 space-y-2 text-sm">
@@ -874,10 +1070,18 @@ export default function DisciplinaryCase() {
     hearingScheduledAt: hearingForm.hearingScheduledAt,
     hearingScheduledTime: hearingForm.hearingScheduledTime,
     hearingLocation: hearingForm.hearingLocation,
-    hearingManagerName,
-    issuedByName: 'Management',
+    hearingManagerName: hearingManagerName || user?.fullName || '',
+    issuedByName: user?.fullName || user?.email || 'Management',
     issuedAtLabel: new Date().toLocaleDateString('en-GB'),
     extraNotes: hearingForm.hearingInviteNotes,
+    evidenceDocumentNames: documents
+      .filter((doc) => {
+        const type = String(doc.documentType || '').toLowerCase();
+        return ['evidence', 'minutes', 'letter', 'other'].includes(type)
+          || /witness|investigation|statement|note/i.test(String(doc.fileName || ''));
+      })
+      .map((doc) => doc.fileName || doc.title)
+      .filter(Boolean),
     suspensionActive: hearingForm.suspensionPending,
     precautionarySuspension: hearingForm.suspensionPending,
     suspensionReason: hearingForm.suspensionReason || '',
@@ -901,7 +1105,7 @@ export default function DisciplinaryCase() {
       return;
     }
     if (hearingNoticeShort && !acknowledgeShortNotice) {
-      setError(`This date gives only ${hearingNoticeDays} working day(s)’ notice. Country Lion policy requires a minimum of 24 working hours. Tick the short-notice acknowledgement to continue.`);
+      setError(`This date/time gives about ${Math.floor(hearingNoticeHours)} working hour(s)' notice. Country Lion policy requires a minimum of 24 working hours. Tick the short-notice acknowledgement to continue.`);
       return;
     }
     const result = await apiUpdate({
@@ -920,10 +1124,28 @@ export default function DisciplinaryCase() {
   const uploadedDocumentsList = (
     <ul className="space-y-2">
       {documents.map((doc) => (
-        <li key={doc.id} className="text-sm text-slate-300">
-          {doc.documentType}: {doc.fileName}
-          {doc.sharePointWebUrl && (
-            <a href={doc.sharePointWebUrl} target="_blank" rel="noreferrer" className="ml-2 text-indigo-300">Open</a>
+        <li key={doc.id} className="text-sm text-slate-300 flex flex-wrap items-center gap-2">
+          <span>{doc.documentType}: {doc.fileName}</span>
+          {doc.portalHtml && (
+            <button
+              type="button"
+              className="text-indigo-300"
+              onClick={() => {
+                const win = window.open('', '_blank', 'noopener,noreferrer');
+                if (!win) return;
+                win.document.open();
+                win.document.write(doc.portalHtml);
+                win.document.close();
+              }}
+            >
+              Open
+            </button>
+          )}
+          {!doc.portalHtml && doc.sharePointWebUrl && (
+            <a href={doc.sharePointWebUrl} target="_blank" rel="noreferrer" className="text-indigo-300">Open</a>
+          )}
+          {doc.employeeSignStatus === 'pending' && (
+            <span className="text-[10px] uppercase text-amber-300">Awaiting employee signature</span>
           )}
         </li>
       ))}
@@ -946,8 +1168,15 @@ export default function DisciplinaryCase() {
             ) : (
               <ul className="space-y-2">
                 {history.map((item) => (
-                  <li key={item.id} className="text-sm text-slate-300 border border-[#1a2540] rounded-lg px-3 py-2">
-                    {item.title} · {item.outcomePreset || '—'} · expires {item.warningExpiresAt || 'n/a'}
+                  <li key={item.id}>
+                    <button
+                      type="button"
+                      className="w-full text-left text-sm text-slate-300 border border-[#1a2540] rounded-lg px-3 py-2 hover:border-indigo-500/40 hover:bg-indigo-500/10 hover:text-indigo-100"
+                      onClick={() => openActiveWarningCase(item)}
+                    >
+                      {formatActiveWarning(item)}
+                      <span className="block text-[11px] text-indigo-300 mt-1">Open case ↗</span>
+                    </button>
                   </li>
                 ))}
               </ul>
@@ -1231,7 +1460,7 @@ export default function DisciplinaryCase() {
             <Field label="Location">
               <input
                 className={inputClass}
-                placeholder="e.g. Depot meeting room"
+                placeholder="Defaults to Country Lion if left blank"
                 value={hearingForm.hearingLocation}
                 onChange={(e) => setHearingForm((prev) => ({ ...prev, hearingLocation: e.target.value }))}
               />
@@ -1239,11 +1468,13 @@ export default function DisciplinaryCase() {
           </div>
 
           {hearingForm.hearingScheduledAt && (
-            <p className={`text-sm ${hearingNoticeVeryShort ? 'text-red-300' : hearingNoticeShort ? 'text-amber-200' : 'text-emerald-300'}`}>
-              Notice from today: {hearingNoticeDays} working day{hearingNoticeDays === 1 ? '' : 's'}
-              {hearingNoticeVeryShort
-                ? ' — less than 24 working hours. Country Lion policy requires a minimum of 24 working hours.'
-                : ' — meets minimum notice requirement.'}
+            <p className={`text-sm ${hearingNoticeShort ? 'text-amber-200' : 'text-emerald-300'}`}>
+              Notice from now: about {hearingNoticeHours !== null ? Math.floor(hearingNoticeHours) : '—'} working hour
+              {Math.floor(hearingNoticeHours || 0) === 1 ? '' : 's'}
+              {hearingNoticeDays !== null ? ` (${hearingNoticeDays} working day${hearingNoticeDays === 1 ? '' : 's'})` : ''}
+              {hearingNoticeShort
+                ? ' — under the 24 working hours Country Lion policy minimum.'
+                : ' — meets the 24 working hours minimum.'}
             </p>
           )}
 
@@ -1264,7 +1495,7 @@ export default function DisciplinaryCase() {
                 checked={acknowledgeShortNotice}
                 onChange={(e) => setAcknowledgeShortNotice(e.target.checked)}
               />
-              I understand this is shorter than usual Acas-aligned notice and still want to proceed.
+              I understand this is shorter than Country Lion’s 24 working hours policy and still want to proceed.
             </label>
           )}
 
@@ -1403,17 +1634,11 @@ export default function DisciplinaryCase() {
     if (currentStage === 'outcome_pack') {
       return (
         <StepCard title="Step 4 — Outcome">
-          <p className="text-sm text-slate-400">Select an outcome, complete the document pack using Add documentation below, then close the case.</p>
-          {consistency.length > 0 && (
-            <div className="rounded-lg border border-[#1a2540] p-3">
-              <p className="text-xs uppercase text-slate-500 mb-2">Consistency snapshot (similar closed cases)</p>
-              <ul className="space-y-1 text-sm text-slate-300">
-                {consistency.map((item) => (
-                  <li key={item.id}>{item.outcomePreset} · {item.closedAt?.slice?.(0, 10) || '—'}</li>
-                ))}
-              </ul>
-            </div>
-          )}
+          <p className="text-sm text-slate-400">
+            Choose an outcome. You will complete one form that generates the letterheaded outcome letter,
+            issues it on the portal, records any live warning with expiry, and closes the case.
+          </p>
+          {activeWarningsPanel}
           <div className="flex flex-wrap gap-2">
             {OUTCOME_PRESETS.filter((p) => p.id !== 'informal_action').map((preset) => (
               <button
@@ -1431,54 +1656,18 @@ export default function DisciplinaryCase() {
               </button>
             ))}
           </div>
-          {(caseData?.warningEffectiveAt || caseData?.warningExpiresAt) && (
-            <p className="text-sm text-slate-400">
-              Warning live {caseData.warningEffectiveAt} → {caseData.warningExpiresAt}
-            </p>
-          )}
-          <ul className="space-y-2">
-            {(caseData?.outcomePackSteps || []).map((step) => (
-              <li key={step.id} className="flex items-center justify-between gap-3 text-sm border border-[#1a2540] rounded-lg px-3 py-2">
-                <span className={step.done ? 'text-emerald-300' : 'text-slate-300'}>
-                  {step.done ? '✓ ' : ''}{step.label}
-                </span>
-                {!step.done && step.id !== 'mark_complete' && (
-                  <button type="button" className={btnSecondary} disabled={saving} onClick={() => apiUpdate({ completePackStepId: step.id })}>
-                    Complete
-                  </button>
-                )}
-              </li>
-            ))}
-          </ul>
-          {(caseData?.outcomePreset === 'pip' || caseData?.outcomePreset === 'training_required') && (
-            <div className="rounded-lg border border-[#1a2540] p-3 space-y-3">
-              <p className="text-sm font-medium text-slate-200">Schedule follow-up review</p>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <Field label="Review title">
-                  <input value={reviewTitle} onChange={(e) => setReviewTitle(e.target.value)} className={inputClass} />
-                </Field>
-                <Field label="Due date">
-                  <input type="date" value={reviewDueAt} onChange={(e) => setReviewDueAt(e.target.value)} className={inputClass} />
-                </Field>
-              </div>
-              <button type="button" className={btnSecondary} disabled={saving || !reviewDueAt} onClick={scheduleReview}>
-                Add review
-              </button>
-              <ul className="space-y-2">
+          {reviews.length > 0 && (
+            <div className="rounded-lg border border-[#1a2540] p-3 space-y-2">
+              <p className="text-sm font-medium text-slate-200">Scheduled reviews</p>
+              <ul className="space-y-1">
                 {reviews.map((item) => (
-                  <li key={item.id} className="text-sm text-slate-300">{item.title} · due {item.dueAt} · {item.status}</li>
+                  <li key={item.id} className="text-sm text-slate-300">
+                    {item.title} · due {item.dueAt} · {item.status}
+                  </li>
                 ))}
               </ul>
             </div>
           )}
-          <button
-            type="button"
-            className={btnPrimary}
-            disabled={saving || !caseData?.outcomePreset}
-            onClick={() => apiUpdate({ closeCase: true })}
-          >
-            Complete pack & close case
-          </button>
         </StepCard>
       );
     }
@@ -1492,17 +1681,53 @@ export default function DisciplinaryCase() {
               <p className="text-sm text-emerald-50/90 mt-1 whitespace-pre-wrap">
                 {caseData.informalActionDetails || 'Informal action was recorded.'}
               </p>
+              {closedByName && closedByName !== 'Unknown' && (
+                <p className="text-xs text-emerald-100/80 mt-2">Recorded by {closedByName}</p>
+              )}
             </div>
           ) : caseData?.outcomePreset === 'file_note_for_improvement' ? (
             renderFileNoteSigningPanel()
           ) : (
             <div className="space-y-2 text-sm text-slate-300">
-              <p>Outcome: <span className="text-white">{caseData?.outcomePreset || '—'}</span></p>
+              <p>Outcome: <span className="text-white">{stageLabel(caseData?.outcomePreset) || caseData?.outcomePreset || '—'}</span></p>
+              {caseData?.warningEmployeeSignStatus === 'pending' && (
+                <p className="text-amber-200">
+                  Outcome letter issued to the employee for digital signature (My cases badge).
+                </p>
+              )}
+              {caseData?.warningEmployeeSignStatus === 'signed' && (
+                <p className="text-emerald-300">Employee digitally signed the outcome letter.</p>
+              )}
+              {(caseData?.warningEffectiveAt || caseData?.warningExpiresAt) && (
+                <p className="text-slate-400">
+                  Warning live {formatWarningExpiry(caseData.warningEffectiveAt)} → {formatWarningExpiry(caseData.warningExpiresAt)}
+                </p>
+              )}
+              {caseData?.nextReviewDueAt && (
+                <p className="text-slate-400">
+                  Next review scheduled for {formatWarningExpiry(caseData.nextReviewDueAt)}
+                </p>
+              )}
               {caseData?.closeNotes && (
                 <p className="whitespace-pre-wrap text-slate-400">Notes: {caseData.closeNotes}</p>
               )}
+              {closedByName && closedByName !== 'Unknown' && (
+                <p className="text-slate-400">Recorded by {closedByName}</p>
+              )}
               {caseData?.appealWindowEndsAt && (
-                <p className="text-slate-400">Appeal window ends: {String(caseData.appealWindowEndsAt).slice(0, 10)}</p>
+                <p className="text-slate-400">Appeal window ends: {formatWarningExpiry(caseData.appealWindowEndsAt)}</p>
+              )}
+              {caseData?.appealRecipientNameSnapshot && (
+                <p className="text-slate-400">Appeals to: {caseData.appealRecipientNameSnapshot}</p>
+              )}
+              {reviews.length > 0 && (
+                <ul className="space-y-1 pt-1">
+                  {reviews.map((item) => (
+                    <li key={item.id} className="text-slate-400">
+                      Review: {item.title} · due {formatWarningExpiry(item.dueAt)} · {item.status}
+                    </li>
+                  ))}
+                </ul>
               )}
             </div>
           )}
@@ -1549,7 +1774,10 @@ export default function DisciplinaryCase() {
     if (currentStage === 'appeal') {
       return (
         <StepCard title="Appeal">
-          <p className="text-sm text-slate-400">Complete the appeal hearing and outcome, then close again.</p>
+          <p className="text-sm text-slate-400">
+            Complete the appeal hearing, then choose an outcome. The outcome form issues the letter and closes the case again.
+          </p>
+          {activeWarningsPanel}
           <Field label="Appeal owner">
             <EmployeeSelect
               value={caseData?.appealOwnerUid || caseData?.ownerManagerUid || ''}
@@ -1577,9 +1805,6 @@ export default function DisciplinaryCase() {
               </button>
             ))}
           </div>
-          <button type="button" className={btnPrimary} disabled={saving} onClick={() => apiUpdate({ closeCase: true, forceClose: true })}>
-            Close after appeal
-          </button>
         </StepCard>
       );
     }
@@ -1758,6 +1983,19 @@ export default function DisciplinaryCase() {
                 {String(family).replace(/_/g, ' ')}
                 {caseData?.suspensionActive ? ' · Suspension active' : ''}
               </p>
+              <p className="text-sm text-slate-400">
+                {recordedByName && recordedByName !== 'Unknown' ? (
+                  <>Opened by <span className="text-slate-200">{recordedByName}</span></>
+                ) : (
+                  <>Opened by unknown</>
+                )}
+                {ownerManagerName && ownerManagerName !== 'Unknown' ? (
+                  <> · Owner <span className="text-slate-200">{ownerManagerName}</span></>
+                ) : null}
+                {currentStage === 'closed' && closedByName && closedByName !== 'Unknown' ? (
+                  <> · Recorded by <span className="text-slate-200">{closedByName}</span></>
+                ) : null}
+              </p>
               {(() => {
                 const progress = getCaseProgressStatus(caseData || {});
                 return (
@@ -1786,7 +2024,7 @@ export default function DisciplinaryCase() {
         {message && <div className="bg-emerald-500/10 border border-emerald-500/25 rounded-lg p-4 text-sm text-emerald-300">{message}</div>}
 
         {isNew ? (
-          <div className="bg-[#0b1220] border border-[#1a2540] rounded-xl p-5 space-y-4 max-w-3xl">
+          <div className="bg-[#0b1220] border border-[#1a2540] rounded-xl p-5 space-y-4 max-w-3xl overflow-visible">
             <div>
               <p className="text-sm font-medium text-white">Step 0 — Open the case</p>
               <p className="text-sm text-slate-400 mt-1">
@@ -1889,6 +2127,13 @@ export default function DisciplinaryCase() {
                                   <span className="text-slate-600 ml-1">↗</span>
                                 </p>
                                 <p className="text-slate-300 truncate">{item.title}</p>
+                                {(item.recordedByName || item.openedByName) && (
+                                  <p className="text-slate-500">
+                                    {item.recordedByName
+                                      ? `Recorded by ${item.recordedByName}`
+                                      : `Opened by ${item.openedByName}`}
+                                  </p>
+                                )}
                                 {detail && <p className="text-slate-500 line-clamp-2">{detail}</p>}
                               </a>
                             </li>
@@ -1961,6 +2206,11 @@ export default function DisciplinaryCase() {
             >
               {saving ? 'Saving…' : 'Open case — start fact-finding'}
             </button>
+            {!form.employeeUid && (
+              <p className="text-xs text-amber-300">
+                Click the employee field and choose who the case is about. The open button stays disabled until an employee is selected.
+              </p>
+            )}
           </div>
         ) : (
           <div className="grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_320px] gap-6">
@@ -1992,6 +2242,31 @@ export default function DisciplinaryCase() {
                     <div>
                       <h4 className="text-white font-medium mb-3">Documents</h4>
                       {uploadedDocumentsList}
+                    </div>
+                    <div>
+                      <h4 className="text-white font-medium mb-3">Case type</h4>
+                      <p className="text-xs text-slate-500 mb-3">
+                        Change if this case was opened under the wrong process. The current step is remapped to the equivalent stage.
+                      </p>
+                      <Field label="Process family">
+                        <select
+                          className={inputClass}
+                          value={family}
+                          disabled={saving}
+                          onChange={(e) => {
+                            const next = e.target.value;
+                            if (next === family) return;
+                            const label = PROCESS_FAMILIES.find((item) => item.id === next)?.label || next;
+                            if (!window.confirm(`Change this case to ${label}? The workflow step will be remapped.`)) return;
+                            setViewStage(null);
+                            apiUpdate({ processFamily: next });
+                          }}
+                        >
+                          {PROCESS_FAMILIES.map((item) => (
+                            <option key={item.id} value={item.id}>{item.label}</option>
+                          ))}
+                        </select>
+                      </Field>
                     </div>
                     <div>
                       <h4 className="text-white font-medium mb-3">Reassign / leaver</h4>
@@ -2052,23 +2327,81 @@ export default function DisciplinaryCase() {
       </div>
 
       {outcomeModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-          <div className="bg-[#0b1220] border border-[#1a2540] rounded-xl p-6 w-full max-w-lg space-y-4 shadow-xl">
-            <h3 className="text-white font-semibold text-lg">Outcome — {outcomeModal.presetLabel}</h3>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="bg-[#0b1220] border border-[#1a2540] rounded-xl p-6 w-full max-w-2xl space-y-4 shadow-xl max-h-[90vh] overflow-auto">
+            <div>
+              <h3 className="text-white font-semibold text-lg">Issue outcome — {outcomeModal.presetLabel}</h3>
+              <p className="text-xs text-slate-500 mt-1">
+                Completing this form generates the letterheaded outcome letter, issues it on the portal,
+                records any live warning, schedules review tasks if set, and closes the case.
+              </p>
+            </div>
+
+            {outcomeShowErrors && !outcomeFormReady(outcomeModal) && (
+              <p className="text-sm text-red-300">
+                Complete the highlighted fields before generating the letter.
+              </p>
+            )}
+
+            {needsDuration(outcomeModal.presetId) && (
+              <Field label="Warning title (e.g. Speeding)">
+                <input
+                  className={outcomeInputClass('warningTitle')}
+                  placeholder="Short title shown on active disciplinaries…"
+                  value={outcomeModal.warningTitle || ''}
+                  onChange={(e) => setOutcomeModal((prev) => ({ ...prev, warningTitle: e.target.value }))}
+                />
+                <p className="text-xs text-slate-500 mt-1">
+                  Appears as e.g. Speeding — Written warning — expires …
+                </p>
+              </Field>
+            )}
+
+            <Field label="Consideration of all evidence">
+              <textarea
+                rows={3}
+                className={outcomeInputClass('evidenceConsideration')}
+                placeholder="Summarise how the evidence was considered…"
+                value={outcomeModal.evidenceConsideration}
+                onChange={(e) => setOutcomeModal((prev) => ({ ...prev, evidenceConsideration: e.target.value }))}
+              />
+            </Field>
 
             <Field label="Outcome details / reasons">
               <textarea
-                rows={4}
-                className={inputClass}
-                placeholder="Summarise the outcome and the reasons for this decision…"
+                rows={3}
+                className={outcomeInputClass('outcomeDetails')}
+                placeholder="Reasons for this decision…"
                 value={outcomeModal.outcomeDetails}
                 onChange={(e) => setOutcomeModal((prev) => ({ ...prev, outcomeDetails: e.target.value }))}
               />
             </Field>
 
+            <Field label="Expected standard going forward">
+              <textarea
+                rows={3}
+                className={outcomeInputClass('expectedStandard')}
+                placeholder="Set out the standard of conduct / performance required…"
+                value={outcomeModal.expectedStandard}
+                onChange={(e) => setOutcomeModal((prev) => ({ ...prev, expectedStandard: e.target.value }))}
+              />
+            </Field>
+
+            <Field label="Support, monitoring and/or retraining">
+              <textarea
+                rows={3}
+                className={outcomeInputClass('supportMonitoringRetraining')}
+                placeholder="Outline any support, monitoring or retraining required…"
+                value={outcomeModal.supportMonitoringRetraining}
+                onChange={(e) => setOutcomeModal((prev) => ({ ...prev, supportMonitoringRetraining: e.target.value }))}
+              />
+            </Field>
+
             {needsDuration(outcomeModal.presetId) && (
-              <div className="space-y-3">
-                <p className="text-sm font-medium text-slate-200">Warning / PIP duration</p>
+              <div className={`space-y-3 rounded-lg p-1 ${outcomeFieldInvalid('durationMonths') ? 'ring-1 ring-red-500/60' : ''}`}>
+                <p className={`text-sm font-medium ${outcomeFieldInvalid('durationMonths') ? 'text-red-300' : 'text-slate-200'}`}>
+                  Warning / PIP live period
+                </p>
                 {DURATION_OPTIONS.map((opt) => (
                   <label key={opt.months} className="flex items-start gap-3 rounded-lg border border-[#1a2540] p-3 cursor-pointer hover:bg-[#060e1a]">
                     <input
@@ -2087,16 +2420,111 @@ export default function DisciplinaryCase() {
               </div>
             )}
 
+            <div className="space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-medium text-slate-200">Review date(s) (optional)</p>
+                  <p className="text-xs text-slate-500 mt-1">
+                    If set, these become tasks on the case and the case status shows review scheduled.
+                  </p>
+                </div>
+                <button type="button" className={btnSecondary} onClick={addOutcomeReviewRow}>
+                  Add review
+                </button>
+              </div>
+              {(outcomeModal.reviews || []).map((review, index) => (
+                <div key={`review-${index}`} className="grid grid-cols-1 md:grid-cols-[1fr_160px_auto] gap-2 items-end">
+                  <Field label="Title">
+                    <input
+                      className={inputClass}
+                      value={review.title}
+                      onChange={(e) => updateOutcomeReview(index, { title: e.target.value })}
+                    />
+                  </Field>
+                  <Field label="Due date">
+                    <input
+                      type="date"
+                      className={inputClass}
+                      value={review.dueAt}
+                      onChange={(e) => updateOutcomeReview(index, { dueAt: e.target.value })}
+                    />
+                  </Field>
+                  <button
+                    type="button"
+                    className={`${btnSecondary} mb-0.5`}
+                    onClick={() => removeOutcomeReviewRow(index)}
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            <div className={outcomeFieldInvalid('appealRecipientUid') ? 'rounded-lg ring-1 ring-red-500/60 p-1' : ''}>
+              <Field label="Appeal to (manager)">
+                <EmployeeSelect
+                  value={outcomeModal.appealRecipientUid || ''}
+                  onChange={(uid) => setOutcomeModal((prev) => ({ ...prev, appealRecipientUid: uid }))}
+                  employees={employees}
+                  loading={employeesLoading}
+                  mode="managers"
+                  emptyLabel="Select who the employee appeals to"
+                />
+                <p className="text-xs text-slate-500 mt-1">
+                  The letter will confirm the right to appeal in writing to this person within 5 working days.
+                </p>
+              </Field>
+            </div>
+
+            {history.length > 0 && (
+              <div className="space-y-3">
+                <div>
+                  <p className="text-sm font-medium text-slate-200">Supersede existing warning(s)?</p>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Tick any live warnings this new outcome replaces. Unticked warnings stay active.
+                  </p>
+                </div>
+                <ul className="space-y-2">
+                  {history.map((item) => {
+                    const checked = (outcomeModal.supersedeCaseIds || []).includes(item.id);
+                    return (
+                      <label
+                        key={item.id}
+                        className={`flex items-start gap-3 rounded-lg border p-3 cursor-pointer ${
+                          checked ? 'border-indigo-500/40 bg-indigo-500/10' : 'border-[#1a2540] hover:bg-[#060e1a]'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleSupersedeCase(item.id)}
+                          className="mt-0.5"
+                        />
+                        <span className="text-sm text-slate-200">{formatActiveWarning(item)}</span>
+                      </label>
+                    );
+                  })}
+                </ul>
+              </div>
+            )}
+
             <div className="flex gap-3 pt-2">
               <button
                 type="button"
                 className={btnPrimary}
-                disabled={saving || !outcomeModal.outcomeDetails.trim()}
+                disabled={saving}
                 onClick={confirmOutcome}
               >
-                Confirm outcome
+                Generate letter, issue & close
               </button>
-              <button type="button" className={btnSecondary} onClick={() => setOutcomeModal(null)}>
+              <button
+                type="button"
+                className={btnSecondary}
+                onClick={() => {
+                  setOutcomeModal(null);
+                  setOutcomeShowErrors(false);
+                }}
+              >
                 Cancel
               </button>
             </div>

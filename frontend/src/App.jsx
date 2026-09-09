@@ -18,6 +18,8 @@ import BumpCardPage from './pages/BumpCardPage';
 import BumpPromptPage from './pages/BumpPromptPage';
 import EmergencyPhone from './pages/EmergencyPhone';
 import FunAdmin from './pages/FunAdmin';
+import RollCallLists from './pages/RollCallLists';
+import RollCallListDetail from './pages/RollCallListDetail';
 
 function CaseIdRedirect() {
   const { caseId } = useParams();
@@ -51,6 +53,30 @@ export default function App() {
               <Route path="profile" element={<Profile />} />
               <Route path="bump-card" element={<BumpCardPage />} />
               <Route path="emergency-phone" element={<EmergencyPhone />} />
+              <Route
+                path="roll-calls"
+                element={(
+                  <ProtectedRoute requireEmployeeDirectory>
+                    <RollCallLists />
+                  </ProtectedRoute>
+                )}
+              />
+              <Route
+                path="roll-calls/new"
+                element={(
+                  <ProtectedRoute requireEmployeeDirectory>
+                    <Navigate to="/dashboard/employees" replace />
+                  </ProtectedRoute>
+                )}
+              />
+              <Route
+                path="roll-calls/:listId"
+                element={(
+                  <ProtectedRoute requireEmployeeDirectory>
+                    <RollCallListDetail />
+                  </ProtectedRoute>
+                )}
+              />
               <Route
                 path="employees"
                 element={(
@@ -115,9 +141,30 @@ export default function App() {
                   </ProtectedRoute>
                 )}
               />
-              <Route path="disciplinary" element={<Navigate to="/dashboard/cases" replace />} />
-              <Route path="disciplinary/new" element={<Navigate to="/dashboard/cases/new" replace />} />
-              <Route path="disciplinary/:caseId" element={<CaseIdRedirect />} />
+              <Route
+                path="disciplinary"
+                element={(
+                  <ProtectedRoute requireCasesManager>
+                    <Navigate to="/dashboard/cases" replace />
+                  </ProtectedRoute>
+                )}
+              />
+              <Route
+                path="disciplinary/new"
+                element={(
+                  <ProtectedRoute requireCasesManager>
+                    <Navigate to="/dashboard/cases/new" replace />
+                  </ProtectedRoute>
+                )}
+              />
+              <Route
+                path="disciplinary/:caseId"
+                element={(
+                  <ProtectedRoute requireCasesManager>
+                    <CaseIdRedirect />
+                  </ProtectedRoute>
+                )}
+              />
               <Route path="portal-access" element={<ProtectedRoute requireAdmin><PortalAccessMatrix /></ProtectedRoute>} />
               <Route path="nonograms" element={<ProtectedRoute requireAdmin><Navigate to="/dashboard/fun-admin?tab=nonograms" replace /></ProtectedRoute>} />
               <Route path="fun-admin" element={<ProtectedRoute requireAdmin><FunAdmin /></ProtectedRoute>} />

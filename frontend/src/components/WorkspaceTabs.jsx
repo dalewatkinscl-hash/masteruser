@@ -81,7 +81,7 @@ export default function WorkspaceTabs({ activeProfileTab = null, onProfileTabCha
   const canSeeSuggestionBadge = isAdmin || canBrowseEmployees;
 
   const path = location.pathname;
-  const onEmployees = path.includes('/dashboard/employees');
+  const onEmployees = path.includes('/dashboard/employees') || path.includes('/dashboard/roll-calls');
   const onCases = path.includes('/dashboard/cases') || path.includes('/dashboard/disciplinary') || path.includes('/dashboard/bump');
   const onPortalMatrix = path.includes('/dashboard/portal-access');
   const onFunAdmin = path.includes('/dashboard/fun-admin') || path.includes('/dashboard/nonograms');
@@ -202,27 +202,20 @@ export default function WorkspaceTabs({ activeProfileTab = null, onProfileTabCha
       kind: 'route',
       to: '/dashboard/portal-access',
     },
-    isAdmin && {
-      id: 'fun-admin',
-      label: 'Fun admin',
-      kind: 'route',
-      to: '/dashboard/fun-admin',
-    },
   ].filter(Boolean);
 
   const isActive = (tab) => {
     if (tab.kind === 'route') {
-      if (tab.id === 'employees') {
-        return path.includes('/dashboard/employees');
-      }
+      if (tab.id === 'employees') return onEmployees;
       if (tab.id === 'cases' || tab.id === 'disciplinary') return onCases;
       if (tab.id === 'portal-matrix') return onPortalMatrix;
-      if (tab.id === 'fun-admin') return onFunAdmin;
       if (tab.id === 'emergency-phone') return onEmergencyPhone;
       return false;
     }
+    // Fun admin lives under Fun — keep Fun highlighted while there.
+    if (onFunAdmin) return tab.profileTab === 'fun';
     // Profile sub-tabs are only active on the profile page.
-    if (!onProfile || onEmployees || onCases || onPortalMatrix || onFunAdmin || onEmergencyPhone) return false;
+    if (!onProfile || onEmployees || onCases || onPortalMatrix || onEmergencyPhone) return false;
     return (activeProfileTab || 'profile') === tab.profileTab;
   };
 

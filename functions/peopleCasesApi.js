@@ -6,22 +6,26 @@ const {
   DOCUMENT_TYPES,
   OUTCOME_PRESETS,
   toTrimmedString,
+  getCasesRole,
   canManageCases,
   canHrOverseeCases,
   stagesForFamily,
   normalizeStage,
+  mapStageForFamilyChange,
   guideFor,
   sanitizeCaseCreateInput,
   outcomePresetById,
   buildOutcomePackSteps,
   addWorkingDays,
   countWorkingDaysNotice,
+  countWorkingHoursNotice,
+  parseHearingDateTime,
+  MINIMUM_HEARING_NOTICE_WORKING_HOURS,
   buildHearingInviteHtml,
   buildOutcomeLetterHtml,
   buildWarningDocumentHtml,
   serializeCase,
   serializeTimestamp,
-  CASES_PORTAL,
 } = require('./peopleCases');
 const {
   buildCaseSharePointFolderName,
@@ -46,6 +50,7 @@ const {
   findTemplateFile,
   resolveAndDownloadCaseTemplate,
   TEMPLATES_FOLDER_NAME,
+  downloadDriveItemContent,
 } = require('./sharepoint');
 
 function createPeopleCasesApi({
@@ -92,9 +97,114 @@ function createPeopleCasesApi({
     return caseSnap;
   }
 
-  async function canViewCase(session, caseData) {
-    if (canManageCases(session.profile, getEffectivePortalRole)) return true;
-    return caseData.employeeUid === session.profile.uid;
+  function serializeEmployeeOwnCase(doc) {
+    const item = serializeCase(doc);
+    return {
+      id: item.id,
+      title: item.title || '',
+      processFamily: item.processFamily || 'disciplinary',
+      stage: item.stage,
+      status: item.status || '',
+      outcomePreset: item.outcomePreset || '',
+      nextReviewDueAt: item.nextReviewDueAt || '',
+      appealWindowEndsAt: item.appealWindowEndsAt || '',
+      warningEmployeeSignStatus: item.warningEmployeeSignStatus || '',
+      fileNoteEmployeeSignStatus: item.fileNoteEmployeeSignStatus || '',
+      hearingInviteIssuedAt: item.hearingInviteIssuedAt || '',
+      hearingScheduledAt: item.hearingScheduledAt || '',
+      hearingScheduledTime: item.hearingScheduledTime || '',
+      hearingLocation: item.hearingLocation || '',
+      hearingInviteDocumentId: item.hearingInviteDocumentId || '',
+    };
+  }
+
+  function portalHtmlHasLetterhead(html) {
+    const value = String(html || '');
+    return value.includes('lh-header') && value.includes('data:image/png;base64,');
+  }
+
+  function isHearingEvidenceDocument(doc = {}) {
+    const type = toTrimmedString(doc.documentType).toLowerCase();
+    if (['invite', 'file_note_for_improvement', 'warning', 'outcome', 'suspension_letter', 'training_outline', 'pip_plan'].includes(type)) {
+      return false;
+    }
+    return ['evidence', 'minutes', 'letter', 'other'].includes(type)
+      || /witness|investigation|statement|note/i.test(String(doc.fileName || ''));
+  }
+
+  function evidenceNamesForInvite(documents = []) {
+    return (documents || [])
+      .filter((doc) => isHearingEvidenceDocument(doc))
+      .map((doc) => toTrimmedString(doc.fileName) || toTrimmedString(doc.title))
+      .filter(Boolean);
+  }
+
+  async function releaseHearingEvidenceDocuments({
+    caseId,
+    employeeUid,
+    inviteDocumentId,
+    documents = [],
+    evidenceDocumentIds = [],
+  }) {
+    const now = admin.firestore.FieldValue.serverTimestamp();
+    const preferredIds = new Set((evidenceDocumentIds || []).map(toTrimmedString).filter(Boolean));
+    const toRelease = (documents || []).filter((doc) => {
+      if (!doc?.id) return false;
+      if (toTrimmedString(doc.employeeUid) && toTrimmedString(doc.employeeUid) !== toTrimmedString(employeeUid)) {
+        return false;
+      }
+      if (preferredIds.size > 0 && preferredIds.has(doc.id)) return true;
+      return isHearingEvidenceDocument(doc);
+    });
+
+    const releasedIds = [];
+    for (const doc of toRelease) {
+      // eslint-disable-next-line no-await-in-loop
+      await db.collection('disciplinary_documents').doc(doc.id).update({
+        issuedToEmployeeAt: doc.issuedToEmployeeAt || now,
+        issuedWithHearingInviteId: inviteDocumentId || '',
+        issuedReason: 'hearing_invite',
+        updatedAt: now,
+      }).catch((err) => {
+        console.error('Failed to release hearing evidence document', doc.id, err);
+      });
+      releasedIds.push(doc.id);
+    }
+    return releasedIds;
+  }
+
+  function rebuildHearingInvitePortalHtml({
+    caseData = {},
+    inviteDoc = {},
+    relatedDocuments = [],
+    hearingManagerName = '',
+  }) {
+    const issuedAtLabel = (() => {
+      const raw = inviteDoc.createdAt || inviteDoc.issuedToEmployeeAt || '';
+      const iso = typeof raw === 'string' ? raw : (serializeTimestamp(raw) || '');
+      const datePart = String(iso).slice(0, 10);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(datePart)) {
+        const [year, month, day] = datePart.split('-');
+        return `${day}/${month}/${year}`;
+      }
+      return new Date().toLocaleDateString('en-GB');
+    })();
+    return buildHearingInviteHtml({
+      employeeName: caseData.employeeNameSnapshot || '',
+      caseTitle: caseData.title || '',
+      caseSummary: caseData.summary || '',
+      hearingScheduledAt: inviteDoc.hearingScheduledAt || caseData.hearingScheduledAt || '',
+      hearingScheduledTime: inviteDoc.hearingScheduledTime || caseData.hearingScheduledTime || '',
+      hearingLocation: inviteDoc.hearingLocation || caseData.hearingLocation || 'Country Lion',
+      hearingManagerName: hearingManagerName || caseData.managerNameSnapshot || '',
+      issuedByName: hearingManagerName || caseData.managerNameSnapshot || 'Management',
+      issuedAtLabel,
+      extraNotes: caseData.hearingInviteNotes || '',
+      evidenceDocumentNames: evidenceNamesForInvite(relatedDocuments),
+      suspensionActive: Boolean(caseData.suspensionActive || caseData.precautionarySuspension),
+      precautionarySuspension: Boolean(caseData.precautionarySuspension || caseData.suspensionActive),
+      suspensionReason: caseData.suspensionReason || '',
+    });
   }
 
   async function listRelated(caseId) {
@@ -238,11 +348,7 @@ function createPeopleCasesApi({
       res.status(200).json({
         outcomes: OUTCOME_PRESETS,
         canManage: canManageCases(session.profile, getEffectivePortalRole),
-        casesRole: (() => {
-          if (session.profile?.portalsAccess?.master_admin === 'admin') return 'admin';
-          return getEffectivePortalRole(session.profile, CASES_PORTAL)
-            || (['manager', 'admin'].includes(getEffectivePortalRole(session.profile, 'hr_app')) ? 'hr' : '');
-        })(),
+        casesRole: getCasesRole(session.profile, getEffectivePortalRole),
       });
     }),
   );
@@ -312,10 +418,7 @@ function createPeopleCasesApi({
         return;
       }
       const session = await getVerifiedSessionUser(req);
-      if (!session) {
-        res.status(401).json({ error: 'Authentication required.' });
-        return;
-      }
+      if (!assertManager(session, res)) return;
 
       const caseId = toTrimmedString(req.path.split('/').pop());
       if (!caseId) {
@@ -327,10 +430,6 @@ function createPeopleCasesApi({
         const caseSnap = await loadCaseOrFail(caseId, res);
         if (!caseSnap) return;
         const caseData = caseSnap.data();
-        if (!(await canViewCase(session, caseData))) {
-          res.status(403).json({ error: 'Insufficient access.' });
-          return;
-        }
 
         const related = await listRelated(caseId);
 
@@ -352,25 +451,15 @@ function createPeopleCasesApi({
               if (!item.warningExpiresAt) return true;
               return item.warningExpiresAt >= today;
             })
-            .sort((a, b) => String(b.closedAt || b.createdAt || '').localeCompare(String(a.closedAt || a.createdAt || '')));
-        }
-
-        let consistency = [];
-        if (canManageCases(session.profile, getEffectivePortalRole)) {
-          const similarSnap = await db.collection('disciplinary_cases')
-            .where('caseType', '==', caseData.caseType || 'other')
-            .limit(40)
-            .get();
-          consistency = similarSnap.docs
-            .map((doc) => serializeCase(doc))
-            .filter((item) => item.id !== caseId && item.outcomePreset && item.stage === 'closed')
-            .slice(0, 8)
+            .sort((a, b) => String(b.closedAt || b.createdAt || '').localeCompare(String(a.closedAt || a.createdAt || '')))
             .map((item) => ({
               id: item.id,
-              outcomePreset: item.outcomePreset,
-              caseType: item.caseType,
-              closedAt: item.closedAt,
-              title: item.title,
+              title: item.title || '',
+              warningTitle: item.warningTitle || '',
+              outcomePreset: item.outcomePreset || '',
+              warningEffectiveAt: item.warningEffectiveAt || '',
+              warningExpiresAt: item.warningExpiresAt || '',
+              closedAt: item.closedAt || '',
             }));
         }
 
@@ -383,7 +472,7 @@ function createPeopleCasesApi({
           serialized.outcomePreset || '',
           serialized.trainingDecision || '',
         );
-        const documents = related.documents || [];
+        let documents = related.documents || [];
 
         let sharePointPath = '';
         let sharePointFolderConfirmed = false;
@@ -407,6 +496,35 @@ function createPeopleCasesApi({
         }
 
         const minutes = related.minutes || [];
+        const inviteDocsNeedingRefresh = documents.filter(
+          (doc) => (doc.documentType === 'invite' || doc.source === 'hearing_invite')
+            && !portalHtmlHasLetterhead(doc.portalHtml),
+        );
+        if (inviteDocsNeedingRefresh.length) {
+          let hearingManagerName = '';
+          const hearingManagerUid = toTrimmedString(caseData.hearingManagerUid);
+          if (hearingManagerUid) {
+            const manager = await getUserProfile(hearingManagerUid);
+            hearingManagerName = manager?.fullName || '';
+          }
+          for (const inviteDoc of inviteDocsNeedingRefresh) {
+            const refreshedHtml = rebuildHearingInvitePortalHtml({
+              caseData,
+              inviteDoc,
+              relatedDocuments: documents,
+              hearingManagerName,
+            });
+            inviteDoc.portalHtml = refreshedHtml;
+            // eslint-disable-next-line no-await-in-loop
+            await db.collection('disciplinary_documents').doc(inviteDoc.id).update({
+              portalHtml: refreshedHtml,
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            }).catch((err) => {
+              console.error('Failed to refresh hearing invite portalHtml', inviteDoc.id, err);
+            });
+          }
+        }
+
         const documentTemplates = stageTemplates.map((template) => {
           const match = documents.find((doc) => doc.templateId === template.id)
             || documents.find((doc) => doc.documentType === template.documentType && ['template_upload', 'upload'].includes(doc.source || 'upload'));
@@ -447,7 +565,6 @@ function createPeopleCasesApi({
           case: serialized,
           ...relatedForClient(related),
           history,
-          consistency,
           outcomes: OUTCOME_PRESETS,
           documentTemplates,
           missingDocuments,
@@ -581,6 +698,7 @@ function createPeopleCasesApi({
           closedAt: null,
           appealedAt: null,
           createdByUid: session.profile.uid,
+          createdByName: session.profile.fullName || session.profile.email || '',
           updatedByUid: session.profile.uid,
           createdAt: now,
           updatedAt: now,
@@ -598,6 +716,7 @@ function createPeopleCasesApi({
           stage: input.stage,
           ownerManagerUid,
           informalResolutionPath: input.informalResolutionPath || '',
+          createdByName: session.profile.fullName || session.profile.email || '',
         }, session.profile);
 
         res.status(200).json({
@@ -655,6 +774,34 @@ function createPeopleCasesApi({
           events.push(['owner_assigned', { ownerManagerUid: body.ownerManagerUid }]);
         }
 
+        if (body.processFamily !== undefined) {
+          const nextFamily = toTrimmedString(body.processFamily).toLowerCase();
+          if (!['disciplinary', 'grievance', 'vehicle_accident'].includes(nextFamily)) {
+            res.status(400).json({ error: 'Invalid process family.' });
+            return;
+          }
+          const currentFamily = existing.processFamily || 'disciplinary';
+          if (nextFamily !== currentFamily) {
+            const remappedStage = mapStageForFamilyChange(currentFamily, nextFamily, existing.stage);
+            patch.processFamily = nextFamily;
+            patch.stage = remappedStage;
+            if (nextFamily === 'grievance') {
+              patch.caseType = 'grievance';
+            } else if (currentFamily === 'grievance' && (existing.caseType || '') === 'grievance') {
+              patch.caseType = nextFamily === 'vehicle_accident' ? 'vehicle_accident' : 'other';
+            } else if (nextFamily === 'vehicle_accident') {
+              patch.caseType = 'vehicle_accident';
+            }
+            if (body.caseType) patch.caseType = toTrimmedString(body.caseType);
+            events.push(['process_family_changed', {
+              from: currentFamily,
+              to: nextFamily,
+              stageFrom: existing.stage,
+              stageTo: remappedStage,
+            }]);
+          }
+        }
+
         if (body.stage) {
           const family = existing.processFamily || 'disciplinary';
           const nextStage = normalizeStage(family, body.stage);
@@ -705,11 +852,18 @@ function createPeopleCasesApi({
           patch.outcomePackSteps = [];
           patch.closeNotes = notes;
           patch.decisionMakerUid = session.profile.uid;
+          patch.closedByUid = session.profile.uid;
+          patch.closedByName = session.profile.fullName || session.profile.email || '';
           patch.stage = 'closed';
           patch.status = 'closed';
           patch.closedAt = admin.firestore.FieldValue.serverTimestamp();
           patch.appealWindowEndsAt = addWorkingDays(new Date(), 5);
-          events.push(['closed_with_notes', { outcomePreset: preset.id, notes }]);
+          events.push(['closed_with_notes', {
+            outcomePreset: preset.id,
+            notes,
+            closedByUid: session.profile.uid,
+            closedByName: session.profile.fullName || session.profile.email || '',
+          }]);
         }
 
         if (body.closeAsInformalAction === true) {
@@ -725,12 +879,16 @@ function createPeopleCasesApi({
           patch.informalActionTakenAt = admin.firestore.FieldValue.serverTimestamp();
           patch.closeNotes = details;
           patch.decisionMakerUid = session.profile.uid;
+          patch.closedByUid = session.profile.uid;
+          patch.closedByName = session.profile.fullName || session.profile.email || '';
           patch.stage = 'closed';
           patch.status = 'closed';
           patch.closedAt = admin.firestore.FieldValue.serverTimestamp();
           events.push(['informal_action_recorded_and_closed', {
             informalActionDetails: details,
             outcomePreset: 'informal_action',
+            closedByUid: session.profile.uid,
+            closedByName: session.profile.fullName || session.profile.email || '',
           }]);
         }
 
@@ -850,6 +1008,8 @@ function createPeopleCasesApi({
           patch.fileNoteEmployeeSignStatus = 'pending';
           patch.closeNotes = reason;
           patch.decisionMakerUid = session.profile.uid;
+          patch.closedByUid = session.profile.uid;
+          patch.closedByName = issuerName;
           patch.stage = 'closed';
           // Keep pending_employee so the case shows awaiting employee digital signature.
           patch.status = 'pending_employee';
@@ -861,6 +1021,8 @@ function createPeopleCasesApi({
             outcomePreset: 'file_note_for_improvement',
             managerSignedAt: managerSignature.signedAt,
             awaitingEmployeeSignature: true,
+            closedByUid: session.profile.uid,
+            closedByName: issuerName,
           }]);
         }
 
@@ -898,13 +1060,17 @@ function createPeopleCasesApi({
             return;
           }
           const noticeDays = countWorkingDaysNotice(today, hearingScheduledAt);
-          const minimumDays = 1; // Country Lion policy: minimum 24 working hours
-          if (noticeDays < minimumDays && !body.acknowledgeShortNotice) {
+          const hearingAt = parseHearingDateTime(hearingScheduledAt, hearingScheduledTime)
+            || new Date(`${hearingScheduledAt}T09:00:00`);
+          const noticeWorkingHours = countWorkingHoursNotice(new Date(), hearingAt);
+          const shortNotice = noticeWorkingHours < MINIMUM_HEARING_NOTICE_WORKING_HOURS;
+          if (shortNotice && !body.acknowledgeShortNotice) {
             res.status(400).json({
-              error: `Country Lion policy requires a minimum of 24 working hours' notice (this date gives ${noticeDays} working day(s)). Confirm to proceed with shorter notice.`,
+              error: `Country Lion policy requires a minimum of 24 working hours' notice (this date/time gives about ${Math.floor(noticeWorkingHours)} working hour(s)). Confirm to proceed with shorter notice.`,
               code: 'short_notice',
               noticeWorkingDays: noticeDays,
-              recommendedWorkingDays: minimumDays,
+              noticeWorkingHours: Math.round(noticeWorkingHours * 10) / 10,
+              recommendedWorkingHours: MINIMUM_HEARING_NOTICE_WORKING_HOURS,
             });
             return;
           }
@@ -918,17 +1084,24 @@ function createPeopleCasesApi({
 
           const hearingManagerUid = toTrimmedString(patch.hearingManagerUid || existing.hearingManagerUid);
           const hearingManager = hearingManagerUid ? await getUserProfile(hearingManagerUid) : null;
+          const resolvedLocation = hearingLocation || 'Country Lion';
+          const relatedForInvite = await listRelated(caseId);
+          const evidenceDocs = (relatedForInvite.documents || []).filter((doc) => isHearingEvidenceDocument(doc));
+          const evidenceDocumentNames = evidenceDocs
+            .map((doc) => toTrimmedString(doc.fileName) || toTrimmedString(doc.title))
+            .filter(Boolean);
           const inviteHtml = buildHearingInviteHtml({
             employeeName: existing.employeeNameSnapshot || '',
             caseTitle: existing.title || '',
             caseSummary: existing.summary || '',
             hearingScheduledAt,
             hearingScheduledTime,
-            hearingLocation,
-            hearingManagerName: hearingManager?.fullName || '',
+            hearingLocation: resolvedLocation,
+            hearingManagerName: hearingManager?.fullName || session.profile.fullName || '',
             issuedByName: session.profile.fullName || session.profile.email || 'Management',
             issuedAtLabel: new Date().toLocaleDateString('en-GB'),
             extraNotes: hearingInviteNotes,
+            evidenceDocumentNames,
             suspensionActive: Boolean(body.precautionarySuspension || existing.suspensionActive),
             precautionarySuspension: Boolean(body.precautionarySuspension || existing.precautionarySuspension || existing.suspensionActive),
             suspensionReason: toTrimmedString(body.suspensionReason) || existing.suspensionReason || '',
@@ -976,14 +1149,24 @@ function createPeopleCasesApi({
             source: 'hearing_invite',
             hearingScheduledAt,
             hearingScheduledTime,
-            hearingLocation,
+            hearingLocation: resolvedLocation,
             createdAt: now,
             updatedAt: now,
           });
 
+          const releasedEvidenceIds = await releaseHearingEvidenceDocuments({
+            caseId,
+            employeeUid: existing.employeeUid,
+            inviteDocumentId: docRef.id,
+            documents: relatedForInvite.documents || [],
+            evidenceDocumentIds: Array.isArray(body.evidenceDocumentIds)
+              ? body.evidenceDocumentIds
+              : (existing.evidenceDocumentIds || []),
+          });
+
           patch.hearingScheduledAt = hearingScheduledAt;
           patch.hearingScheduledTime = hearingScheduledTime;
-          patch.hearingLocation = hearingLocation;
+          patch.hearingLocation = resolvedLocation;
           patch.hearingInviteNotes = hearingInviteNotes;
           patch.companionOffered = true;
           patch.hearingInviteIssuedAt = now;
@@ -993,9 +1176,11 @@ function createPeopleCasesApi({
             documentId: docRef.id,
             hearingScheduledAt,
             hearingScheduledTime,
-            hearingLocation,
+            hearingLocation: resolvedLocation,
             noticeWorkingDays: noticeDays,
-            shortNotice: noticeDays < recommendedDays,
+            noticeWorkingHours: Math.round(noticeWorkingHours * 10) / 10,
+            shortNotice,
+            evidenceDocumentIds: releasedEvidenceIds,
           }]);
         }
         if (Array.isArray(body.evidenceDocumentIds)) {
@@ -1028,6 +1213,61 @@ function createPeopleCasesApi({
             res.status(400).json({ error: 'Invalid outcome preset.' });
             return;
           }
+          const finalizeOutcome = body.finalizeOutcome === true;
+          const evidenceConsideration = toTrimmedString(body.evidenceConsideration);
+          const expectedStandard = toTrimmedString(body.expectedStandard);
+          const supportMonitoringRetraining = toTrimmedString(body.supportMonitoringRetraining);
+          const appealRecipientUid = toTrimmedString(body.appealRecipientUid);
+          const warningTitle = toTrimmedString(body.warningTitle);
+          const reviewInputs = Array.isArray(body.reviews)
+            ? body.reviews
+              .map((item) => ({
+                title: toTrimmedString(item?.title) || 'Review meeting',
+                dueAt: toTrimmedString(item?.dueAt),
+                notes: toTrimmedString(item?.notes),
+              }))
+              .filter((item) => item.dueAt)
+            : [];
+
+          if (finalizeOutcome) {
+            const outcomeDetailsCheck = toTrimmedString(body.outcomeDetails);
+            if (!outcomeDetailsCheck) {
+              res.status(400).json({ error: 'Outcome details / reasons are required.' });
+              return;
+            }
+            if (!evidenceConsideration) {
+              res.status(400).json({ error: 'Please record consideration of the evidence.' });
+              return;
+            }
+            if (!expectedStandard) {
+              res.status(400).json({ error: 'Please set out the expected standard going forward.' });
+              return;
+            }
+            if (!supportMonitoringRetraining) {
+              res.status(400).json({ error: 'Please outline support, monitoring and/or retraining.' });
+              return;
+            }
+            if (!appealRecipientUid) {
+              res.status(400).json({ error: 'Select who the employee should appeal to.' });
+              return;
+            }
+            if (
+              ['written_warning', 'final_written_warning', 'pip'].includes(preset.id)
+              && !warningTitle
+            ) {
+              res.status(400).json({ error: 'Enter a short warning title (e.g. Speeding).' });
+              return;
+            }
+            if (
+              ['written_warning', 'final_written_warning', 'pip'].includes(preset.id)
+              && !body.warningDurationMonths
+              && !body.warningExpiresAt
+            ) {
+              res.status(400).json({ error: 'Choose a 6 or 12 month duration for this outcome.' });
+              return;
+            }
+          }
+
           if (
             existing.investigatorUid
             && existing.hearingManagerUid
@@ -1040,6 +1280,10 @@ function createPeopleCasesApi({
           patch.outcomePackSteps = buildOutcomePackSteps(preset.id);
           patch.decisionMakerUid = session.profile.uid;
           if (body.outcomeDetails) patch.outcomeDetails = toTrimmedString(body.outcomeDetails);
+          if (evidenceConsideration) patch.evidenceConsideration = evidenceConsideration;
+          if (expectedStandard) patch.expectedStandard = expectedStandard;
+          if (supportMonitoringRetraining) patch.supportMonitoringRetraining = supportMonitoringRetraining;
+          if (warningTitle) patch.warningTitle = warningTitle;
           if (body.warningDurationMonths) patch.warningDurationMonths = Number(body.warningDurationMonths);
           if (body.warningEffectiveAt) patch.warningEffectiveAt = body.warningEffectiveAt;
           if (body.warningExpiresAt) patch.warningExpiresAt = body.warningExpiresAt;
@@ -1047,78 +1291,213 @@ function createPeopleCasesApi({
             const expires = new Date(body.warningEffectiveAt);
             expires.setMonth(expires.getMonth() + Number(body.warningDurationMonths));
             patch.warningExpiresAt = expires.toISOString().slice(0, 10);
-          } else if (preset.warning && !body.warningExpiresAt && preset.suggestedExpiryMonths) {
+          } else if (
+            (preset.warning || ['written_warning', 'final_written_warning', 'pip'].includes(preset.id))
+            && !body.warningExpiresAt
+            && (preset.suggestedExpiryMonths || body.warningDurationMonths)
+          ) {
             const effective = toTrimmedString(body.warningEffectiveAt) || new Date().toISOString().slice(0, 10);
+            const months = Number(body.warningDurationMonths || preset.suggestedExpiryMonths || 6);
             const expires = new Date(effective);
-            expires.setMonth(expires.getMonth() + preset.suggestedExpiryMonths);
+            expires.setMonth(expires.getMonth() + months);
             patch.warningEffectiveAt = effective;
             patch.warningExpiresAt = expires.toISOString().slice(0, 10);
+            patch.warningDurationMonths = months;
           }
-          events.push(['outcome_selected', { outcomePreset: preset.id }]);
+          events.push(['outcome_selected', { outcomePreset: preset.id, finalizeOutcome }]);
 
-          // Generate outcome letter document
+          const supersedeCaseIds = Array.isArray(body.supersedeCaseIds)
+            ? [...new Set(body.supersedeCaseIds.map(toTrimmedString).filter(Boolean))]
+            : [];
+          const superseded = [];
+          for (const oldCaseId of supersedeCaseIds) {
+            if (!oldCaseId || oldCaseId === caseId) continue;
+            // eslint-disable-next-line no-await-in-loop
+            const oldSnap = await db.collection('disciplinary_cases').doc(oldCaseId).get();
+            if (!oldSnap.exists) continue;
+            const oldData = oldSnap.data() || {};
+            if (toTrimmedString(oldData.employeeUid) !== toTrimmedString(existing.employeeUid)) {
+              continue;
+            }
+            if (oldData.warningClearedAt) continue;
+            // eslint-disable-next-line no-await-in-loop
+            await oldSnap.ref.update({
+              warningClearedAt: admin.firestore.FieldValue.serverTimestamp(),
+              warningClearedReason: 'superseded',
+              supersededByCaseId: caseId,
+              supersededByOutcome: preset.id,
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              updatedByUid: session.profile.uid,
+            });
+            // eslint-disable-next-line no-await-in-loop
+            await appendEvent(oldCaseId, 'warning_superseded', {
+              supersededByCaseId: caseId,
+              supersededByOutcome: preset.id,
+              previousOutcome: oldData.outcomePreset || '',
+              title: oldData.title || '',
+            }, session.profile);
+            superseded.push({
+              id: oldCaseId,
+              title: oldData.title || '',
+              outcomePreset: oldData.outcomePreset || '',
+            });
+          }
+          if (superseded.length) {
+            patch.supersededCaseIds = superseded.map((item) => item.id);
+            patch.supersededWarnings = superseded;
+            events.push(['warnings_superseded', {
+              caseIds: superseded.map((item) => item.id),
+              warnings: superseded,
+            }]);
+          }
+
+          let appealRecipientName = '';
+          if (appealRecipientUid) {
+            const appealRecipient = await getUserProfile(appealRecipientUid);
+            appealRecipientName = appealRecipient?.fullName || appealRecipient?.email || '';
+            patch.appealOwnerUid = appealRecipientUid;
+            patch.appealRecipientUid = appealRecipientUid;
+            patch.appealRecipientNameSnapshot = appealRecipientName;
+          }
+
+          const appealWindowEndsAt = addWorkingDays(new Date(), 5);
           const outcomeDetails = toTrimmedString(body.outcomeDetails) || '';
           const employeeName = existing.employeeNameSnapshot || '';
-          const durationLabel = body.warningDurationMonths ? `${body.warningDurationMonths} months` : '';
+          const durationLabel = (patch.warningDurationMonths || body.warningDurationMonths)
+            ? `${patch.warningDurationMonths || body.warningDurationMonths} months`
+            : '';
           const todayLabel = new Date().toLocaleDateString('en-GB');
+          const appealDeadlineLabel = String(appealWindowEndsAt).slice(0, 10).split('-').reverse().join('/');
+          const requiresEmployeeSignature = finalizeOutcome
+            && ['written_warning', 'final_written_warning', 'pip'].includes(preset.id);
+          const issuerName = session.profile.fullName || session.profile.email || 'Management';
+          const managerSignature = requiresEmployeeSignature
+            ? {
+              signedByUid: session.profile.uid,
+              signedByName: issuerName,
+              signedAt: new Date().toISOString(),
+              signedAtLabel: formatUkDateTime(new Date()),
+              method: 'portal_issue',
+            }
+            : null;
           const outcomeLetterHtml = buildOutcomeLetterHtml({
             employeeName,
             caseTitle: existing.title || '',
             presetLabel: preset.label,
             outcomeDetails,
+            evidenceConsideration,
+            expectedStandard,
+            supportMonitoringRetraining,
+            reviewDates: reviewInputs,
             warningEffectiveAt: patch.warningEffectiveAt || '',
             warningExpiresAt: patch.warningExpiresAt || '',
             durationLabel,
-            issuedByName: session.profile.fullName || 'Management',
+            issuedByName: issuerName,
             issuedAtLabel: todayLabel,
+            appealRecipientName,
+            appealDeadlineLabel,
+            managerSignature,
+            employeeSignature: null,
+            requiresEmployeeSignature,
+            warningTitle,
           });
           const outcomeNow = admin.firestore.FieldValue.serverTimestamp();
-          await db.collection('disciplinary_documents').add({
+          const outcomeFileName = requiresEmployeeSignature
+            ? `${warningTitle || preset.label} - ${new Date().toISOString().slice(0, 10)}.html`
+            : `Outcome letter - ${new Date().toISOString().slice(0, 10)}.html`;
+          const outcomeDocRef = await db.collection('disciplinary_documents').add({
             caseId,
             employeeUid: existing.employeeUid,
             documentType: 'outcome',
-            templateId: 'outcome_letter',
-            fileName: `Outcome letter - ${new Date().toISOString().slice(0, 10)}.html`,
+            templateId: requiresEmployeeSignature ? `${preset.id}_outcome` : 'outcome_letter',
+            fileName: outcomeFileName,
             fileFormat: 'html',
             mimeType: 'text/html',
             storageProvider: 'portal',
             portalHtml: outcomeLetterHtml,
             uploadedByUid: session.profile.uid,
-            source: 'outcome_selection',
+            source: finalizeOutcome ? 'outcome_finalize' : 'outcome_selection',
+            issuedToEmployeeAt: finalizeOutcome ? outcomeNow : null,
+            employeeSignStatus: requiresEmployeeSignature ? 'pending' : null,
+            managerSignature: managerSignature || null,
+            employeeSignature: null,
+            requiresEmployeeSignature: Boolean(requiresEmployeeSignature),
+            warningPresetId: requiresEmployeeSignature ? preset.id : null,
+            warningPresetLabel: requiresEmployeeSignature ? preset.label : null,
+            warningTitle: warningTitle || null,
+            warningEffectiveAt: patch.warningEffectiveAt || '',
+            warningExpiresAt: patch.warningExpiresAt || '',
+            warningDurationMonths: patch.warningDurationMonths || body.warningDurationMonths || null,
+            outcomeDetails,
+            evidenceConsideration,
+            expectedStandard,
+            supportMonitoringRetraining,
+            reviewDates: reviewInputs,
+            appealRecipientName,
+            appealDeadlineLabel,
             createdAt: outcomeNow,
             updatedAt: outcomeNow,
           });
 
-          // Generate warning/PIP document if applicable
-          if (['written_warning', 'final_written_warning', 'pip'].includes(preset.id)) {
-            const warningHtml = buildWarningDocumentHtml({
-              employeeName,
-              caseTitle: existing.title || '',
-              presetLabel: preset.label,
-              presetId: preset.id,
-              outcomeDetails,
-              warningEffectiveAt: patch.warningEffectiveAt || '',
-              warningExpiresAt: patch.warningExpiresAt || '',
-              durationLabel,
-              issuedByName: session.profile.fullName || 'Management',
-              issuedAtLabel: todayLabel,
-            });
-            const docTypeName = preset.id === 'pip' ? 'PIP' : preset.label;
-            await db.collection('disciplinary_documents').add({
-              caseId,
-              employeeUid: existing.employeeUid,
-              documentType: 'warning',
-              templateId: `${preset.id}_document`,
-              fileName: `${docTypeName} - ${new Date().toISOString().slice(0, 10)}.html`,
-              fileFormat: 'html',
-              mimeType: 'text/html',
-              storageProvider: 'portal',
-              portalHtml: warningHtml,
-              uploadedByUid: session.profile.uid,
-              source: 'outcome_selection',
-              createdAt: outcomeNow,
-              updatedAt: outcomeNow,
-            });
+          if (requiresEmployeeSignature) {
+            patch.warningDocumentId = outcomeDocRef.id;
+            patch.warningEmployeeSignStatus = 'pending';
+            patch.warningIssuedByUid = session.profile.uid;
+            patch.warningIssuedByName = issuerName;
+          }
+
+          if (finalizeOutcome) {
+            for (const review of reviewInputs) {
+              // eslint-disable-next-line no-await-in-loop
+              await db.collection('case_reviews').add({
+                caseId,
+                employeeUid: existing.employeeUid || '',
+                title: review.title,
+                notes: review.notes || '',
+                dueAt: review.dueAt,
+                status: 'open',
+                createdByUid: session.profile.uid,
+                createdAt: admin.firestore.FieldValue.serverTimestamp(),
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              });
+            }
+            if (reviewInputs.length) {
+              const nextDue = [...reviewInputs]
+                .map((item) => item.dueAt)
+                .sort()[0];
+              patch.nextReviewDueAt = nextDue;
+              patch.reviewScheduledCount = reviewInputs.length;
+              events.push(['reviews_scheduled', { count: reviewInputs.length, nextDue }]);
+            }
+
+            patch.outcomePackSteps = (patch.outcomePackSteps || []).map((step) => ({
+              ...step,
+              done: true,
+              completedAt: new Date().toISOString(),
+              completedByUid: session.profile.uid,
+            }));
+            patch.stage = 'closed';
+            // Written warnings / PIP await employee digital signature on the portal.
+            patch.status = ['written_warning', 'final_written_warning', 'pip'].includes(preset.id)
+              ? 'pending_employee'
+              : 'closed';
+            patch.closedAt = admin.firestore.FieldValue.serverTimestamp();
+            patch.closedByUid = session.profile.uid;
+            patch.closedByName = session.profile.fullName || session.profile.email || '';
+            patch.appealWindowEndsAt = appealWindowEndsAt;
+            patch.outcomeIssuedAt = outcomeNow;
+            events.push(['outcome_finalized', {
+              outcomePreset: preset.id,
+              appealWindowEndsAt,
+              appealRecipientUid,
+              reviewCount: reviewInputs.length,
+              awaitingEmployeeSignature: ['written_warning', 'final_written_warning', 'pip'].includes(preset.id),
+            }]);
+            events.push(['case_closed', {
+              appealWindowEndsAt,
+              via: 'outcome_finalize',
+              awaitingEmployeeSignature: ['written_warning', 'final_written_warning', 'pip'].includes(preset.id),
+            }]);
           }
         }
 
@@ -1264,7 +1643,9 @@ function createPeopleCasesApi({
         res.status(200).json(responseBody);
       } catch (error) {
         console.error('updatePeopleCase failed', error);
-        res.status(500).json({ error: 'Failed to update case.' });
+        res.status(500).json({
+          error: error?.message ? `Failed to update case: ${error.message}` : 'Failed to update case.',
+        });
       }
     }),
   );
@@ -1379,11 +1760,17 @@ function createPeopleCasesApi({
             updatedAt: now,
           });
         }
-        await caseSnap.ref.update({
-          status: 'pending_employee',
+        // Interview notes are non-blocking: the employee may amend/sign in the portal,
+        // but the case proceeds without waiting on that response.
+        const casePatch = {
+          interviewNotesIssuedAt: now,
           updatedAt: now,
           updatedByUid: session.profile.uid,
-        });
+        };
+        if (caseData.status !== 'closed' && normalizeStage(caseData.processFamily || 'disciplinary', caseData.stage) !== 'closed') {
+          casePatch.status = 'open';
+        }
+        await caseSnap.ref.update(casePatch);
         await appendEvent(caseId, 'minutes_issued', {
           minutesId: ref.id,
           meetingType,
@@ -1528,13 +1915,15 @@ function createPeopleCasesApi({
             updatedAt: now,
           });
         } else if (['sign_off', 'approve'].includes(action)) {
+          // Sign-off is optional confirmation — do not park the case as waiting.
           await db.collection('disciplinary_cases').doc(minutes.caseId).update({
-            status: 'pending_manager',
+            status: 'open',
             updatedAt: now,
           });
         } else if (['apply_amendment', 'decline_amendment', 'manager_update'].includes(action) && isManager) {
+          // Re-issued notes remain non-blocking for case progress.
           await db.collection('disciplinary_cases').doc(minutes.caseId).update({
-            status: 'pending_employee',
+            status: 'open',
             updatedAt: now,
           });
         }
@@ -1656,56 +2045,217 @@ function createPeopleCasesApi({
           .map((doc) => ({ id: doc.id, ...doc.data(), createdAt: serializeTimestamp(doc.data().createdAt) }))
           .filter((item) => item.status === 'issued');
 
-        const cases = casesSnap.docs.map((doc) => serializeCase(doc));
+        const casesById = Object.fromEntries(
+          casesSnap.docs.map((doc) => [doc.id, { id: doc.id, ...doc.data() }]),
+        );
+        const cases = casesSnap.docs.map((doc) => serializeEmployeeOwnCase(doc));
         const prompts = promptsSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-        const documents = docsSnap.docs
-          .map((doc) => ({
-            id: doc.id,
-            ...doc.data(),
-            createdAt: serializeTimestamp(doc.data().createdAt),
-            issuedToEmployeeAt: serializeTimestamp(doc.data().issuedToEmployeeAt),
-            managerSignature: doc.data().managerSignature || null,
-            employeeSignature: doc.data().employeeSignature || null,
-          }))
-          .filter((item) => {
-            if (item.documentType === 'file_note_for_improvement' && item.issuedToEmployeeAt) {
-              return true;
+        const allEmployeeDocs = docsSnap.docs.map((doc) => ({
+          id: doc.id,
+          ...doc.data(),
+          createdAt: serializeTimestamp(doc.data().createdAt),
+          issuedToEmployeeAt: serializeTimestamp(doc.data().issuedToEmployeeAt),
+          managerSignature: doc.data().managerSignature || null,
+          employeeSignature: doc.data().employeeSignature || null,
+        }));
+
+        const hearingManagerCache = {};
+        const documents = [];
+        for (const item of allEmployeeDocs) {
+          const caseData = casesById[item.caseId] || {};
+          const caseHasHearingInvite = Boolean(caseData.hearingInviteIssuedAt);
+          const include = (
+            (item.documentType === 'file_note_for_improvement' && item.issuedToEmployeeAt)
+            || (['invite', 'letter', 'warning', 'outcome', 'suspension_letter', 'training_outline', 'pip_plan'].includes(item.documentType)
+              && Boolean(item.issuedToEmployeeAt || item.documentType === 'invite'))
+            || (Boolean(item.issuedToEmployeeAt) && ['minutes', 'evidence', 'other'].includes(item.documentType))
+            || (caseHasHearingInvite && isHearingEvidenceDocument(item))
+          );
+          if (!include) continue;
+
+          if (
+            (item.documentType === 'invite' || item.source === 'hearing_invite')
+            && !portalHtmlHasLetterhead(item.portalHtml)
+          ) {
+            let hearingManagerName = '';
+            const hearingManagerUid = toTrimmedString(caseData.hearingManagerUid);
+            if (hearingManagerUid) {
+              if (!Object.prototype.hasOwnProperty.call(hearingManagerCache, hearingManagerUid)) {
+                // eslint-disable-next-line no-await-in-loop
+                const manager = await getUserProfile(hearingManagerUid);
+                hearingManagerCache[hearingManagerUid] = manager?.fullName || '';
+              }
+              hearingManagerName = hearingManagerCache[hearingManagerUid] || '';
             }
-            if (['invite', 'letter', 'warning', 'outcome', 'suspension_letter', 'training_outline', 'pip_plan'].includes(item.documentType)) {
-              return true;
-            }
-            // Minutes / notes Word files that were explicitly sent for employee review
-            return Boolean(item.issuedToEmployeeAt) && ['minutes', 'evidence', 'other'].includes(item.documentType);
-          });
+            const relatedForCase = allEmployeeDocs.filter((doc) => doc.caseId === item.caseId);
+            const refreshedHtml = rebuildHearingInvitePortalHtml({
+              caseData,
+              inviteDoc: item,
+              relatedDocuments: relatedForCase,
+              hearingManagerName,
+            });
+            item.portalHtml = refreshedHtml;
+            // Persist so the employee keeps seeing the letterheaded version.
+            // eslint-disable-next-line no-await-in-loop
+            await db.collection('disciplinary_documents').doc(item.id).update({
+              portalHtml: refreshedHtml,
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            }).catch((err) => {
+              console.error('Failed to refresh hearing invite portalHtml', item.id, err);
+            });
+          }
+
+          documents.push(item);
+        }
 
         const pendingFileNotes = documents.filter(
           (item) => item.documentType === 'file_note_for_improvement'
             && item.employeeSignStatus === 'pending',
         );
+        const pendingWarnings = documents.filter(
+          (item) => item.employeeSignStatus === 'pending'
+            && (
+              item.documentType === 'warning'
+              || item.documentType === 'outcome'
+              || item.requiresEmployeeSignature
+            ),
+        );
 
         const pendingHearingInvites = cases
           .filter((item) => item.hearingInviteIssuedAt && ['hearing_invite', 'hearing'].includes(item.stage))
-          .map((item) => ({
-            caseId: item.id,
-            title: item.title,
-            hearingScheduledAt: item.hearingScheduledAt || '',
-            hearingScheduledTime: item.hearingScheduledTime || '',
-            hearingLocation: item.hearingLocation || '',
-            hearingInviteDocumentId: item.hearingInviteDocumentId || '',
-          }));
+          .map((item) => {
+            const evidenceDocuments = documents
+              .filter((doc) => doc.caseId === item.id && isHearingEvidenceDocument(doc))
+              .map((doc) => ({
+                id: doc.id,
+                caseId: doc.caseId,
+                fileName: doc.fileName || 'Evidence document',
+                documentType: doc.documentType || 'evidence',
+                mimeType: doc.mimeType || '',
+                canDownload: Boolean(doc.portalHtml || doc.sharePointItemId || doc.sharePointWebUrl),
+              }));
+            return {
+              caseId: item.id,
+              title: item.title,
+              hearingScheduledAt: item.hearingScheduledAt || '',
+              hearingScheduledTime: item.hearingScheduledTime || '',
+              hearingLocation: item.hearingLocation || '',
+              hearingInviteDocumentId: item.hearingInviteDocumentId || '',
+              evidenceDocuments,
+            };
+          });
 
         res.status(200).json({
           pendingMinutes,
           pendingFileNotes,
+          pendingWarnings,
           cases,
           bumpPrompts: prompts,
           documents,
           pendingHearingInvites,
-          badgeCount: pendingMinutes.length + prompts.length + pendingHearingInvites.length + pendingFileNotes.length,
+          badgeCount: pendingMinutes.length
+            + prompts.length
+            + pendingHearingInvites.length
+            + pendingFileNotes.length
+            + pendingWarnings.length,
         });
       } catch (error) {
         console.error('getEmployeeCaseActions failed', error);
         res.status(500).json({ error: 'Failed to load actions.' });
+      }
+    }),
+  );
+
+  const downloadEmployeeCaseDocument = onRequest(
+    { region: 'europe-west2' },
+    withCors(async (req, res) => {
+      if (req.method !== 'POST' && req.method !== 'GET') {
+        res.status(405).json({ error: 'Method not allowed.' });
+        return;
+      }
+      const session = await getVerifiedSessionUser(req);
+      if (!session) {
+        res.status(401).json({ error: 'Authentication required.' });
+        return;
+      }
+
+      const documentId = toTrimmedString(
+        req.method === 'GET' ? req.query?.documentId : req.body?.documentId,
+      );
+      if (!documentId) {
+        res.status(400).json({ error: 'documentId is required.' });
+        return;
+      }
+
+      try {
+        const docSnap = await db.collection('disciplinary_documents').doc(documentId).get();
+        if (!docSnap.exists) {
+          res.status(404).json({ error: 'Document not found.' });
+          return;
+        }
+        const doc = { id: docSnap.id, ...docSnap.data() };
+        if (toTrimmedString(doc.employeeUid) !== toTrimmedString(session.profile.uid)) {
+          res.status(403).json({ error: 'You can only open documents issued for your own cases.' });
+          return;
+        }
+
+        const caseSnap = doc.caseId
+          ? await db.collection('disciplinary_cases').doc(doc.caseId).get()
+          : null;
+        const caseData = caseSnap?.exists ? caseSnap.data() : {};
+        const caseHasHearingInvite = Boolean(caseData.hearingInviteIssuedAt);
+        const alwaysVisible = ['invite', 'letter', 'warning', 'outcome', 'suspension_letter', 'training_outline', 'pip_plan', 'file_note_for_improvement'].includes(
+          toTrimmedString(doc.documentType).toLowerCase(),
+        );
+        const allowed = alwaysVisible
+          || Boolean(doc.issuedToEmployeeAt)
+          || (caseHasHearingInvite && isHearingEvidenceDocument(doc));
+        if (!allowed) {
+          res.status(403).json({ error: 'This document is not available in your portal yet.' });
+          return;
+        }
+
+        if (doc.portalHtml) {
+          res.status(200).json({
+            id: doc.id,
+            fileName: doc.fileName || 'Document.html',
+            mimeType: 'text/html',
+            portalHtml: doc.portalHtml,
+          });
+          return;
+        }
+
+        const itemId = toTrimmedString(doc.sharePointItemId);
+        if (itemId && isSharePointConfigured(getSharePointConfig())) {
+          const content = await downloadDriveItemContent(getSharePointConfig(), itemId);
+          const buffer = content?.buffer;
+          if (!buffer || !buffer.length) {
+            res.status(404).json({ error: 'Document file could not be downloaded.' });
+            return;
+          }
+          res.status(200).json({
+            id: doc.id,
+            fileName: doc.fileName || 'document',
+            mimeType: content.contentType || doc.mimeType || 'application/octet-stream',
+            contentBase64: Buffer.from(buffer).toString('base64'),
+          });
+          return;
+        }
+
+        if (doc.sharePointWebUrl) {
+          res.status(200).json({
+            id: doc.id,
+            fileName: doc.fileName || 'document',
+            mimeType: doc.mimeType || 'application/octet-stream',
+            sharePointWebUrl: doc.sharePointWebUrl,
+          });
+          return;
+        }
+
+        res.status(404).json({ error: 'No downloadable file is attached to this document.' });
+      } catch (error) {
+        console.error('downloadEmployeeCaseDocument failed', error);
+        res.status(500).json({ error: 'Failed to download document.' });
       }
     }),
   );
@@ -1736,16 +2286,21 @@ function createPeopleCasesApi({
           return;
         }
         const docData = docSnap.data();
-        if (docData.documentType !== 'file_note_for_improvement') {
-          res.status(400).json({ error: 'This document is not a file note for improvement.' });
+        const isFileNote = docData.documentType === 'file_note_for_improvement';
+        const isLegacyWarning = docData.documentType === 'warning';
+        const isOutcomeWarning = docData.documentType === 'outcome'
+          && (docData.requiresEmployeeSignature || docData.employeeSignStatus === 'pending' || docData.employeeSignStatus === 'signed');
+        const isWarningSignable = isLegacyWarning || isOutcomeWarning;
+        if (!isFileNote && !isWarningSignable) {
+          res.status(400).json({ error: 'This document cannot be digitally signed here.' });
           return;
         }
         if (docData.employeeUid !== session.profile.uid) {
-          res.status(403).json({ error: 'Only the employee named on this file note can sign it.' });
+          res.status(403).json({ error: 'Only the employee named on this document can sign it.' });
           return;
         }
         if (docData.employeeSignStatus === 'signed' || docData.employeeSignature?.signedAt) {
-          res.status(400).json({ error: 'This file note has already been signed.' });
+          res.status(400).json({ error: 'This document has already been signed.' });
           return;
         }
 
@@ -1761,35 +2316,97 @@ function createPeopleCasesApi({
 
         // Prefer employee name from the case when available.
         let employeeName = '';
+        let caseData = {};
         const caseSnap = await db.collection('disciplinary_cases').doc(docData.caseId).get();
         if (caseSnap.exists) {
-          employeeName = caseSnap.data().employeeNameSnapshot || '';
+          caseData = caseSnap.data() || {};
+          employeeName = caseData.employeeNameSnapshot || '';
         }
-        const finalHtml = buildFileNoteForImprovementHtml({
-          employeeName: employeeName || employeeSignature.signedByName,
-          managerName: managerSignature?.signedByName || '',
-          reason: docData.fileNoteReason || '',
-          actionRequired: docData.fileNoteActionRequired || '',
-          issuedAtLabel: caseSnap.exists && caseSnap.data().fileNoteIssuedAt?.toDate
-            ? caseSnap.data().fileNoteIssuedAt.toDate().toLocaleDateString('en-GB')
-            : new Date().toLocaleDateString('en-GB'),
-          managerSignature,
-          employeeSignature,
-        });
+
+        let finalHtml = '';
+        let signedFileName = docData.fileName || '';
+        if (isFileNote) {
+          finalHtml = buildFileNoteForImprovementHtml({
+            employeeName: employeeName || employeeSignature.signedByName,
+            managerName: managerSignature?.signedByName || '',
+            reason: docData.fileNoteReason || '',
+            actionRequired: docData.fileNoteActionRequired || '',
+            issuedAtLabel: caseData.fileNoteIssuedAt?.toDate
+              ? caseData.fileNoteIssuedAt.toDate().toLocaleDateString('en-GB')
+              : new Date().toLocaleDateString('en-GB'),
+            managerSignature,
+            employeeSignature,
+          });
+          signedFileName = `File note for improvement - signed ${signedAt.toISOString().slice(0, 10)}.html`;
+        } else if (isOutcomeWarning) {
+          const presetId = docData.warningPresetId || caseData.outcomePreset || 'written_warning';
+          const presetLabel = docData.warningPresetLabel
+            || outcomePresetById(presetId)?.label
+            || 'Written warning';
+          const durationMonths = docData.warningDurationMonths || caseData.warningDurationMonths;
+          const appealDeadlineLabel = docData.appealDeadlineLabel
+            || (caseData.appealWindowEndsAt
+              ? String(caseData.appealWindowEndsAt).slice(0, 10).split('-').reverse().join('/')
+              : '');
+          finalHtml = buildOutcomeLetterHtml({
+            employeeName: employeeName || employeeSignature.signedByName,
+            caseTitle: caseData.title || '',
+            presetLabel,
+            outcomeDetails: docData.outcomeDetails || caseData.outcomeDetails || '',
+            evidenceConsideration: docData.evidenceConsideration || caseData.evidenceConsideration || '',
+            expectedStandard: docData.expectedStandard || caseData.expectedStandard || '',
+            supportMonitoringRetraining: docData.supportMonitoringRetraining || caseData.supportMonitoringRetraining || '',
+            reviewDates: Array.isArray(docData.reviewDates) ? docData.reviewDates : [],
+            warningEffectiveAt: docData.warningEffectiveAt || caseData.warningEffectiveAt || '',
+            warningExpiresAt: docData.warningExpiresAt || caseData.warningExpiresAt || '',
+            durationLabel: durationMonths ? `${durationMonths} months` : '',
+            issuedByName: managerSignature?.signedByName || caseData.warningIssuedByName || 'Management',
+            issuedAtLabel: caseData.outcomeIssuedAt?.toDate
+              ? caseData.outcomeIssuedAt.toDate().toLocaleDateString('en-GB')
+              : new Date().toLocaleDateString('en-GB'),
+            appealRecipientName: docData.appealRecipientName || caseData.appealRecipientNameSnapshot || '',
+            appealDeadlineLabel,
+            managerSignature,
+            employeeSignature,
+            requiresEmployeeSignature: true,
+            warningTitle: docData.warningTitle || caseData.warningTitle || '',
+          });
+          signedFileName = `${docData.warningTitle || presetLabel} - signed ${signedAt.toISOString().slice(0, 10)}.html`;
+        } else {
+          const presetId = docData.warningPresetId || caseData.outcomePreset || 'written_warning';
+          const presetLabel = docData.warningPresetLabel
+            || outcomePresetById(presetId)?.label
+            || 'Written warning';
+          const durationMonths = docData.warningDurationMonths || caseData.warningDurationMonths;
+          finalHtml = buildWarningDocumentHtml({
+            employeeName: employeeName || employeeSignature.signedByName,
+            caseTitle: caseData.title || '',
+            presetLabel,
+            presetId,
+            outcomeDetails: docData.outcomeDetails || caseData.outcomeDetails || '',
+            warningEffectiveAt: docData.warningEffectiveAt || caseData.warningEffectiveAt || '',
+            warningExpiresAt: docData.warningExpiresAt || caseData.warningExpiresAt || '',
+            durationLabel: durationMonths ? `${durationMonths} months` : '',
+            issuedByName: managerSignature?.signedByName || caseData.warningIssuedByName || 'Management',
+            issuedAtLabel: caseData.outcomeIssuedAt?.toDate
+              ? caseData.outcomeIssuedAt.toDate().toLocaleDateString('en-GB')
+              : new Date().toLocaleDateString('en-GB'),
+            managerSignature,
+            employeeSignature,
+          });
+          signedFileName = `${presetLabel} - signed ${signedAt.toISOString().slice(0, 10)}.html`;
+        }
 
         const now = admin.firestore.FieldValue.serverTimestamp();
         let sharePointWebUrl = docData.sharePointWebUrl || '';
         let sharePointItemId = docData.sharePointItemId || '';
         let sharePointFolderPath = docData.sharePointFolderPath || '';
         let storageProvider = docData.storageProvider || 'portal';
-        let signedFileName = docData.fileName || '';
 
         if (typeof uploadDisciplinaryDocument === 'function' && isSharePointConfigured(getSharePointConfig()) && caseSnap.exists) {
           try {
-            const caseData = caseSnap.data();
             const employee = await getUserProfile(docData.employeeUid);
             if (employee) {
-              signedFileName = `File note for improvement - signed ${signedAt.toISOString().slice(0, 10)}.html`;
               const uploadResult = await uploadDisciplinaryDocument(getSharePointConfig(), {
                 fullName: employee.fullName || caseData.employeeNameSnapshot || '',
                 isActive: employee.isActive !== false,
@@ -1806,7 +2423,7 @@ function createPeopleCasesApi({
               storageProvider = 'sharepoint';
             }
           } catch (spError) {
-            console.error('Signed file note SharePoint upload failed; keeping portal copy', spError);
+            console.error('Signed document SharePoint upload failed; keeping portal copy', spError);
           }
         }
 
@@ -1825,30 +2442,39 @@ function createPeopleCasesApi({
         });
 
         if (caseSnap.exists) {
-          await caseSnap.ref.update({
-            fileNoteEmployeeSignStatus: 'signed',
-            fileNoteEmployeeSignedAt: employeeSignature.signedAt,
-            fileNoteSignedDocumentId: documentId,
-            fileNoteSignedAt: now,
+          const casePatch = {
             status: 'closed',
             updatedAt: now,
-          });
-          await appendEvent(docData.caseId, 'file_note_employee_signed', {
+          };
+          if (isFileNote) {
+            casePatch.fileNoteEmployeeSignStatus = 'signed';
+            casePatch.fileNoteEmployeeSignedAt = employeeSignature.signedAt;
+            casePatch.fileNoteSignedDocumentId = documentId;
+            casePatch.fileNoteSignedAt = now;
+          } else {
+            casePatch.warningEmployeeSignStatus = 'signed';
+            casePatch.warningEmployeeSignedAt = employeeSignature.signedAt;
+            casePatch.warningSignedDocumentId = documentId;
+            casePatch.warningSignedAt = now;
+          }
+          await caseSnap.ref.update(casePatch);
+          await appendEvent(docData.caseId, isFileNote ? 'file_note_employee_signed' : 'warning_employee_signed', {
             documentId,
             signedAt: employeeSignature.signedAt,
             signedByUid: session.profile.uid,
+            documentType: docData.documentType,
           }, session.profile);
         }
 
         res.status(200).json({
-          message: 'File note digitally signed.',
+          message: isFileNote ? 'File note digitally signed.' : 'Outcome letter digitally signed.',
           documentId,
           portalHtml: finalHtml,
           employeeSignature,
         });
       } catch (error) {
         console.error('signFileNoteDocument failed', error);
-        res.status(500).json({ error: 'Failed to sign file note.' });
+        res.status(500).json({ error: 'Failed to sign document.' });
       }
     }),
   );
@@ -2225,6 +2851,12 @@ function createPeopleCasesApi({
             closedAt: item.closedAt || item.updatedAt || '',
             informalResolutionPath: item.informalResolutionPath || '',
             fileNoteReason: item.fileNoteReason || '',
+            recordedByName: item.closedByName
+              || item.fileNoteIssuedByName
+              || item.createdByName
+              || item.managerNameSnapshot
+              || '',
+            openedByName: item.createdByName || item.managerNameSnapshot || '',
           }));
 
         res.status(200).json({ items });
@@ -2280,6 +2912,7 @@ function createPeopleCasesApi({
     createCaseReview,
     completeCaseReview,
     getEmployeeCaseActions,
+    downloadEmployeeCaseDocument,
     signFileNoteDocument,
     createBumpCardPrompt,
     submitBumpCard,

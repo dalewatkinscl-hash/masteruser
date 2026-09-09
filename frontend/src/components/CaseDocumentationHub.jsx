@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import EmployeeSelect, { ManagerMultiSelect } from './EmployeeSelect';
 import CaseStageDocuments from './CaseStageDocuments';
 import CaseRecordDetailModal from './CaseRecordDetailModal';
@@ -89,12 +89,14 @@ export default function CaseDocumentationHub({
   onRespondToMinutes,
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [menuPos, setMenuPos] = useState({ top: 0, left: 0 });
   const [showInterviewForm, setShowInterviewForm] = useState(false);
   const [showTemplates, setShowTemplates] = useState(false);
-  const [listFilter, setListFilter] = useState('stage');
+  const [listFilter, setListFilter] = useState('all');
   const [openRecord, setOpenRecord] = useState(null);
   const [interviewError, setInterviewError] = useState('');
   const uploadInputRef = useRef(null);
+  const addMenuRef = useRef(null);
 
   const defaultIntervieweeUid = caseData?.employeeUid || '';
 
@@ -123,6 +125,34 @@ export default function CaseDocumentationHub({
     [templates],
   );
   const missingInterviewNotes = missingDocuments.some((item) => item.documentType === 'minutes');
+
+  useEffect(() => {
+    if (!menuOpen) return undefined;
+    const onPointerDown = (event) => {
+      if (addMenuRef.current && !addMenuRef.current.contains(event.target)) {
+        setMenuOpen(false);
+      }
+    };
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') setMenuOpen(false);
+    };
+    window.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [menuOpen]);
+
+  const openAddMenu = () => {
+    const rect = addMenuRef.current?.getBoundingClientRect();
+    if (rect) {
+      const width = 256;
+      const left = Math.min(Math.max(8, rect.left), window.innerWidth - width - 8);
+      setMenuPos({ top: rect.bottom + 8, left });
+    }
+    setMenuOpen((open) => !open);
+  };
 
   const resetInterviewForm = () => {
     setInterviewForm({
@@ -189,17 +219,20 @@ export default function CaseDocumentationHub({
             </p>
           )}
           {canAdd && (
-            <div className="relative">
+            <div className="relative shrink-0" ref={addMenuRef}>
               <button
                 type="button"
                 className={btnPrimary}
                 disabled={saving || uploading}
-                onClick={() => setMenuOpen((open) => !open)}
+                onClick={openAddMenu}
               >
                 Add documentation
               </button>
               {menuOpen && (
-                <div className="absolute right-0 z-20 mt-2 w-56 rounded-lg border border-[#1a2540] bg-[#0b1220] shadow-xl py-1">
+                <div
+                  className="fixed z-[80] w-64 rounded-lg border border-[#1a2540] bg-[#0b1220] shadow-2xl py-1"
+                  style={{ top: menuPos.top, left: menuPos.left }}
+                >
                   <button
                     type="button"
                     className="block w-full text-left px-4 py-2 text-sm text-slate-200 hover:bg-[#060e1a]"

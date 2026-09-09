@@ -1,3 +1,6 @@
+const { wrapWithLetterhead } = require('./letterTemplate');
+const { formatSignatureBlock } = require('./fileNoteForImprovement');
+
 /**
  * People Cases — disciplinary, grievance, and vehicle-accident workflows.
  * Guide/ACAS copy is data-driven so HR can update without code changes later.
@@ -55,6 +58,32 @@ function normalizeStage(processFamily, stage) {
   return DISCIPLINARY_STAGES.includes(raw) ? raw : 'fact_finding';
 }
 
+/** Remap stage when changing process family so the case stays on an equivalent step. */
+function mapStageForFamilyChange(fromFamily, toFamily, currentStage) {
+  const from = toTrimmedString(fromFamily) || 'disciplinary';
+  const to = toTrimmedString(toFamily) || 'disciplinary';
+  const stage = normalizeStage(from, currentStage);
+  if (from === to) return stage;
+  if (['outcome_pack', 'closed', 'appeal'].includes(stage) && stagesForFamily(to).includes(stage)) {
+    return stage;
+  }
+  if (to === 'grievance') {
+    if (stage === 'hearing_invite' || stage === 'hearing') return 'meeting';
+    if (stage === 'fact_finding') return 'acknowledged';
+    return 'acknowledged';
+  }
+  if (to === 'disciplinary') {
+    if (stage === 'meeting') return 'hearing';
+    if (stage === 'acknowledged' || stage === 'investigation') return 'fact_finding';
+    return 'fact_finding';
+  }
+  if (to === 'vehicle_accident') {
+    if (stage === 'investigation' || stage === 'fact_finding') return 'investigation';
+    return 'triage';
+  }
+  return normalizeStage(to, '');
+}
+
 const CASE_TYPES = new Set([
   'attendance',
   'conduct',
@@ -75,7 +104,6 @@ const OUTCOME_PRESETS = [
   { id: 'final_written_warning', label: 'Final written warning', warning: true, suggestedExpiryMonths: 12 },
   { id: 'pip', label: 'Performance improvement plan', warning: false },
   { id: 'training_required', label: 'Training required', warning: false },
-  { id: 'suspension', label: 'Suspension', warning: false },
   { id: 'dismissal', label: 'Dismissal', warning: false },
 ];
 
@@ -282,13 +310,11 @@ const STAGE_GUIDES = {
   },
 };
 
+/** People Cases hub access requires an explicit cases_app role (or master admin). Headcount/HR does not grant it. */
 function getCasesRole(profile, getEffectivePortalRole) {
   if (profile?.portalsAccess?.master_admin === 'admin') return 'admin';
   const role = getEffectivePortalRole(profile, CASES_PORTAL);
   if (role === 'admin' || role === 'manager' || role === 'hr') return role;
-  // HR managers/admins can oversee cases.
-  const hrRole = getEffectivePortalRole(profile, 'hr_app');
-  if (hrRole === 'manager' || hrRole === 'admin') return 'hr';
   return '';
 }
 
@@ -370,9 +396,6 @@ function buildOutcomePackSteps(presetId) {
     base.push({ id: 'training_outline', label: 'Add training outline document', done: false });
     base.push({ id: 'set_reviews', label: 'Set training review date', done: false });
   }
-  if (presetId === 'suspension') {
-    base.push({ id: 'suspension_dates', label: 'Set suspension start/end (or open-ended)', done: false });
-  }
   if (['verbal_warning', 'written_warning', 'final_written_warning'].includes(presetId)) {
     base.push({ id: 'set_expiry', label: 'Set warning effective and expiry dates', done: false });
   }
@@ -405,6 +428,38 @@ function countWorkingDaysNotice(fromIso, toIso) {
   }
   return count;
 }
+
+/**
+ * Count clock hours that fall on weekdays (Mon–Fri) between two datetimes.
+ * Used for Country Lion’s “24 working hours” hearing notice policy.
+ */
+function countWorkingHoursNotice(fromDate, toDate) {
+  const from = fromDate instanceof Date ? new Date(fromDate) : new Date(fromDate);
+  const to = toDate instanceof Date ? new Date(toDate) : new Date(toDate);
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || to <= from) return 0;
+  let hours = 0;
+  const cursor = new Date(from);
+  while (cursor < to) {
+    const day = cursor.getDay();
+    const nextHour = new Date(cursor);
+    nextHour.setTime(cursor.getTime() + 60 * 60 * 1000);
+    const sliceEnd = nextHour < to ? nextHour : to;
+    if (day !== 0 && day !== 6) {
+      hours += (sliceEnd.getTime() - cursor.getTime()) / (60 * 60 * 1000);
+    }
+    cursor.setTime(nextHour.getTime());
+  }
+  return hours;
+}
+
+function parseHearingDateTime(isoDate, time) {
+  const datePart = String(isoDate || '').slice(0, 10);
+  const timePart = String(time || '09:00').trim() || '09:00';
+  const parsed = new Date(`${datePart}T${timePart}:00`);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+const MINIMUM_HEARING_NOTICE_WORKING_HOURS = 24;
 
 function escapeHtml(value) {
   return String(value || '')
@@ -446,104 +501,228 @@ function buildHearingInviteHtml({
   precautionarySuspension = false,
   suspensionReason = '',
   grossMisconductReason = '',
+  evidenceDocumentNames = [],
 }) {
   const when = formatHearingDateLabel(hearingScheduledAt, hearingScheduledTime) || '[date] at [time]';
-  const reportLocation = toTrimmedString(hearingLocation) || '[location / room]';
-  const actionFollowing = toTrimmedString(caseSummary) || toTrimmedString(caseTitle) || '[nature of the concern / allegation]';
+  const reportLocation = toTrimmedString(hearingLocation) || companyName || 'Country Lion';
+  const allegationDetails = toTrimmedString(caseSummary)
+    || toTrimmedString(caseTitle)
+    || 'the matter under consideration — further particulars will be confirmed at the hearing';
   const showSuspensionWarning = Boolean(suspensionActive || precautionarySuspension);
-  const grossReason = toTrimmedString(grossMisconductReason)
-    || toTrimmedString(suspensionReason)
-    || toTrimmedString(caseSummary)
-    || '[nature of the incident / concerns raised]';
+  const signerName = toTrimmedString(hearingManagerName) || toTrimmedString(issuedByName) || 'Management';
+  const issuedDate = toTrimmedString(issuedAtLabel) || new Date().toLocaleDateString('en-GB');
+  const notes = toTrimmedString(extraNotes);
+  const evidenceNames = Array.isArray(evidenceDocumentNames)
+    ? evidenceDocumentNames.map((name) => toTrimmedString(name)).filter(Boolean)
+    : [];
+  const evidenceListHtml = evidenceNames.length
+    ? `<ul>${evidenceNames.map((name) => `<li>${escapeHtml(name)}</li>`).join('')}</ul>
+       <p>Copies of these documents are enclosed with this invitation and/or available via the Employee Portal for you to review before the hearing.</p>`
+    : `<p>Copies of any written evidence, investigatory notes, or witness statements that will be discussed at the hearing are enclosed with this invitation and/or available via the Employee Portal. Please review them carefully so you can prepare your response.</p>`;
   const suspensionBlock = showSuspensionWarning
-    ? `<p>You should be aware that due to the nature of the incident and the concerns raised, this may be considered gross misconduct due to ${escapeHtml(grossReason)} and may result in immediate dismissal. In the meantime, you will be suspended on full pay until your disciplinary hearing.</p>`
-    : `<p class="note">(Delete this paragraph if not applicable.)</p>
-  <p>You should be aware that due to the nature of the incident and the concerns raised, this may be considered gross misconduct due to [reason] and may result in immediate dismissal. In the meantime, you will be suspended on full pay until your disciplinary hearing.</p>`;
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <title>Invitation to disciplinary hearing</title>
-  <style>
-    @page { size: A4; margin: 18mm; }
-    body { font-family: "Century Gothic", Calibri, Arial, sans-serif; color: #111; line-height: 1.45; margin: 0; }
-    p { margin: 0 0 12px; font-size: 11pt; }
-    .note { color: #555; font-style: italic; font-size: 10pt; }
-  </style>
-</head>
-<body>
-  <p>Dear ${escapeHtml(employeeName || 'Colleague')},</p>
-  <p>&nbsp;</p>
-  <p>I hereby inform you that you will be required to attend a disciplinary hearing on ${escapeHtml(when)}.</p>
-  <p>&nbsp;</p>
-  <p>At the hearing, action will be considered following ${escapeHtml(actionFollowing)}.</p>
-  <p>&nbsp;</p>
+    ? `<p>You should be aware that due to the nature of the concerns raised${toTrimmedString(suspensionReason) ? ` (${escapeHtml(toTrimmedString(suspensionReason))})` : ''}, you will be suspended on full pay pending the outcome of the disciplinary hearing.</p>`
+    : '';
+
+  const bodyHtml = `
+  <p class="date">${escapeHtml(issuedDate)}</p>
+  <p>I hereby inform you that you are required to attend a formal disciplinary hearing. The arrangements are as follows:</p>
+  <div class="meeting-details">
+    <p><strong>Date / time:</strong> ${escapeHtml(when)}</p>
+    <p><strong>Location:</strong> ${escapeHtml(reportLocation)}</p>
+    <p><strong>Hearing manager:</strong> ${escapeHtml(signerName)}</p>
+  </div>
+  <p><strong>Alleged misconduct / performance issue</strong></p>
+  <p>The hearing will consider the following concern(s), so that you can thoroughly prepare a response:</p>
+  <p>${escapeHtml(allegationDetails).replace(/\n/g, '<br/>')}</p>
+  ${notes ? `<p>${escapeHtml(notes).replace(/\n/g, '<br/>')}</p>` : ''}
+  <p><strong>Evidence to be discussed</strong></p>
+  ${evidenceListHtml}
   ${suspensionBlock}
-  <p>&nbsp;</p>
-  <p>You are entitled, if you wish, to be accompanied by another work colleague. If this is the case, please inform us of the individual you wish to attend as soon as possible.</p>
-  <p>&nbsp;</p>
-  <p>You will need to report to ${escapeHtml(reportLocation)} for commencement of this hearing. Failure to attend may result in a decision being made in your absence.</p>
-</body>
-</html>`;
+  <p><strong>Possible outcomes</strong></p>
+  <p>At the hearing, a range of outcomes may be considered. Depending on the findings, this may include no further action, informal action, a written warning, a final written warning, or other appropriate action. <strong>Dismissal is a possible outcome of this hearing.</strong></p>
+  <p><strong>Your right to be accompanied</strong></p>
+  <p>You have a statutory right to be accompanied at this hearing by a companion. If you wish to be accompanied, please inform us of the individual you wish to attend as soon as possible. If your companion cannot attend, you may ask to postpone the hearing by up to five working days.</p>
+  <p>Failure to attend may result in a decision being made in your absence. Please confirm attendance via the Employee Portal where possible. If you cannot attend, contact your manager as soon as you can.</p>
+  <div class="closing">
+    <p>Yours sincerely,</p>
+    <div class="sig-block">
+      <p class="sig-name">${escapeHtml(signerName)}</p>
+      <p class="sig-printed">${escapeHtml(signerName)}</p>
+      <p class="sig-role">Hearing Manager</p>
+    </div>
+  </div>`;
+
+  return wrapWithLetterhead({
+    title: 'Invitation to disciplinary hearing',
+    bodyHtml,
+    addresseeName: employeeName,
+  });
+}
+
+function formatIsoDateUk(isoDate) {
+  const text = String(isoDate || '').slice(0, 10);
+  const match = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!match) return text;
+  return `${match[3]}/${match[2]}/${match[1]}`;
 }
 
 function buildOutcomeLetterHtml({
-  employeeName, caseTitle, presetLabel, outcomeDetails,
-  warningEffectiveAt, warningExpiresAt, durationLabel,
-  issuedByName, issuedAtLabel, companyName = 'Country Lion',
+  employeeName,
+  caseTitle,
+  presetLabel,
+  outcomeDetails,
+  evidenceConsideration = '',
+  expectedStandard = '',
+  supportMonitoringRetraining = '',
+  reviewDates = [],
+  warningEffectiveAt,
+  warningExpiresAt,
+  durationLabel,
+  issuedByName,
+  issuedAtLabel,
+  appealRecipientName = '',
+  appealDeadlineLabel = '',
+  managerSignature = null,
+  employeeSignature = null,
+  requiresEmployeeSignature = false,
+  warningTitle = '',
 }) {
   const warningBlock = warningEffectiveAt
-    ? `<p>This ${escapeHtml(presetLabel.toLowerCase())} is effective from <strong>${escapeHtml(warningEffectiveAt)}</strong>${warningExpiresAt ? ` and will remain on your record until <strong>${escapeHtml(warningExpiresAt)}</strong> (${escapeHtml(durationLabel)})` : ''}.</p>`
+    ? `<p>This ${escapeHtml(String(presetLabel || 'outcome').toLowerCase())} is effective from <strong>${escapeHtml(formatIsoDateUk(warningEffectiveAt))}</strong>${
+      warningExpiresAt
+        ? ` and will remain live on your record until <strong>${escapeHtml(formatIsoDateUk(warningExpiresAt))}</strong>${durationLabel ? ` (${escapeHtml(durationLabel)})` : ''}`
+        : ''
+    }.</p>`
     : '';
-  return `<!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8"/><title>Outcome letter</title>
-<style>@page{size:A4;margin:18mm}body{font-family:"Century Gothic",Calibri,Arial,sans-serif;color:#111;line-height:1.45;margin:0}p{margin:0 0 12px;font-size:11pt}h1{font-size:16pt;margin:0 0 4px}.meta{color:#444;font-size:10pt;margin-bottom:22px}</style>
-</head><body>
-<h1>Outcome of disciplinary hearing</h1>
-<p class="meta">${escapeHtml(companyName)} · ${escapeHtml(issuedAtLabel)}</p>
-<p>Dear ${escapeHtml(employeeName || 'Colleague')},</p>
-<p>Following the disciplinary hearing regarding <strong>${escapeHtml(caseTitle || 'the matter under investigation')}</strong>, I am writing to confirm the outcome.</p>
-<p><strong>Decision:</strong> ${escapeHtml(presetLabel)}</p>
-<p><strong>Reasons for the decision:</strong></p>
-<p>${escapeHtml(outcomeDetails || 'See case notes.').replace(/\n/g, '<br/>')}</p>
-${warningBlock}
-<p>You have the right to appeal this decision. If you wish to appeal, you should do so in writing within five working days of receiving this letter, stating the grounds for your appeal.</p>
-<p>Yours sincerely,<br/>${escapeHtml(issuedByName || 'Management')}</p>
-<p style="font-size:9pt;color:#555;margin-top:28px">This letter is issued in line with the Acas Code of Practice on disciplinary and grievance procedures.</p>
-</body></html>`;
+
+  const subjectBlock = toTrimmedString(warningTitle)
+    ? `<p><strong>Subject:</strong> ${escapeHtml(warningTitle)}</p>`
+    : '';
+
+  const evidenceBlock = toTrimmedString(evidenceConsideration)
+    ? `<p><strong>Consideration of the evidence:</strong></p>
+       <p>${escapeHtml(evidenceConsideration).replace(/\n/g, '<br/>')}</p>`
+    : '';
+
+  const reasonsBlock = toTrimmedString(outcomeDetails)
+    ? `<p><strong>Reasons for the decision:</strong></p>
+       <p>${escapeHtml(outcomeDetails).replace(/\n/g, '<br/>')}</p>`
+    : '';
+
+  const standardBlock = toTrimmedString(expectedStandard)
+    ? `<p><strong>Expected standard going forward:</strong></p>
+       <p>${escapeHtml(expectedStandard).replace(/\n/g, '<br/>')}</p>`
+    : '';
+
+  const supportBlock = toTrimmedString(supportMonitoringRetraining)
+    ? `<p><strong>Support, monitoring and/or retraining:</strong></p>
+       <p>${escapeHtml(supportMonitoringRetraining).replace(/\n/g, '<br/>')}</p>`
+    : '';
+
+  const reviewItems = (Array.isArray(reviewDates) ? reviewDates : [])
+    .map((item) => ({
+      title: toTrimmedString(item?.title) || 'Review meeting',
+      dueAt: toTrimmedString(item?.dueAt),
+    }))
+    .filter((item) => item.dueAt);
+  const reviewBlock = reviewItems.length
+    ? `<p><strong>Review meeting(s):</strong></p>
+       <ul>${reviewItems.map((item) => `<li>${escapeHtml(item.title)} — ${escapeHtml(formatIsoDateUk(item.dueAt))}</li>`).join('')}</ul>`
+    : '';
+
+  const appealTo = toTrimmedString(appealRecipientName) || 'the nominated appeal manager';
+  const appealDeadline = toTrimmedString(appealDeadlineLabel);
+  const appealBlock = `
+  <p><strong>Right of appeal</strong></p>
+  <p>You have the right to appeal this decision. If you wish to appeal, you must do so <strong>in writing</strong> to <strong>${escapeHtml(appealTo)}</strong> within <strong>five working days</strong> of the date of this letter${
+    appealDeadline ? ` (by <strong>${escapeHtml(appealDeadline)}</strong>)` : ''
+  }, setting out the grounds for your appeal.</p>`;
+
+  const useDigitalSignatures = requiresEmployeeSignature || Boolean(managerSignature) || Boolean(employeeSignature);
+  const managerBlock = formatSignatureBlock(managerSignature, {
+    roleLabel: 'Issued by',
+    personName: issuedByName || 'Management',
+    pendingLabel: 'Manager signature',
+  });
+  const employeeBlock = formatSignatureBlock(employeeSignature, {
+    roleLabel: 'Issued to',
+    personName: employeeName || 'Employee',
+    pendingLabel: 'Awaiting digital signature via Employee Portal',
+  });
+  const closingBlock = useDigitalSignatures
+    ? `<div class="signatures">
+        <div class="row">
+          <div class="cell">${managerBlock}</div>
+          <div class="cell">${employeeBlock}</div>
+        </div>
+      </div>`
+    : `<div class="closing">
+        <p>Yours sincerely,</p>
+        <div class="sig-block">
+          <p class="sig-name">${escapeHtml(issuedByName || 'Management')}</p>
+          <p class="sig-printed">${escapeHtml(issuedByName || 'Management')}</p>
+          <p class="sig-role">Hearing Manager</p>
+        </div>
+      </div>`;
+
+  const letterTitle = toTrimmedString(warningTitle)
+    ? `${toTrimmedString(warningTitle)} — ${toTrimmedString(presetLabel) || 'Disciplinary outcome'}`
+    : (toTrimmedString(presetLabel) || 'Disciplinary outcome');
+  const bodyHtml = `
+  <p class="date">${escapeHtml(issuedAtLabel || '')}</p>
+  <p>Following the disciplinary hearing regarding <strong>${escapeHtml(caseTitle || 'the matter under consideration')}</strong>, I am writing to confirm the outcome of that hearing.</p>
+  ${subjectBlock}
+  <p><strong>Decision:</strong> ${escapeHtml(presetLabel || 'Recorded')}</p>
+  ${evidenceBlock}
+  ${reasonsBlock}
+  ${standardBlock}
+  ${supportBlock}
+  ${reviewBlock}
+  ${warningBlock}
+  ${appealBlock}
+  ${closingBlock}`;
+  return wrapWithLetterhead({ title: letterTitle, bodyHtml, addresseeName: employeeName });
 }
 
 function buildWarningDocumentHtml({
   employeeName, caseTitle, presetLabel, presetId, outcomeDetails,
   warningEffectiveAt, warningExpiresAt, durationLabel,
-  issuedByName, issuedAtLabel, companyName = 'Country Lion',
+  issuedByName, issuedAtLabel,
+  managerSignature = null,
+  employeeSignature = null,
 }) {
   const isPip = presetId === 'pip';
   const title = isPip ? 'Performance improvement plan' : presetLabel;
   const reviewNote = isPip
     ? '<p>A review meeting will be scheduled to assess progress against the objectives set out in this plan. Failure to demonstrate sufficient improvement may result in further disciplinary action.</p>'
     : '';
-  return `<!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8"/><title>${escapeHtml(title)}</title>
-<style>@page{size:A4;margin:18mm}body{font-family:"Century Gothic",Calibri,Arial,sans-serif;color:#111;line-height:1.45;margin:0}p{margin:0 0 12px;font-size:11pt}h1{font-size:16pt;margin:0 0 4px}.meta{color:#444;font-size:10pt;margin-bottom:22px}</style>
-</head><body>
-<h1>${escapeHtml(title)}</h1>
-<p class="meta">${escapeHtml(companyName)} · ${escapeHtml(issuedAtLabel)}</p>
-<p><strong>Employee:</strong> ${escapeHtml(employeeName || '—')}</p>
-<p><strong>Case:</strong> ${escapeHtml(caseTitle || '—')}</p>
-<p><strong>Effective from:</strong> ${escapeHtml(warningEffectiveAt || '—')}</p>
-<p><strong>Expires:</strong> ${escapeHtml(warningExpiresAt || '—')} (${escapeHtml(durationLabel || '—')})</p>
-<p>&nbsp;</p>
-<p><strong>Details:</strong></p>
-<p>${escapeHtml(outcomeDetails || 'See outcome letter.').replace(/\n/g, '<br/>')}</p>
-${reviewNote}
-<p>Any further breach of company standards or failure to improve may result in further disciplinary action up to and including dismissal.</p>
-<p>&nbsp;</p>
-<p>Issued by: ${escapeHtml(issuedByName || 'Management')}</p>
-<p>Date: ${escapeHtml(issuedAtLabel)}</p>
-<p>&nbsp;</p>
-<p>Employee signature: ____________________________&nbsp;&nbsp;&nbsp;Date: ____________</p>
-</body></html>`;
+  const managerBlock = formatSignatureBlock(managerSignature, {
+    roleLabel: 'Issued by',
+    personName: issuedByName || 'Management',
+    pendingLabel: 'Manager signature',
+  });
+  const employeeBlock = formatSignatureBlock(employeeSignature, {
+    roleLabel: 'Issued to',
+    personName: employeeName || 'Employee',
+    pendingLabel: 'Awaiting digital signature via Employee Portal',
+  });
+  const bodyHtml = `
+  <p class="date">${escapeHtml(issuedAtLabel || '')}</p>
+  <p>I am writing to confirm that you are being issued with a ${escapeHtml(String(title || 'warning').toLowerCase())}.</p>
+  <p><strong>Case:</strong> ${escapeHtml(caseTitle || '—')}</p>
+  <p><strong>Effective from:</strong> ${escapeHtml(formatIsoDateUk(warningEffectiveAt) || warningEffectiveAt || '—')}</p>
+  <p><strong>Expires:</strong> ${escapeHtml(formatIsoDateUk(warningExpiresAt) || warningExpiresAt || '—')}${durationLabel ? ` (${escapeHtml(durationLabel)})` : ''}</p>
+  <p><strong>Details:</strong></p>
+  <p>${escapeHtml(outcomeDetails || 'See outcome letter.').replace(/\n/g, '<br/>')}</p>
+  ${reviewNote}
+  <p>Any further breach of company standards or failure to improve may result in further disciplinary action up to and including dismissal.</p>
+  <div class="signatures">
+    <div class="row">
+      <div class="cell">${managerBlock}</div>
+      <div class="cell">${employeeBlock}</div>
+    </div>
+  </div>`;
+  return wrapWithLetterhead({ title, bodyHtml, addresseeName: employeeName });
 }
 
 function serializeTimestamp(value) {
@@ -565,6 +744,8 @@ function serializeCase(doc) {
     openedAt: serializeTimestamp(data.openedAt) || data.openedAt || null,
     closedAt: serializeTimestamp(data.closedAt) || data.closedAt || null,
     appealedAt: serializeTimestamp(data.appealedAt) || data.appealedAt || null,
+    interviewNotesIssuedAt: serializeTimestamp(data.interviewNotesIssuedAt) || data.interviewNotesIssuedAt || null,
+    outcomeIssuedAt: serializeTimestamp(data.outcomeIssuedAt) || data.outcomeIssuedAt || null,
     stage: normalizeStage(data.processFamily || 'disciplinary', data.stage),
     guide: guideFor(data.processFamily || 'disciplinary', normalizeStage(data.processFamily || 'disciplinary', data.stage)),
   };
@@ -588,12 +769,16 @@ module.exports = {
   canHrOverseeCases,
   stagesForFamily,
   normalizeStage,
+  mapStageForFamilyChange,
   guideFor,
   sanitizeCaseCreateInput,
   outcomePresetById,
   buildOutcomePackSteps,
   addWorkingDays,
   countWorkingDaysNotice,
+  countWorkingHoursNotice,
+  parseHearingDateTime,
+  MINIMUM_HEARING_NOTICE_WORKING_HOURS,
   buildHearingInviteHtml,
   buildOutcomeLetterHtml,
   buildWarningDocumentHtml,

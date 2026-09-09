@@ -1,10 +1,9 @@
 'use strict';
 
 /**
- * Fun weekday rotation — six live games each Mon–Fri (Europe/London).
- * Extra roster games sit out on a rolling window. Weekends are closed.
- * Rolling sit-out starts Monday 2026-08-03.
- * Enclose from 2026-08-04; Letter Box from 2026-08-05; Pipes from 2026-08-26.
+ * Fun weekday rotation — Europe/London day keys.
+ * Permanent games always appear; a rolling window picks N rotated games each weekday.
+ * Settings live in Firestore `fun_settings/rotation` (with hardcoded defaults).
  */
 
 const FUN_GAMES_BASE = [
@@ -19,34 +18,135 @@ const FUN_GAMES_BASE = [
 const ENCLOSE_LIVE_FROM = '2026-08-04';
 const ENCLOSE_GAME = { key: 'enclose', label: 'Daily Enclose' };
 
-/** Competitive Letter Box starts this Europe/London day (inclusive). */
 const LETTERBOX_LIVE_FROM = '2026-08-05';
 const LETTERBOX_GAME = { key: 'letterbox', label: 'Daily Letter Box' };
 
-/** Competitive Pipes starts this Europe/London day (inclusive). */
 const PIPES_LIVE_FROM = '2026-08-26';
 const PIPES_GAME = { key: 'pipes', label: 'Daily Pipes' };
 
-/** Competitive Little Dicks Toolbox starts this Europe/London day (inclusive). */
 const TOOLBOX_KICK_LIVE_FROM = '2026-08-26';
 const TOOLBOX_KICK_GAME = { key: 'toolboxkick', label: 'Little Dicks Toolbox' };
 
-/** From this day, Wordle + Little Dicks Toolbox never sit out. */
+const COIN_FLIP_LIVE_FROM = '2026-09-07';
+const COIN_FLIP_GAME = { key: 'coinflip', label: 'Coin Flip Streak' };
+
+/** Live on Fun from this London day key. */
+const WANTED_LIVE_FROM = '2026-09-08';
+const WANTED_GAME = { key: 'wanted', label: 'Daily Wanted' };
+
+/** From this day, permanent-game enforcement applies. */
 const PERMANENT_FUN_FROM = '2026-08-27';
-const PERMANENT_GAME_KEYS = ['wordle', 'toolboxkick'];
 
-/** Full roster including staged games (for labels / admin). Live days filter via getRosterForDay. */
-const FUN_GAMES = [...FUN_GAMES_BASE, ENCLOSE_GAME, LETTERBOX_GAME, PIPES_GAME, TOOLBOX_KICK_GAME];
+/** Hardcoded defaults — overridden by Firestore when present. */
+const DEFAULT_PERMANENT_GAME_KEYS = ['wordle', 'toolboxkick', 'wanted'];
+/** How many non-permanent (rotated) games appear each weekday by default. */
+const DEFAULT_ROTATED_DAILY_COUNT = 4;
+
+const FUN_GAMES = [
+  ...FUN_GAMES_BASE,
+  ENCLOSE_GAME,
+  LETTERBOX_GAME,
+  PIPES_GAME,
+  TOOLBOX_KICK_GAME,
+  COIN_FLIP_GAME,
+  WANTED_GAME,
+];
 const FUN_GAME_ROSTER = FUN_GAMES;
+const ALL_ROSTER_KEYS = FUN_GAME_ROSTER.map((g) => g.key);
 
-/** First Monday the sit-out rotation applies. Before this, weekdays still show all then-available games. */
 const ROTATION_START = '2026-08-03';
 const ROTATION_START_DAY_KEY = ROTATION_START;
 
-/** Competitive Fun always offers this many games on a weekday. */
-const DAILY_GAME_COUNT = 6;
+/** @deprecated Prefer rotatedDailyCount + permanent keys. Kept for older callers. */
+const DAILY_GAME_COUNT = DEFAULT_PERMANENT_GAME_KEYS.length + DEFAULT_ROTATED_DAILY_COUNT;
+const PERMANENT_GAME_KEYS = DEFAULT_PERMANENT_GAME_KEYS;
 
 const DAY_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
+const SETTINGS_DOC = 'fun_settings/rotation';
+const SETTINGS_CACHE_MS = 15_000;
+
+let cachedSettings = null;
+let cachedSettingsAt = 0;
+
+function getDefaultRotationSettings() {
+  return {
+    permanentGameKeys: [...DEFAULT_PERMANENT_GAME_KEYS],
+    rotatedDailyCount: DEFAULT_ROTATED_DAILY_COUNT,
+    source: 'default',
+  };
+}
+
+function normalizeRotationSettings(raw = {}) {
+  const defaults = getDefaultRotationSettings();
+  const allowed = new Set(ALL_ROSTER_KEYS);
+  let permanentGameKeys = Array.isArray(raw.permanentGameKeys)
+    ? raw.permanentGameKeys.map((k) => String(k || '').trim()).filter((k) => allowed.has(k))
+    : [...defaults.permanentGameKeys];
+  // Unique, preserve order
+  permanentGameKeys = [...new Set(permanentGameKeys)];
+
+  let rotatedDailyCount = Number(raw.rotatedDailyCount);
+  if (!Number.isFinite(rotatedDailyCount)) {
+    rotatedDailyCount = defaults.rotatedDailyCount;
+  }
+  rotatedDailyCount = Math.max(0, Math.min(ALL_ROSTER_KEYS.length, Math.floor(rotatedDailyCount)));
+
+  return {
+    permanentGameKeys,
+    rotatedDailyCount,
+    source: raw.source || 'firestore',
+    updatedAt: raw.updatedAt || null,
+    updatedByUid: raw.updatedByUid || null,
+    updatedByName: raw.updatedByName || null,
+  };
+}
+
+function getActiveRotationSettings() {
+  return cachedSettings || getDefaultRotationSettings();
+}
+
+async function loadFunRotationSettings(db, { force = false } = {}) {
+  if (!force && cachedSettings && (Date.now() - cachedSettingsAt) < SETTINGS_CACHE_MS) {
+    return cachedSettings;
+  }
+  try {
+    const snap = await db.doc(SETTINGS_DOC).get();
+    if (!snap.exists) {
+      cachedSettings = getDefaultRotationSettings();
+    } else {
+      cachedSettings = normalizeRotationSettings({ ...snap.data(), source: 'firestore' });
+    }
+  } catch (error) {
+    console.error('loadFunRotationSettings failed — using defaults', error);
+    cachedSettings = getDefaultRotationSettings();
+  }
+  cachedSettingsAt = Date.now();
+  return cachedSettings;
+}
+
+async function saveFunRotationSettings(db, patch, { uid = '', fullName = '', FieldValue = null } = {}) {
+  const current = await loadFunRotationSettings(db, { force: true });
+  const next = normalizeRotationSettings({
+    ...current,
+    ...patch,
+    source: 'firestore',
+  });
+  const payload = {
+    permanentGameKeys: next.permanentGameKeys,
+    rotatedDailyCount: next.rotatedDailyCount,
+    updatedAt: FieldValue ? FieldValue.serverTimestamp() : new Date(),
+    updatedByUid: uid || null,
+    updatedByName: fullName || null,
+  };
+  await db.doc(SETTINGS_DOC).set(payload, { merge: true });
+  cachedSettings = normalizeRotationSettings({
+    ...payload,
+    updatedAt: new Date().toISOString(),
+    source: 'firestore',
+  });
+  cachedSettingsAt = Date.now();
+  return cachedSettings;
+}
 
 function getRosterForDay(dayKey) {
   const key = String(dayKey || '');
@@ -55,6 +155,8 @@ function getRosterForDay(dayKey) {
   if (key >= LETTERBOX_LIVE_FROM) roster.push(LETTERBOX_GAME);
   if (key >= PIPES_LIVE_FROM) roster.push(PIPES_GAME);
   if (key >= TOOLBOX_KICK_LIVE_FROM) roster.push(TOOLBOX_KICK_GAME);
+  if (key >= COIN_FLIP_LIVE_FROM) roster.push(COIN_FLIP_GAME);
+  if (key >= WANTED_LIVE_FROM) roster.push(WANTED_GAME);
   return roster;
 }
 
@@ -78,7 +180,6 @@ function addDaysToDayKey(dayKey, deltaDays) {
   return `${y}-${m}-${d}`;
 }
 
-/** UTC weekday for a calendar dayKey (Sun=0 … Sat=6), matching the civil date. */
 function weekdayIndexUtc(dayKey) {
   const [year, month, day] = String(dayKey || '').split('-').map(Number);
   if (!year || !month || !day) return -1;
@@ -94,7 +195,6 @@ function isWeekdayDayKey(dayKey) {
   return DAY_KEY_RE.test(String(dayKey || '')) && !isWeekendDayKey(dayKey);
 }
 
-/** Count of Mon–Fri days from ROTATION_START inclusive to dayKey inclusive. */
 function weekdayOrdinalFromRotationStart(dayKey) {
   if (!DAY_KEY_RE.test(String(dayKey || '')) || dayKey < ROTATION_START) return -1;
   let cursor = ROTATION_START;
@@ -108,15 +208,13 @@ function weekdayOrdinalFromRotationStart(dayKey) {
   return ordinal;
 }
 
-/** Previous daily count before Pipes raised the weekday target to DAILY_GAME_COUNT. */
-const PRE_PIPES_DAILY_GAME_COUNT = 5;
-
-function pickDailyGames(rosterKeys, ordinal, dailyCount = DAILY_GAME_COUNT) {
+function pickDailyGames(rosterKeys, ordinal, dailyCount) {
   const n = rosterKeys.length;
-  if (n <= dailyCount || ordinal < 0) {
+  const count = Math.max(0, Math.min(n, Number(dailyCount) || 0));
+  if (n <= count || ordinal < 0) {
     return { games: [...rosterKeys], sitOuts: [] };
   }
-  const sitOutCount = n - dailyCount;
+  const sitOutCount = n - count;
   const sitOuts = [];
   for (let i = 0; i < sitOutCount; i += 1) {
     sitOuts.push(rosterKeys[(ordinal + i) % n]);
@@ -129,52 +227,31 @@ function pickDailyGames(rosterKeys, ordinal, dailyCount = DAILY_GAME_COUNT) {
 }
 
 /**
- * Launch day for Pipes: keep the pre-Pipes five-game lineup, then append Pipes.
- * Launch day for Little Dicks Toolbox: append it on top.
- * From PERMANENT_FUN_FROM, Wordle + Little Dicks Toolbox never sit out.
+ * Permanent games always on (from PERMANENT_FUN_FROM).
+ * Rotated pool contributes `rotatedDailyCount` games via rolling sit-outs.
  */
-function ensurePermanentGames(games, sitOuts, dayKey, rosterKeys) {
-  if (dayKey < PERMANENT_FUN_FROM) return { games, sitOuts };
-  let nextGames = [...games];
-  let nextSitOuts = [...sitOuts];
-  for (const key of PERMANENT_GAME_KEYS) {
-    if (!rosterKeys.includes(key) || nextGames.includes(key)) continue;
-    nextSitOuts = nextSitOuts.filter((g) => g !== key);
-    const bump = [...nextGames].reverse().find((g) => !PERMANENT_GAME_KEYS.includes(g));
-    if (!bump) {
-      nextGames = [...nextGames, key];
-      continue;
-    }
-    nextGames = [...nextGames.filter((g) => g !== bump), key];
-    nextSitOuts = [...nextSitOuts, bump];
-  }
-  return { games: nextGames, sitOuts: nextSitOuts };
-}
+function pickGamesForDay(rosterKeys, ordinal, dayKey, settings = getActiveRotationSettings()) {
+  const permanentKeys = (settings.permanentGameKeys || [])
+    .filter((k) => rosterKeys.includes(k));
+  // Before permanent enforcement date, treat nothing as permanent (all rotate together).
+  const usePermanent = dayKey >= PERMANENT_FUN_FROM;
+  const permanent = usePermanent ? permanentKeys : [];
+  const rotating = rosterKeys.filter((k) => !permanent.includes(k));
 
-function pickGamesForDay(rosterKeys, ordinal, dayKey) {
-  let picked;
-  if (dayKey === PIPES_LIVE_FROM) {
-    const prePipesRoster = rosterKeys.filter((g) => g !== 'pipes' && g !== 'toolboxkick');
-    picked = pickDailyGames(prePipesRoster, ordinal, PRE_PIPES_DAILY_GAME_COUNT);
-    if (rosterKeys.includes('pipes') && !picked.games.includes('pipes')) {
-      picked = { games: [...picked.games, 'pipes'], sitOuts: picked.sitOuts };
-    }
-  } else {
-    picked = pickDailyGames(rosterKeys, ordinal, DAILY_GAME_COUNT);
+  let rotatedCount = Number(settings.rotatedDailyCount);
+  if (!Number.isFinite(rotatedCount)) rotatedCount = DEFAULT_ROTATED_DAILY_COUNT;
+  // Before permanent date: show permanent+rotated total as one pool size
+  if (!usePermanent) {
+    rotatedCount = permanentKeys.length + Math.max(0, Math.floor(rotatedCount));
+    const picked = pickDailyGames(rosterKeys, ordinal, rotatedCount);
+    return picked;
   }
 
-  if (
-    dayKey === TOOLBOX_KICK_LIVE_FROM
-    && rosterKeys.includes('toolboxkick')
-    && !picked.games.includes('toolboxkick')
-  ) {
-    picked = {
-      games: [...picked.games, 'toolboxkick'],
-      sitOuts: picked.sitOuts.filter((g) => g !== 'toolboxkick'),
-    };
-  }
-
-  return ensurePermanentGames(picked.games, picked.sitOuts, dayKey, rosterKeys);
+  const picked = pickDailyGames(rotating, ordinal, Math.floor(rotatedCount));
+  return {
+    games: [...permanent, ...picked.games],
+    sitOuts: picked.sitOuts,
+  };
 }
 
 function nextMondayDayKey(fromDayKey = getLondonDayKey()) {
@@ -186,21 +263,17 @@ function nextMondayDayKey(fromDayKey = getLondonDayKey()) {
   return cursor;
 }
 
-/**
- * @returns {{
- *   dayKey: string,
- *   closed: boolean,
- *   reason: 'weekend'|'ok',
- *   message: string,
- *   games: string[],
- *   sitOut: string|null,
- *   rotationActive: boolean,
- *   labels: Array<{key:string,label:string}>,
- *   nextOpenDayKey: string,
- * }}
- */
-function getFunRotationForDay(dayKey = getLondonDayKey()) {
+function countWordFor(n) {
+  if (n === 5) return 'five';
+  if (n === 6) return 'six';
+  if (n === 7) return 'seven';
+  if (n === 8) return 'eight';
+  return String(n);
+}
+
+function getFunRotationForDay(dayKey = getLondonDayKey(), settings = getActiveRotationSettings()) {
   const key = DAY_KEY_RE.test(String(dayKey || '')) ? dayKey : getLondonDayKey();
+  const active = normalizeRotationSettings(settings);
 
   if (isWeekendDayKey(key)) {
     const monday = nextMondayDayKey(key);
@@ -215,6 +288,8 @@ function getFunRotationForDay(dayKey = getLondonDayKey()) {
       rotationActive: key >= ROTATION_START,
       labels: [],
       nextOpenDayKey: monday,
+      permanentGameKeys: active.permanentGameKeys,
+      rotatedDailyCount: active.rotatedDailyCount,
       encloseLive: key >= ENCLOSE_LIVE_FROM,
       enclosePractice: false,
       letterboxLive: key >= LETTERBOX_LIVE_FROM,
@@ -222,6 +297,8 @@ function getFunRotationForDay(dayKey = getLondonDayKey()) {
       pipesLive: key >= PIPES_LIVE_FROM,
       pipesPractice: false,
       toolboxKickLive: key >= TOOLBOX_KICK_LIVE_FROM,
+      coinFlipLive: key >= COIN_FLIP_LIVE_FROM,
+      wantedLive: key >= WANTED_LIVE_FROM,
     };
   }
 
@@ -233,7 +310,7 @@ function getFunRotationForDay(dayKey = getLondonDayKey()) {
 
   if (rotationActive) {
     const ordinal = weekdayOrdinalFromRotationStart(key);
-    const picked = pickGamesForDay(rosterKeys, ordinal, key);
+    const picked = pickGamesForDay(rosterKeys, ordinal, key, active);
     games = picked.games;
     sitOuts = picked.sitOuts;
   }
@@ -241,15 +318,7 @@ function getFunRotationForDay(dayKey = getLondonDayKey()) {
   const sitOut = sitOuts[0] || null;
   const labelMap = Object.fromEntries(FUN_GAMES.map((g) => [g.key, g.label]));
   const sitOutLabels = sitOuts.map((g) => labelMap[g] || g);
-  const countWord = games.length === 5
-    ? 'five'
-    : games.length === 6
-      ? 'six'
-      : games.length === 7
-        ? 'seven'
-        : games.length === 8
-          ? 'eight'
-          : String(games.length);
+  const countWord = countWordFor(games.length);
   return {
     dayKey: key,
     closed: false,
@@ -263,6 +332,8 @@ function getFunRotationForDay(dayKey = getLondonDayKey()) {
     rotationActive,
     labels: games.map((g) => ({ key: g, label: labelMap[g] })),
     nextOpenDayKey: key,
+    permanentGameKeys: active.permanentGameKeys,
+    rotatedDailyCount: active.rotatedDailyCount,
     encloseLive: key >= ENCLOSE_LIVE_FROM,
     enclosePractice: key < ENCLOSE_LIVE_FROM && !isWeekendDayKey(key),
     letterboxLive: key >= LETTERBOX_LIVE_FROM,
@@ -270,17 +341,19 @@ function getFunRotationForDay(dayKey = getLondonDayKey()) {
     pipesLive: key >= PIPES_LIVE_FROM,
     pipesPractice: key < PIPES_LIVE_FROM && !isWeekendDayKey(key),
     toolboxKickLive: key >= TOOLBOX_KICK_LIVE_FROM,
+    coinFlipLive: key >= COIN_FLIP_LIVE_FROM,
+    wantedLive: key >= WANTED_LIVE_FROM,
   };
 }
 
-function isGameAvailableOnDay(gameKey, dayKey = getLondonDayKey()) {
-  const rotation = getFunRotationForDay(dayKey);
+function isGameAvailableOnDay(gameKey, dayKey = getLondonDayKey(), settings = getActiveRotationSettings()) {
+  const rotation = getFunRotationForDay(dayKey, settings);
   if (rotation.closed) return false;
   return rotation.games.includes(String(gameKey || ''));
 }
 
-function isGameOfferedOnDay(gameKey, dayKey = getLondonDayKey()) {
-  return isGameAvailableOnDay(gameKey, dayKey);
+function isGameOfferedOnDay(gameKey, dayKey = getLondonDayKey(), settings = getActiveRotationSettings()) {
+  return isGameAvailableOnDay(gameKey, dayKey, settings);
 }
 
 function previousPlayableDayForGame(dayKey, gameKey) {
@@ -297,10 +370,6 @@ function previousPlayableDayKey(dayKey, gameKey) {
   return previousPlayableDayForGame(dayKey, gameKey);
 }
 
-/**
- * Competitive gate used by Cloud Functions.
- * Signature: assertGamePlayable(dayKey, gameKey, { sandbox })
- */
 function assertGamePlayable(dayKey, gameKey, { sandbox = false } = {}) {
   if (sandbox) {
     return { ok: true, bypass: true, rotation: getFunRotationForDay(dayKey) };
@@ -328,6 +397,11 @@ function assertGamePlayable(dayKey, gameKey, { sandbox = false } = {}) {
   return { ok: true, bypass: false, rotation };
 }
 
+async function assertGamePlayableAsync(db, dayKey, gameKey, opts = {}) {
+  await loadFunRotationSettings(db);
+  return assertGamePlayable(dayKey, gameKey, opts);
+}
+
 function assertFunGamePlayable(gameKey, dayKey, { adminBypass = false } = {}) {
   return assertGamePlayable(dayKey, gameKey, { sandbox: adminBypass });
 }
@@ -344,8 +418,14 @@ module.exports = {
   PIPES_LIVE_FROM,
   TOOLBOX_KICK_GAME,
   TOOLBOX_KICK_LIVE_FROM,
+  COIN_FLIP_GAME,
+  COIN_FLIP_LIVE_FROM,
+  WANTED_GAME,
+  WANTED_LIVE_FROM,
   PERMANENT_FUN_FROM,
   PERMANENT_GAME_KEYS,
+  DEFAULT_PERMANENT_GAME_KEYS,
+  DEFAULT_ROTATED_DAILY_COUNT,
   ROTATION_START,
   ROTATION_START_DAY_KEY,
   DAILY_GAME_COUNT,
@@ -361,6 +441,12 @@ module.exports = {
   previousPlayableDayForGame,
   previousPlayableDayKey,
   assertGamePlayable,
+  assertGamePlayableAsync,
   assertFunGamePlayable,
   weekdayOrdinalFromRotationStart,
+  getDefaultRotationSettings,
+  normalizeRotationSettings,
+  getActiveRotationSettings,
+  loadFunRotationSettings,
+  saveFunRotationSettings,
 };

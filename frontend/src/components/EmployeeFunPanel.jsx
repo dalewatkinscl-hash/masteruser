@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import WordlePanel from './WordlePanel';
 import NonogramPanel from './NonogramPanel';
 import SokobanPanel from './SokobanPanel';
@@ -8,6 +9,8 @@ import { EncloseDailyPanel, EnclosePracticePanel } from './EnclosePanel';
 import { LetterboxDailyPanel, LetterboxPracticePanel } from './LetterboxPanel';
 import { PipesDailyPanel } from './PipesPanel';
 import { ToolboxKickDailyPanel } from './ToolboxKickPanel';
+import { CoinFlipDailyPanel } from './CoinFlipPanel';
+import { WantedDailyPanel } from './WantedPanel';
 import AchievementsPanel from './AchievementsPanel';
 import FunDayPicker, { getLondonDayKey } from './FunDayPicker';
 import FunLeaderboardRow from './FunLeaderboardRow';
@@ -282,6 +285,7 @@ function TriviaContent({ currentUserUid, onAchievements }) {
  * Pipes joins from PIPES_LIVE_FROM. Sections sit behind show/hide buttons.
  */
 export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
+  const navigate = useNavigate();
   const todayKey = getLondonDayKey();
   const [rotation, setRotation] = useState(() => getFunRotationForDay(todayKey));
   const [openSections, setOpenSections] = useState(() => {
@@ -304,6 +308,8 @@ export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
       letterboxPractice: true,
       pipes: true,
       toolboxkick: true,
+      coinflip: true,
+      wanted: true,
       achievements: false,
     };
   });
@@ -438,6 +444,28 @@ export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
         />
       ),
     },
+    {
+      id: 'coinflip',
+      title: 'Coin Flip Streak',
+      render: () => (
+        <CoinFlipDailyPanel
+          currentUserUid={currentUserUid}
+          onAchievements={refreshAchievements}
+          isAdmin={isAdmin}
+        />
+      ),
+    },
+    {
+      id: 'wanted',
+      title: 'Daily Wanted',
+      render: () => (
+        <WantedDailyPanel
+          currentUserUid={currentUserUid}
+          onAchievements={refreshAchievements}
+          isAdmin={isAdmin}
+        />
+      ),
+    },
   ].filter((section) => rotation.closed || rotation.games.includes(section.id));
 
   const sitOutKeys = Array.isArray(rotation.sitOuts) && rotation.sitOuts.length
@@ -452,6 +480,17 @@ export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
 
   return (
     <div className="space-y-3 w-full">
+      {isAdmin ? (
+        <div className="flex justify-end px-1">
+          <button
+            type="button"
+            onClick={() => navigate('/dashboard/fun-admin')}
+            className="text-xs text-slate-500 hover:text-indigo-300 transition-colors"
+          >
+            Fun admin
+          </button>
+        </div>
+      ) : null}
       {rotation.closed ? (
         <div className="rounded-xl border border-indigo-500/30 bg-indigo-500/10 px-5 py-6 space-y-2">
           <p className="text-lg font-semibold text-indigo-200">Fun is off for the weekend</p>
@@ -482,8 +521,14 @@ export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
           {rotation.games?.includes('toolboxkick')
             ? ' Little Dicks Toolbox: one round a day (all or nothing or 3 goes) — furthest distance wins.'
             : ''}
+          {rotation.games?.includes('coinflip')
+            ? ' Coin Flip: 3 runs a day — one miss ends a run; longest streak wins.'
+            : ''}
+          {rotation.games?.includes('wanted')
+            ? ' Wanted: one attempt — Standard then Impossible; fastest combined time wins.'
+            : ''}
           {todayKey >= PERMANENT_FUN_FROM
-            ? ' Wordle and Little Dicks Toolbox stay in rotation every weekday.'
+            ? ' Wordle, Little Dicks Toolbox, and Daily Wanted stay in rotation every weekday.'
             : todayKey >= '2026-08-26'
               ? ` From ${PERMANENT_FUN_FROM}, Wordle and Little Dicks Toolbox stay in rotation every weekday.`
               : ''}

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import WorkspaceTabs from '../components/WorkspaceTabs';
 import ConnectionsPanel from '../components/ConnectionsPanel';
 import BogglePanel from '../components/BogglePanel';
@@ -12,6 +12,9 @@ import { LetterboxSandbox } from '../components/LetterboxPanel';
 import { PipesSandbox } from '../components/PipesPanel';
 import { CasefileSandbox } from '../components/CasefilePanel';
 import { ToolboxKickSandbox } from '../components/ToolboxKickPanel';
+import { CoinFlipSandbox } from '../components/CoinFlipPanel';
+import { WantedSandbox } from '../components/WantedPanel';
+import EmployeeSelect from '../components/EmployeeSelect';
 import SokobanBuilder from '../components/SokobanBuilder';
 import NonogramManagerPanel from './NonogramManager';
 import { useAuth } from '../context/AuthContext';
@@ -23,6 +26,7 @@ import {
   PERMANENT_FUN_FROM,
   FUN_GAME_ROSTER,
   ROTATION_START_DAY_KEY,
+  getDefaultRotationSettings,
   getFunRotationForDay,
   addDaysToDayKey,
 } from '../lib/funRotation';
@@ -357,8 +361,11 @@ function ContentLibrary({ items, onRefresh, onDelete }) {
 }
 
 const TABS = [
-  { id: 'overview', label: 'Overview' },
+  { id: 'overview', label: 'Rotation' },
   { id: 'test', label: 'Test / preview' },
+  { id: 'coinflip', label: 'Dev · Coin Flip' },
+  { id: 'wanted', label: 'Dev · Wanted' },
+  { id: 'wordle-suspects', label: 'Wordle suspects' },
   { id: 'enclose', label: 'Dev · Enclose (cow)' },
   { id: 'letterbox', label: 'Dev · Letter Box' },
   { id: 'pipes', label: 'Dev · Pipes' },
@@ -373,6 +380,247 @@ const TABS = [
 ];
 
 const VALID_TAB_IDS = new Set(TABS.map((t) => t.id));
+
+function RotationSettingsPanel() {
+  const todayKey = getLondonDayKey();
+  const defaults = getDefaultRotationSettings();
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+  const [permanentKeys, setPermanentKeys] = useState(defaults.permanentGameKeys);
+  const [rotatedDailyCount, setRotatedDailyCount] = useState(defaults.rotatedDailyCount);
+  const [settingsMeta, setSettingsMeta] = useState(null);
+
+  const load = async () => {
+    try {
+      setLoading(true);
+      setError('');
+      const response = await fetch('/api/adminGetFunRotationSettings', { credentials: 'include' });
+      const payload = (await readJsonResponse(response)) || {};
+      if (!response.ok) throw new Error(payload.error || 'Failed to load rotation settings.');
+      const settings = payload.settings || defaults;
+      setPermanentKeys(settings.permanentGameKeys || defaults.permanentGameKeys);
+      setRotatedDailyCount(settings.rotatedDailyCount ?? defaults.rotatedDailyCount);
+      setSettingsMeta(settings);
+    } catch (err) {
+      setError(err.message || 'Failed to load rotation settings.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const livePreview = useMemo(() => {
+    const settings = { permanentGameKeys: permanentKeys, rotatedDailyCount };
+    const rows = [];
+    let cursor = todayKey;
+    for (let i = 0; i < 14; i += 1) {
+      rows.push(getFunRotationForDay(cursor, settings));
+      cursor = addDaysToDayKey(cursor, 1);
+    }
+    return rows;
+  }, [todayKey, permanentKeys, rotatedDailyCount]);
+
+  const permanentCount = permanentKeys.length;
+  const totalEstimate = permanentCount + Number(rotatedDailyCount || 0);
+
+  const togglePermanent = (key) => {
+    setPermanentKeys((prev) => (
+      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]
+    ));
+    setMessage('');
+  };
+
+  const save = async () => {
+    try {
+      setSaving(true);
+      setError('');
+      setMessage('');
+      const response = await fetch('/api/adminSaveFunRotationSettings', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          permanentGameKeys: permanentKeys,
+          rotatedDailyCount: Number(rotatedDailyCount),
+        }),
+      });
+      const payload = (await readJsonResponse(response)) || {};
+      if (!response.ok) throw new Error(payload.error || 'Save failed.');
+      setSettingsMeta(payload.settings || null);
+      setPermanentKeys(payload.settings?.permanentGameKeys || permanentKeys);
+      setRotatedDailyCount(payload.settings?.rotatedDailyCount ?? rotatedDailyCount);
+      setMessage('Rotation settings saved — live for Fun players.');
+    } catch (err) {
+      setError(err.message || 'Save failed.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const resetDefaults = () => {
+    setPermanentKeys([...defaults.permanentGameKeys]);
+    setRotatedDailyCount(defaults.rotatedDailyCount);
+    setMessage('');
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-xl border border-[#1a2540] p-4 space-y-2">
+        <p className="text-sm text-slate-300">
+          Control which games are <span className="text-white font-medium">permanent</span> (always on)
+          vs <span className="text-white font-medium">rotated</span>, and how many rotated games appear
+          each weekday. Sit-outs roll through the rotated pool. Weekends stay closed. Permanent
+          enforcement applies from <span className="text-white font-medium">{PERMANENT_FUN_FROM}</span>.
+        </p>
+        <p className="text-xs text-slate-500">
+          Rotation started {ROTATION_START_DAY_KEY}. Staged live-from dates still apply
+          (Enclose {ENCLOSE_LIVE_FROM}, Letter Box {LETTERBOX_LIVE_FROM}, Pipes {PIPES_LIVE_FROM},
+          Toolbox {TOOLBOX_KICK_LIVE_FROM}).
+        </p>
+      </div>
+
+      {loading ? (
+        <p className="text-sm text-slate-500">Loading settings…</p>
+      ) : (
+        <>
+          <div className="rounded-xl border border-[#1a2540] overflow-hidden">
+            <div className="px-4 py-3 border-b border-[#1a2540] flex flex-wrap items-center justify-between gap-2">
+              <p className="text-sm font-semibold text-indigo-200">Games</p>
+              <p className="text-xs text-slate-500">
+                ~{totalEstimate} games/weekday ({permanentCount} permanent + {rotatedDailyCount} rotated)
+              </p>
+            </div>
+            <ul className="divide-y divide-[#1a2540]">
+              {FUN_GAME_ROSTER.map((game) => {
+                const isPermanent = permanentKeys.includes(game.key);
+                return (
+                  <li key={game.key} className="px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="text-sm text-slate-100 font-medium">{game.label}</p>
+                      <p className="text-xs text-slate-500">{game.key}</p>
+                    </div>
+                    <div className="flex rounded-lg border border-[#1a2540] overflow-hidden text-xs">
+                      <button
+                        type="button"
+                        onClick={() => { if (!isPermanent) togglePermanent(game.key); }}
+                        className={`px-3 py-1.5 ${
+                          isPermanent
+                            ? 'bg-emerald-600 text-white'
+                            : 'text-slate-400 hover:bg-white/[0.04]'
+                        }`}
+                      >
+                        Permanent
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => { if (isPermanent) togglePermanent(game.key); }}
+                        className={`px-3 py-1.5 border-l border-[#1a2540] ${
+                          !isPermanent
+                            ? 'bg-sky-600 text-white'
+                            : 'text-slate-400 hover:bg-white/[0.04]'
+                        }`}
+                      >
+                        Rotated
+                      </button>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+
+          <div className="rounded-xl border border-[#1a2540] p-4 space-y-3">
+            <label className="block text-sm text-slate-300 space-y-2">
+              Rotated games per weekday
+              <input
+                type="number"
+                min={0}
+                max={FUN_GAME_ROSTER.length}
+                value={rotatedDailyCount}
+                onChange={(e) => {
+                  setRotatedDailyCount(e.target.value);
+                  setMessage('');
+                }}
+                className="block w-40 bg-[#060e1a] border border-[#1a2540] rounded-md px-3 py-2 text-sm text-slate-100 tabular-nums"
+              />
+            </label>
+            <p className="text-xs text-slate-500">
+              Permanent games always appear (from {PERMANENT_FUN_FROM}). This number is how many
+              additional games are picked from the rotated pool each day.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                disabled={saving}
+                onClick={save}
+                className="px-4 py-2 rounded-lg text-sm bg-indigo-600 text-white hover:bg-indigo-500 disabled:opacity-40"
+              >
+                {saving ? 'Saving…' : 'Save rotation'}
+              </button>
+              <button
+                type="button"
+                disabled={saving}
+                onClick={resetDefaults}
+                className="px-4 py-2 rounded-lg text-sm border border-[#1a2540] text-slate-300 hover:bg-white/[0.04]"
+              >
+                Reset draft to defaults
+              </button>
+              <button
+                type="button"
+                disabled={saving}
+                onClick={load}
+                className="px-4 py-2 rounded-lg text-sm border border-[#1a2540] text-slate-300 hover:bg-white/[0.04]"
+              >
+                Reload saved
+              </button>
+            </div>
+            {settingsMeta?.updatedAt ? (
+              <p className="text-xs text-slate-500">
+                Last saved
+                {settingsMeta.updatedByName ? ` by ${settingsMeta.updatedByName}` : ''}
+                {' · '}
+                {typeof settingsMeta.updatedAt === 'string'
+                  ? settingsMeta.updatedAt
+                  : 'just now'}
+                {' · source '}
+                {settingsMeta.source || 'firestore'}
+              </p>
+            ) : null}
+            {error ? <p className="text-sm text-rose-300">{error}</p> : null}
+            {message ? <p className="text-sm text-emerald-300">{message}</p> : null}
+          </div>
+
+          <div className="rounded-xl border border-[#1a2540] overflow-hidden">
+            <div className="px-4 py-3 border-b border-[#1a2540] text-sm font-semibold text-indigo-200">
+              Next 14 days (live preview of draft)
+            </div>
+            <ul className="divide-y divide-[#1a2540]">
+              {livePreview.map((row) => (
+                <li key={row.dayKey} className="px-4 py-2.5 text-sm flex flex-wrap gap-2 justify-between">
+                  <span className="text-slate-200 font-medium">{row.dayKey}</span>
+                  {row.closed ? (
+                    <span className="text-slate-500">Closed · {row.nextOpenDayKey}</span>
+                  ) : (
+                    <span className="text-slate-400">
+                      {row.games.join(', ')}
+                      {row.sitOuts?.length ? ` · sit out ${row.sitOuts.join(', ')}` : ''}
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 
 function GeoGuessrSandbox() {
   const [seedId, setSeedId] = useState(GEOGUESSR_SEED_PUZZLES[0]?.id || '');
@@ -556,8 +804,158 @@ function GeoGuessrSandbox() {
   );
 }
 
+function WordleSuspectsPanel() {
+  const [employees, setEmployees] = useState([]);
+  const [employeesLoading, setEmployeesLoading] = useState(true);
+  const [suspects, setSuspects] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [pickUid, setPickUid] = useState('');
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+
+  const loadSuspects = async () => {
+    const response = await fetch('/api/adminListWordleSuspects', { credentials: 'include' });
+    const payload = (await readJsonResponse(response)) || {};
+    if (!response.ok) throw new Error(payload.error || 'Failed to load suspects.');
+    setSuspects(payload.suspects || []);
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        setLoading(true);
+        setError('');
+        const [empRes] = await Promise.all([
+          fetch('/api/getEmployeeProfiles', { credentials: 'include' }),
+          loadSuspects(),
+        ]);
+        const empPayload = (await readJsonResponse(empRes)) || {};
+        if (!empRes.ok) throw new Error(empPayload.error || 'Failed to load employees.');
+        if (!cancelled) {
+          setEmployees(empPayload.employees || empPayload.profiles || empPayload.items || []);
+        }
+      } catch (err) {
+        if (!cancelled) setError(err.message || 'Failed to load Wordle suspects.');
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+          setEmployeesLoading(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const setSuspect = async (uid, suspected) => {
+    if (!uid) return;
+    try {
+      setSaving(true);
+      setError('');
+      setMessage('');
+      const response = await fetch('/api/adminSetWordleSuspect', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uid, suspected }),
+      });
+      const payload = (await readJsonResponse(response)) || {};
+      if (!response.ok) throw new Error(payload.error || 'Failed to update suspect.');
+      setSuspects(payload.suspects || []);
+      if (suspected) setPickUid('');
+      setMessage(suspected ? 'Marked as suspected cheater.' : 'Removed from suspects.');
+    } catch (err) {
+      setError(err.message || 'Failed to update suspect.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const suspectUids = new Set(suspects.map((row) => row.uid));
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-xl border border-[#1a2540] p-4 space-y-2">
+        <p className="text-sm text-slate-300">
+          Mark accounts as <span className="text-white font-medium">Wordle suspects</span>. They get a
+          different daily answer from everyone else. If they guess the real shared word — or another
+          suspect&apos;s trap word — they instantly fail with 💩.
+        </p>
+        <p className="text-xs text-slate-500">
+          Honest solves of their own trap word still count as a normal win. Practice / sandbox still
+          uses the public word.
+        </p>
+      </div>
+
+      <div className="rounded-xl border border-[#1a2540] p-4 space-y-3">
+        <p className="text-sm font-semibold text-indigo-200">Add suspect</p>
+        <div className="flex flex-wrap gap-3 items-end">
+          <div className="min-w-[16rem] flex-1">
+            <EmployeeSelect
+              value={pickUid}
+              onChange={setPickUid}
+              employees={employees}
+              loading={employeesLoading}
+              emptyLabel="Search employee…"
+              disabled={saving}
+            />
+          </div>
+          <button
+            type="button"
+            disabled={!pickUid || saving || suspectUids.has(pickUid)}
+            onClick={() => setSuspect(pickUid, true)}
+            className="px-3 py-2 rounded-lg text-sm border border-rose-500/40 text-rose-100 hover:bg-rose-500/10 disabled:opacity-40"
+          >
+            Mark as suspect
+          </button>
+        </div>
+      </div>
+
+      {error ? <p className="text-sm text-rose-300">{error}</p> : null}
+      {message ? <p className="text-sm text-emerald-300">{message}</p> : null}
+
+      <div className="rounded-xl border border-[#1a2540] overflow-hidden">
+        <div className="px-4 py-3 border-b border-[#1a2540] text-sm font-semibold text-indigo-200">
+          Current suspects ({suspects.length})
+        </div>
+        {loading ? (
+          <p className="px-4 py-6 text-sm text-slate-500">Loading…</p>
+        ) : !suspects.length ? (
+          <p className="px-4 py-6 text-sm text-slate-500">Nobody marked yet.</p>
+        ) : (
+          <ul className="divide-y divide-[#1a2540]">
+            {suspects.map((row) => (
+              <li key={row.uid} className="px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm text-slate-100 font-medium">{row.fullName}</p>
+                  <p className="text-xs text-slate-500">
+                    {row.email || row.uid}
+                    {row.markedByName ? ` · marked by ${row.markedByName}` : ''}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={() => setSuspect(row.uid, false)}
+                  className="px-3 py-1.5 rounded-lg text-xs border border-[#1a2540] text-slate-300 hover:bg-white/[0.04] disabled:opacity-40"
+                >
+                  Clear
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function FunAdmin() {
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const todayKey = getLondonDayKey();
   const initialTab = VALID_TAB_IDS.has(searchParams.get('tab')) ? searchParams.get('tab') : 'overview';
@@ -575,16 +973,6 @@ export default function FunAdmin() {
       setSearchParams({ tab: id }, { replace: true });
     }
   };
-
-  const upcoming = useMemo(() => {
-    const rows = [];
-    let cursor = todayKey;
-    for (let i = 0; i < 14; i += 1) {
-      rows.push(getFunRotationForDay(cursor));
-      cursor = addDaysToDayKey(cursor, 1);
-    }
-    return rows;
-  }, [todayKey]);
 
   const loadLibrary = async () => {
     try {
@@ -617,11 +1005,18 @@ export default function FunAdmin() {
   return (
     <div className="min-h-screen bg-cl-bg text-cl-fg">
       <WorkspaceTabs />
-      <div className={`${tab === 'geoguessr' || tab === 'nonograms' || tab === 'casefile' ? 'max-w-6xl' : 'max-w-4xl'} mx-auto px-4 sm:px-8 py-6 space-y-5`}>
+      <div className={`${tab === 'geoguessr' || tab === 'nonograms' || tab === 'casefile' || tab === 'wanted' ? 'max-w-6xl' : 'max-w-4xl'} mx-auto px-4 sm:px-8 py-6 space-y-5`}>
         <div>
-          <h1 className="text-2xl font-semibold text-indigo-200">Fun admin</h1>
+          <button
+            type="button"
+            onClick={() => navigate('/dashboard/profile', { state: { profileTab: 'fun' } })}
+            className="text-sm text-slate-400 hover:text-slate-200"
+          >
+            ← Back to Fun
+          </button>
+          <h1 className="text-2xl font-semibold text-indigo-200 mt-3">Fun admin</h1>
           <p className="text-sm text-slate-400 mt-1">
-            Test games in a sandbox, build Nonogram/Sokoban/Connections/trivia content, and preview the weekday rotation.
+            Tune weekday rotation, test games in a sandbox, and build Nonogram/Sokoban/Connections/trivia content.
           </p>
         </div>
 
@@ -642,52 +1037,10 @@ export default function FunAdmin() {
 
         {error ? <p className="text-sm text-rose-300">{error}</p> : null}
 
-        {tab === 'overview' && (
-          <div className="space-y-4">
-            <div className="rounded-xl border border-[#1a2540] p-4 space-y-2">
-              <p className="text-sm text-slate-300">
-                Rotation starts <span className="text-white font-medium">{ROTATION_START_DAY_KEY}</span> (Monday).
-                Each weekday shows six games; the rest of the roster sits out on a rolling window. Enclose from{' '}
-                {ENCLOSE_LIVE_FROM}; Letter Box from {LETTERBOX_LIVE_FROM}; Pipes from {PIPES_LIVE_FROM};
-                Little Dicks Toolbox from {TOOLBOX_KICK_LIVE_FROM}. From {PERMANENT_FUN_FROM}, Wordle and
-                Little Dicks Toolbox never sit out. Weekends are closed.
-              </p>
-              <p className="text-xs text-slate-500">
-                This list is which <span className="text-slate-300">games</span> are on — not identical puzzle content.
-                Use <span className="text-slate-300">Test / preview</span> and set the Day to compare actual puzzles
-                (Wordle word, Nonogram, etc.). Before {ROTATION_START_DAY_KEY}, weekdays still show all roster games.
-              </p>
-              <p className="text-xs text-slate-500">
-                Author overrides (Connections / trivia / Sokoban) appear in Library when scheduled for a day.
-                Admin sandboxes: Dev · Enclose / Dev · Letter Box / Dev · Pipes / Dev · Casefile / Dev · Little Dicks Toolbox.
-              </p>
-            </div>
-            <div className="rounded-xl border border-[#1a2540] overflow-hidden">
-              <div className="px-4 py-3 border-b border-[#1a2540] text-sm font-semibold text-indigo-200">
-                Next 14 days
-              </div>
-              <ul className="divide-y divide-[#1a2540]">
-                {upcoming.map((row) => (
-                  <li key={row.dayKey} className="px-4 py-2.5 text-sm flex flex-wrap gap-2 justify-between">
-                    <span className="text-slate-200 font-medium">{row.dayKey}</span>
-                    {row.closed ? (
-                      <span className="text-slate-500">Closed · {row.nextOpenDayKey}</span>
-                    ) : (
-                      <span className="text-slate-400">
-                        {row.games.join(', ')}
-                        {row.sitOuts?.length
-                          ? ` · sit out ${row.sitOuts.join(', ')}`
-                          : row.sitOut
-                            ? ` · sit out ${row.sitOut}`
-                            : ''}
-                      </span>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          </div>
-        )}
+        {tab === 'overview' && <RotationSettingsPanel />}
+
+        {tab === 'coinflip' && <CoinFlipSandbox />}
+        {tab === 'wanted' && <WantedSandbox />}
 
         {tab === 'test' && (
           <div className="space-y-4">
@@ -772,6 +1125,7 @@ export default function FunAdmin() {
           </div>
         )}
 
+        {tab === 'wordle-suspects' && <WordleSuspectsPanel />}
         {tab === 'nonograms' && <NonogramManagerPanel />}
         {tab === 'connections' && <ConnectionsBuilder onSaved={loadLibrary} />}
         {tab === 'trivia' && <TriviaBuilder onSaved={loadLibrary} />}

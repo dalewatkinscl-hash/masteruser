@@ -329,6 +329,22 @@ function getAnswerForDay(dayKey = getLondonDayKey()) {
   return CLEAN_ANSWERS[hashString(`wordle:${dayKey}`) % CLEAN_ANSWERS.length];
 }
 
+/**
+ * Per-suspect trap answer for a day. Never equals the public daily answer.
+ * Different uids usually get different traps (hash salted by uid).
+ */
+function getTrapAnswerForDay(dayKey, uid) {
+  const real = getAnswerForDay(dayKey);
+  if (!CLEAN_ANSWERS.length) return real;
+  const seed = hashString(`wordle:trap:${dayKey}:${String(uid || '')}`);
+  let idx = seed % CLEAN_ANSWERS.length;
+  for (let i = 0; i < CLEAN_ANSWERS.length; i += 1) {
+    const candidate = CLEAN_ANSWERS[(idx + i) % CLEAN_ANSWERS.length];
+    if (candidate !== real) return candidate;
+  }
+  return real;
+}
+
 function isValidGuess(guess) {
   const word = normalizeWord(guess);
   if (word.length !== 5) return false;
@@ -374,6 +390,7 @@ function evaluateGuess(guess, answer) {
 module.exports = {
   getLondonDayKey,
   getAnswerForDay,
+  getTrapAnswerForDay,
   isValidGuess,
   evaluateGuess,
   normalizeWord,

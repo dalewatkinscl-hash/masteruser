@@ -27,6 +27,7 @@ export const GROUP_BY_OPTIONS = [
   { value: '', label: 'No grouping' },
   { value: 'department', label: 'Department' },
   { value: 'jobRole', label: 'Job title' },
+  { value: 'drivingStaff', label: 'Driving staff' },
   { value: 'status', label: 'Status' },
 ];
 
@@ -35,6 +36,7 @@ export const CORE_COLUMNS = [
   { id: 'name', label: 'Name', filterPlaceholder: 'Filter name…', locked: true },
   { id: 'jobRole', label: 'Job title', filterPlaceholder: 'Filter job…' },
   { id: 'department', label: 'Department', filterPlaceholder: 'Filter dept…' },
+  { id: 'drivingStaff', label: 'Driving staff', filterPlaceholder: 'Yes / No…' },
   { id: 'phone', label: 'Phone', filterPlaceholder: 'Filter phone…' },
   { id: 'status', label: 'Status', filterPlaceholder: 'Filter status…' },
 ];
@@ -71,6 +73,16 @@ function sanitizeVisibleColumnIds(columnIds) {
   return unique;
 }
 
+/** Ensure newer default columns appear for users with saved prefs. */
+function ensureDefaultColumns(columnIds) {
+  const ids = [...columnIds];
+  if (!ids.includes('drivingStaff')) {
+    const after = ids.indexOf('department');
+    ids.splice(after >= 0 ? after + 1 : ids.length, 0, 'drivingStaff');
+  }
+  return sanitizeVisibleColumnIds(ids);
+}
+
 export function loadVisibleColumns() {
   try {
     const raw = window.localStorage.getItem(COLUMN_PREFS_KEY);
@@ -82,10 +94,10 @@ export function loadVisibleColumns() {
     const onlyOptionals = parsed.length > 0
       && parsed.every((id) => OPTIONAL_COLUMN_IDS.includes(id));
     if (onlyOptionals) {
-      return sanitizeVisibleColumnIds([...DEFAULT_VISIBLE_COLUMN_IDS, ...parsed]);
+      return ensureDefaultColumns([...DEFAULT_VISIBLE_COLUMN_IDS, ...parsed]);
     }
 
-    return sanitizeVisibleColumnIds(parsed);
+    return ensureDefaultColumns(parsed);
   } catch {
     return [...DEFAULT_VISIBLE_COLUMN_IDS];
   }
@@ -182,6 +194,8 @@ function getSortValue(employee, column) {
       return employee.employeeProfile?.dateOfBirth || '';
     case 'startDate':
       return employee.employeeProfile?.startDate || '';
+    case 'drivingStaff':
+      return employee.employeeProfile?.drivingStaff ? '1' : '0';
     case 'computerUser':
       return employee.employeeProfile?.computerUser ? '1' : '0';
     case 'emergencyPhoneCover':
@@ -205,6 +219,8 @@ export function getDisplayValue(employee, column) {
       return formatEmployeeDate(employee.employeeProfile?.dateOfBirth) || '—';
     case 'startDate':
       return formatEmployeeDate(employee.employeeProfile?.startDate) || '—';
+    case 'drivingStaff':
+      return yesNoLabel(Boolean(employee.employeeProfile?.drivingStaff));
     case 'computerUser':
       return yesNoLabel(Boolean(employee.employeeProfile?.computerUser));
     case 'emergencyPhoneCover':
@@ -220,6 +236,8 @@ export function getGroupKey(employee, groupBy) {
       return employee.employeeProfile?.department?.trim() || 'No department';
     case 'jobRole':
       return employee.employeeProfile?.jobRole?.trim() || 'No job title';
+    case 'drivingStaff':
+      return employee.employeeProfile?.drivingStaff ? 'Driving staff' : 'Non-driving staff';
     case 'status':
       return getEmployeeStatusLabel(employee);
     default:
@@ -243,6 +261,7 @@ export function filterEmployees(employees, { search, columnFilters }) {
         formatEmployeeDate(employee.employeeProfile?.dateOfBirth),
         employee.employeeProfile?.startDate,
         formatEmployeeDate(employee.employeeProfile?.startDate),
+        yesNoLabel(Boolean(employee.employeeProfile?.drivingStaff)),
         yesNoLabel(Boolean(employee.employeeProfile?.computerUser)),
         yesNoLabel(Boolean(employee.employeeProfile?.emergencyPhoneCover)),
         getEmployeeStatusLabel(employee),

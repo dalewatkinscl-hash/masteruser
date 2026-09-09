@@ -51,13 +51,27 @@ export function buildDocumentationRecords({ minutes = [], documents = [], caseDa
 
   for (const doc of documents) {
     if (linkedDocIds.has(doc.id)) continue;
+    const pendingSign = doc.employeeSignStatus === 'pending';
+    const signed = doc.employeeSignStatus === 'signed';
     const sent = Boolean(doc.issuedToEmployeeAt || doc.issuedMinutesId);
+    let status = 'uploaded';
+    let statusLabel = 'Uploaded';
+    if (pendingSign) {
+      status = 'pending_employee';
+      statusLabel = 'Awaiting employee signature';
+    } else if (signed) {
+      status = 'signed';
+      statusLabel = 'Signed';
+    } else if (sent) {
+      status = interviewDisplayStatus({ status: doc.employeeReviewStatus || 'issued' });
+      statusLabel = interviewStatusLabel(status);
+    }
     records.push({
       id: `doc-${doc.id}`,
       kind: 'upload',
       summary: documentSummary(doc),
-      status: sent ? interviewDisplayStatus({ status: doc.employeeReviewStatus || 'issued' }) : 'uploaded',
-      statusLabel: sent ? interviewStatusLabel(interviewDisplayStatus({ status: doc.employeeReviewStatus || 'issued' })) : 'Uploaded',
+      status,
+      statusLabel,
       stageKey: doc.stageKey || '',
       stageLabel: doc.stageKey ? stageLabel(doc.stageKey) : '',
       at: doc.createdAt || '',
