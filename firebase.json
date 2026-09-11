@@ -287,6 +287,16 @@
         "region": "europe-west2"
       },
       {
+        "source": "/api/getActiveDisciplinaryMeasures",
+        "function": "getActiveDisciplinaryMeasures",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getBonusDeductions",
+        "function": "getBonusDeductions",
+        "region": "europe-west2"
+      },
+      {
         "source": "/api/getSharePointDisciplinaryPath",
         "function": "getSharePointDisciplinaryPath",
         "region": "europe-west2"
@@ -472,13 +482,8 @@
         "region": "europe-west2"
       },
       {
-        "source": "/api/getDailyCoinFlip",
-        "function": "getDailyCoinFlip",
-        "region": "europe-west2"
-      },
-      {
-        "source": "/api/submitCoinFlipResult",
-        "function": "submitCoinFlipResult",
+        "source": "/api/activateToolboxSuperRage",
+        "function": "activateToolboxSuperRage",
         "region": "europe-west2"
       },
       {

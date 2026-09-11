@@ -186,26 +186,30 @@ export default function PipesPanel({
   const [submitting, setSubmitting] = useState(false);
   const [leaderboard, setLeaderboard] = useState(initialLeaderboard || []);
   const [tutorialOpen, setTutorialOpen] = useState(false);
-  const startedAtRef = useRef(new Date().toISOString());
+  const alreadyWon = Boolean(initialGame?.status === 'won');
+  const startedAtRef = useRef(null);
+  const [started, setStarted] = useState(alreadyWon);
   const [elapsedMs, setElapsedMs] = useState(initialGame?.durationMs || 0);
-  const submittedRef = useRef(Boolean(initialGame?.status === 'won'));
+  const submittedRef = useRef(alreadyWon);
 
   useEffect(() => {
     if (!hasSeenPipesTutorial()) setTutorialOpen(true);
   }, []);
 
   useEffect(() => {
+    const wonAlready = Boolean(initialGame?.status === 'won');
     setPuzzle(clonePuzzle(initialPuzzle));
     setMoves(Number(initialGame?.moves) || 0);
-    setMessage(initialGame?.status === 'won'
+    setMessage(wonAlready
       ? `Solved in ${formatDuration(initialGame.durationMs)}.`
       : '');
-    setWon(Boolean(initialGame?.status === 'won'));
+    setWon(wonAlready);
     setLeaderboard(initialLeaderboard || []);
-    startedAtRef.current = new Date().toISOString();
+    startedAtRef.current = null;
+    setStarted(wonAlready);
     setElapsedMs(initialGame?.durationMs || 0);
-    submittedRef.current = Boolean(initialGame?.status === 'won');
-    if (initialGame?.status === 'won' && Array.isArray(initialGame.rotations)) {
+    submittedRef.current = wonAlready;
+    if (wonAlready && Array.isArray(initialGame.rotations)) {
       setPuzzle((prev) => ({
         ...prev,
         tiles: prev.tiles.map((tile, i) => ({
@@ -217,12 +221,21 @@ export default function PipesPanel({
   }, [initialPuzzle?.id, initialGame, initialLeaderboard]);
 
   useEffect(() => {
-    if (won) return undefined;
+    if (!started || won) return undefined;
     const id = window.setInterval(() => {
+      if (!startedAtRef.current) return;
       setElapsedMs(Date.now() - new Date(startedAtRef.current).getTime());
     }, 250);
     return () => window.clearInterval(id);
-  }, [won, puzzle?.id]);
+  }, [started, won, puzzle?.id]);
+
+  const startTimer = useCallback(() => {
+    if (won || submittedRef.current) return;
+    startedAtRef.current = new Date().toISOString();
+    setStarted(true);
+    setElapsedMs(0);
+    setMessage('');
+  }, [won]);
 
   const analysis = useMemo(
     () => analyzeBoard(puzzle.size, getEffectiveMasks(puzzle.tiles)),
@@ -263,6 +276,7 @@ export default function PipesPanel({
   }, [competitive, sandbox, dayKey, onAchievements]);
 
   const rotate = useCallback((index, dir = 1) => {
+    if (!startedAtRef.current) return;
     setMoves((prevMoves) => {
       const nextMoves = prevMoves + 1;
       setPuzzle((prev) => {
@@ -291,6 +305,7 @@ export default function PipesPanel({
   }, [submitWin]);
 
   const togglePin = useCallback((index) => {
+    if (!startedAtRef.current) return;
     setPuzzle((prev) => ({
       ...prev,
       tiles: prev.tiles.map((tile, i) => (
@@ -305,7 +320,8 @@ export default function PipesPanel({
     setMoves(0);
     setMessage('');
     setWon(false);
-    startedAtRef.current = new Date().toISOString();
+    startedAtRef.current = null;
+    setStarted(false);
     setElapsedMs(0);
   };
 
@@ -360,7 +376,23 @@ export default function PipesPanel({
         Rotate tiles until <span className="text-white font-medium">every tile fills with water</span>
         {' '}(the whole board turns green). Click to rotate · Shift/Ctrl-click the other way ·
         right-click to pin. {competitive ? 'Leaderboard ranks by fastest time.' : ''}
+        {' '}Press <span className="text-white font-medium">Start timer</span> when you’re ready — time doesn’t count until then.
       </p>
+
+      {!started && !won ? (
+        <div className="rounded-xl border border-sky-500/35 bg-sky-500/10 px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+          <p className="text-sm text-sky-100">
+            Board is ready. Timer starts when you press the button.
+          </p>
+          <button
+            type="button"
+            onClick={startTimer}
+            className="px-4 py-2 rounded-lg text-sm font-semibold bg-sky-600 text-white hover:bg-sky-500"
+          >
+            Start timer
+          </button>
+        </div>
+      ) : null}
 
       <div className="overflow-x-auto">
         <PipesBoard
@@ -368,11 +400,20 @@ export default function PipesPanel({
           tiles={puzzle.tiles}
           onRotate={rotate}
           onPin={togglePin}
-          disabled={won}
+          disabled={won || !started}
         />
       </div>
 
       <div className="flex flex-wrap gap-2">
+        {!started && !won ? (
+          <button
+            type="button"
+            onClick={startTimer}
+            className="px-3 py-2 rounded-lg text-sm font-semibold bg-sky-600 text-white hover:bg-sky-500"
+          >
+            Start timer
+          </button>
+        ) : null}
         <button
           type="button"
           onClick={reset}
@@ -400,7 +441,7 @@ export default function PipesPanel({
             Today’s leaderboard · fastest time
           </h4>
           <ol className="space-y-1.5">
-            {leaderboard.slice(0, 10).map((row) => (
+            {leaderboard.map((row) => (
               <FunLeaderboardRow
                 key={row.uid || row.rank}
                 row={row}

@@ -24,9 +24,6 @@ export const PIPES_GAME = { key: 'pipes', label: 'Daily Pipes' };
 export const TOOLBOX_KICK_LIVE_FROM = '2026-08-26';
 export const TOOLBOX_KICK_GAME = { key: 'toolboxkick', label: 'Little Dicks Toolbox' };
 
-export const COIN_FLIP_LIVE_FROM = '2026-09-07';
-export const COIN_FLIP_GAME = { key: 'coinflip', label: 'Coin Flip Streak' };
-
 /** Live on Fun from this London day key. */
 export const WANTED_LIVE_FROM = '2026-09-08';
 export const WANTED_GAME = { key: 'wanted', label: 'Daily Wanted' };
@@ -45,7 +42,6 @@ export const FUN_GAME_ROSTER = [
   LETTERBOX_GAME,
   PIPES_GAME,
   TOOLBOX_KICK_GAME,
-  COIN_FLIP_GAME,
   WANTED_GAME,
 ];
 
@@ -97,7 +93,6 @@ export function getRosterForDay(dayKey) {
   if (key >= LETTERBOX_LIVE_FROM) roster.push(LETTERBOX_GAME);
   if (key >= PIPES_LIVE_FROM) roster.push(PIPES_GAME);
   if (key >= TOOLBOX_KICK_LIVE_FROM) roster.push(TOOLBOX_KICK_GAME);
-  if (key >= COIN_FLIP_LIVE_FROM) roster.push(COIN_FLIP_GAME);
   if (key >= WANTED_LIVE_FROM) roster.push(WANTED_GAME);
   return roster;
 }
@@ -128,10 +123,6 @@ export function isPipesPracticeDay(dayKey) {
 
 export function isToolboxKickLive(dayKey) {
   return String(dayKey || '') >= TOOLBOX_KICK_LIVE_FROM;
-}
-
-export function isCoinFlipLive(dayKey) {
-  return String(dayKey || '') >= COIN_FLIP_LIVE_FROM;
 }
 
 export function isWantedLive(dayKey) {
@@ -260,7 +251,6 @@ export function getFunRotationForDay(dayKey, settingsInput = null) {
       pipesLive: Boolean(key && key >= PIPES_LIVE_FROM),
       pipesPractice: false,
       toolboxKickLive: Boolean(key && key >= TOOLBOX_KICK_LIVE_FROM),
-      coinFlipLive: Boolean(key && key >= COIN_FLIP_LIVE_FROM),
       wantedLive: Boolean(key && key >= WANTED_LIVE_FROM),
     };
   }
@@ -304,7 +294,6 @@ export function getFunRotationForDay(dayKey, settingsInput = null) {
     pipesLive: key >= PIPES_LIVE_FROM,
     pipesPractice: key < PIPES_LIVE_FROM && !isWeekendDayKey(key),
     toolboxKickLive: key >= TOOLBOX_KICK_LIVE_FROM,
-    coinFlipLive: key >= COIN_FLIP_LIVE_FROM,
     wantedLive: key >= WANTED_LIVE_FROM,
   };
 }

@@ -5,6 +5,8 @@
 const {
   DOCUMENT_TYPES,
   OUTCOME_PRESETS,
+  RESTRICTION_OPTIONS,
+  restrictionLabel,
   toTrimmedString,
   getCasesRole,
   canManageCases,
@@ -27,6 +29,7 @@ const {
   serializeCase,
   serializeTimestamp,
 } = require('./peopleCases');
+const { calendarEventFromOptions } = require('./calendarIcs');
 const {
   buildCaseSharePointFolderName,
   templatesForStage,
@@ -86,6 +89,92 @@ function createPeopleCasesApi({
       return false;
     }
     return true;
+  }
+
+  function sanitizeRestrictionInput(body, processFamily) {
+    if ((processFamily || 'disciplinary') !== 'disciplinary') {
+      return { ok: true, patch: null };
+    }
+    const enabled = body.restrictionEnabled === true
+      || Boolean(toTrimmedString(body.restrictionType));
+    if (!enabled) {
+      return {
+        ok: true,
+        patch: {
+          restrictionType: '',
+          restrictionDetail: '',
+          restrictionExpiresAt: '',
+          restrictionActive: false,
+        },
+      };
+    }
+    const restrictionType = toTrimmedString(body.restrictionType);
+    const allowed = new Set(RESTRICTION_OPTIONS.map((item) => item.id));
+    if (!allowed.has(restrictionType)) {
+      return { ok: false, error: 'Choose a restriction type.' };
+    }
+    const restrictionDetail = toTrimmedString(body.restrictionDetail || body.restrictionOther);
+    if (restrictionType === 'other' && !restrictionDetail) {
+      return { ok: false, error: 'Specify the restriction when choosing Other.' };
+    }
+    const restrictionExpiresAt = toTrimmedString(body.restrictionExpiresAt).slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(restrictionExpiresAt)) {
+      return { ok: false, error: 'Choose when the restriction expires.' };
+    }
+    return {
+      ok: true,
+      patch: {
+        restrictionType,
+        restrictionDetail: restrictionType === 'other' ? restrictionDetail : '',
+        restrictionExpiresAt,
+        restrictionActive: true,
+        restrictionSetAt: new Date().toISOString().slice(0, 10),
+        restrictionClearedAt: null,
+        restrictionClearedReason: '',
+      },
+    };
+  }
+
+  function isActiveRestriction(item, today) {
+    if (!item || !item.restrictionActive) return false;
+    if ((item.processFamily || 'disciplinary') !== 'disciplinary') return false;
+    if (item.restrictionClearedAt) return false;
+    const expires = String(item.restrictionExpiresAt || '').slice(0, 10);
+    if (expires && expires < today) return false;
+    if (!item.restrictionType) return false;
+    return true;
+  }
+
+  function restrictionMeasureFromCase(item) {
+    return {
+      caseId: item.id,
+      outcomePreset: 'restriction',
+      measureType: `Restriction — ${restrictionLabel(item.restrictionType, item.restrictionDetail)}`,
+      reason: restrictionLabel(item.restrictionType, item.restrictionDetail),
+      givenAt: String(item.restrictionSetAt || item.closedAt || item.createdAt || '').slice(0, 10),
+      expiresAt: String(item.restrictionExpiresAt || '').slice(0, 10),
+      durationMonths: null,
+      title: item.title || '',
+      employeeNameSnapshot: item.employeeNameSnapshot || '',
+      isRestriction: true,
+    };
+  }
+
+  function minutesHavePendingAmendment(minutes = []) {
+    return (Array.isArray(minutes) ? minutes : []).some((item) => (
+      item
+      && (item.status === 'amendment_requested' || item.status === 'disputed' || item.disputed === true)
+    ));
+  }
+
+  async function assertNoPendingAmendments(caseId, res) {
+    const related = await listRelated(caseId);
+    if (!minutesHavePendingAmendment(related.minutes || [])) return related;
+    res.status(400).json({
+      error: 'An employee has requested an amendment to interview notes. Address the amendment before continuing.',
+      code: 'amendment_pending',
+    });
+    return null;
   }
 
   async function loadCaseOrFail(caseId, res) {
@@ -597,6 +686,10 @@ function createPeopleCasesApi({
         res.status(400).json({ error: 'employeeUid is required.' });
         return;
       }
+      if (!input.issue) {
+        res.status(400).json({ error: 'Issue is required.' });
+        return;
+      }
       if (input.processFamily === 'disciplinary' || input.processFamily === 'grievance') {
         const path = input.informalResolutionPath;
         if (!path) {
@@ -634,17 +727,22 @@ function createPeopleCasesApi({
         const ownerProfile = await getUserProfile(ownerManagerUid);
         const now = admin.firestore.FieldValue.serverTimestamp();
         const slaDueAt = addWorkingDays(new Date(), 5);
+        const employeeName = employee.fullName || employee.email || 'Employee';
+        const openedDateLabel = new Date().toLocaleDateString('en-GB');
+        const issue = input.issue;
+        const title = `${employeeName} - ${issue} - ${openedDateLabel}`;
 
         const caseDoc = await db.collection('disciplinary_cases').add({
           employeeUid: input.employeeUid,
-          employeeNameSnapshot: employee.fullName || employee.email || '',
+          employeeNameSnapshot: employeeName,
           departmentSnapshot: employee.employeeProfile?.department || '',
           managerUid: ownerManagerUid,
           ownerManagerUid,
           managerNameSnapshot: ownerProfile?.fullName || session.profile.fullName || '',
           processFamily: input.processFamily,
           caseType: input.caseType,
-          title: input.title || `${input.processFamily.replace(/_/g, ' ')} case`,
+          issue,
+          title,
           summary: input.summary,
           status: 'open',
           stage: input.stage,
@@ -705,7 +803,7 @@ function createPeopleCasesApi({
         });
 
         await stampSharePointCaseFolderName(caseDoc, {
-          title: input.title || `${input.processFamily.replace(/_/g, ' ')} case`,
+          title,
           openedAt: new Date(),
           offPortalRaiseDate: input.offPortalRaiseDate,
         });
@@ -715,6 +813,8 @@ function createPeopleCasesApi({
           caseType: input.caseType,
           stage: input.stage,
           ownerManagerUid,
+          issue,
+          title,
           informalResolutionPath: input.informalResolutionPath || '',
           createdByName: session.profile.fullName || session.profile.email || '',
         }, session.profile);
@@ -753,6 +853,8 @@ function createPeopleCasesApi({
         const existing = caseSnap.data();
         const patch = {};
         const events = [];
+        const calendarEvents = [];
+        let restrictionForOutcome = null;
 
         const assignable = [
           'title', 'summary', 'status', 'dueAt', 'slaDueAt',
@@ -815,6 +917,13 @@ function createPeopleCasesApi({
           const toIdx = stages.indexOf(nextStage);
           if (toIdx > fromIdx) {
             const related = await listRelated(caseId);
+            if (minutesHavePendingAmendment(related.minutes || [])) {
+              res.status(400).json({
+                error: 'An employee has requested an amendment to interview notes. Address the amendment before continuing.',
+                code: 'amendment_pending',
+              });
+              return;
+            }
             const missing = missingRequiredTemplates({
               processFamily: family,
               stage: currentStage,
@@ -837,6 +946,7 @@ function createPeopleCasesApi({
         }
 
         if (body.closeWithNotes === true) {
+          if (!(await assertNoPendingAmendments(caseId, res))) return;
           const notes = toTrimmedString(body.closeNotes);
           if (!notes) {
             res.status(400).json({ error: 'Add notes explaining why the case is being closed.' });
@@ -867,16 +977,23 @@ function createPeopleCasesApi({
         }
 
         if (body.closeAsInformalAction === true) {
+          if (!(await assertNoPendingAmendments(caseId, res))) return;
           const details = toTrimmedString(body.informalActionDetails) || toTrimmedString(body.closeNotes);
           if (!details) {
             res.status(400).json({ error: 'Record the informal action taken before closing the case.' });
             return;
           }
+          const effective = new Date().toISOString().slice(0, 10);
+          const expires = new Date(`${effective}T00:00:00`);
+          expires.setMonth(expires.getMonth() + 6);
           patch.outcomePreset = 'informal_action';
           patch.outcomePackSteps = [];
           patch.informalResolutionPath = 'informal_action_taken';
           patch.informalActionDetails = details;
           patch.informalActionTakenAt = admin.firestore.FieldValue.serverTimestamp();
+          patch.warningEffectiveAt = effective;
+          patch.warningExpiresAt = expires.toISOString().slice(0, 10);
+          patch.warningDurationMonths = 6;
           patch.closeNotes = details;
           patch.decisionMakerUid = session.profile.uid;
           patch.closedByUid = session.profile.uid;
@@ -887,6 +1004,7 @@ function createPeopleCasesApi({
           events.push(['informal_action_recorded_and_closed', {
             informalActionDetails: details,
             outcomePreset: 'informal_action',
+            warningExpiresAt: patch.warningExpiresAt,
             closedByUid: session.profile.uid,
             closedByName: session.profile.fullName || session.profile.email || '',
           }]);
@@ -894,6 +1012,7 @@ function createPeopleCasesApi({
 
         let fileNoteHtml = '';
         if (body.issueFileNoteForImprovement === true) {
+          if (!(await assertNoPendingAmendments(caseId, res))) return;
           const reason = toTrimmedString(body.fileNoteReason);
           const actionRequired = toTrimmedString(body.fileNoteActionRequired);
           if (!reason) {
@@ -1006,6 +1125,12 @@ function createPeopleCasesApi({
           patch.fileNoteIssuedByName = issuerName;
           patch.fileNoteManagerSignedAt = managerSignature.signedAt;
           patch.fileNoteEmployeeSignStatus = 'pending';
+          const fileNoteEffective = issuedAt.toISOString().slice(0, 10);
+          const fileNoteExpires = new Date(`${fileNoteEffective}T00:00:00Z`);
+          fileNoteExpires.setUTCMonth(fileNoteExpires.getUTCMonth() + 6);
+          patch.warningEffectiveAt = fileNoteEffective;
+          patch.warningExpiresAt = fileNoteExpires.toISOString().slice(0, 10);
+          patch.warningDurationMonths = 6;
           patch.closeNotes = reason;
           patch.decisionMakerUid = session.profile.uid;
           patch.closedByUid = session.profile.uid;
@@ -1182,6 +1307,22 @@ function createPeopleCasesApi({
             shortNotice,
             evidenceDocumentIds: releasedEvidenceIds,
           }]);
+          calendarEvents.push(calendarEventFromOptions(
+            `hearing-${caseId}-${hearingScheduledAt}.ics`,
+            {
+              uid: `hearing-${caseId}-${docRef.id}@countrylion.co.uk`,
+              summary: `Disciplinary hearing — ${existing.employeeNameSnapshot || existing.title || caseId}`,
+              description: [
+                `Case: ${existing.title || caseId}`,
+                hearingInviteNotes ? `Notes: ${hearingInviteNotes}` : '',
+                'Hearing invite issued via Employee Portal.',
+              ].filter(Boolean).join('\n'),
+              location: resolvedLocation,
+              startDate: hearingScheduledAt,
+              startTime: hearingScheduledTime || '10:00',
+              durationMinutes: 60,
+            },
+          ));
         }
         if (Array.isArray(body.evidenceDocumentIds)) {
           patch.evidenceDocumentIds = body.evidenceDocumentIds.map(toTrimmedString).filter(Boolean);
@@ -1207,6 +1348,73 @@ function createPeopleCasesApi({
           events.push(['hearing_postponed_for_companion', { to: body.hearingPostponedTo }]);
         }
 
+        if (body.rescheduleReview && typeof body.rescheduleReview === 'object') {
+          const reviewId = toTrimmedString(body.rescheduleReview.reviewId);
+          const dueAt = toTrimmedString(body.rescheduleReview.dueAt).slice(0, 10);
+          const reviewTitle = toTrimmedString(body.rescheduleReview.title);
+          const reviewNotes = toTrimmedString(body.rescheduleReview.notes);
+          if (!reviewId || !/^\d{4}-\d{2}-\d{2}$/.test(dueAt)) {
+            res.status(400).json({ error: 'Review id and a valid new date are required to reschedule.' });
+            return;
+          }
+          const reviewSnap = await db.collection('case_reviews').doc(reviewId).get();
+          if (!reviewSnap.exists) {
+            res.status(404).json({ error: 'Review not found.' });
+            return;
+          }
+          const reviewData = reviewSnap.data() || {};
+          if (reviewData.caseId !== caseId) {
+            res.status(400).json({ error: 'Review does not belong to this case.' });
+            return;
+          }
+          if (reviewData.status === 'completed') {
+            res.status(400).json({ error: 'Completed reviews cannot be rescheduled.' });
+            return;
+          }
+          const previousDueAt = toTrimmedString(reviewData.dueAt);
+          const nextTitle = reviewTitle || reviewData.title || 'Review meeting';
+          const nextNotes = reviewNotes || reviewData.notes || '';
+          await reviewSnap.ref.update({
+            dueAt,
+            title: nextTitle,
+            notes: nextNotes,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            updatedByUid: session.profile.uid,
+          });
+          const openReviews = await db.collection('case_reviews').where('caseId', '==', caseId).get();
+          const openDueDates = openReviews.docs
+            .map((doc) => {
+              const data = doc.data() || {};
+              if (doc.id === reviewId) return dueAt;
+              if (data.status === 'completed') return '';
+              return toTrimmedString(data.dueAt);
+            })
+            .filter((value) => /^\d{4}-\d{2}-\d{2}$/.test(value))
+            .sort();
+          if (openDueDates.length) {
+            patch.nextReviewDueAt = openDueDates[0];
+          }
+          events.push(['review_rescheduled', {
+            reviewId,
+            from: previousDueAt,
+            to: dueAt,
+            title: nextTitle,
+          }]);
+          calendarEvents.push(calendarEventFromOptions(
+            `review-${caseId}-${dueAt}.ics`,
+            {
+              uid: `review-${caseId}-${reviewId}@countrylion.co.uk`,
+              summary: `${nextTitle} — ${existing.employeeNameSnapshot || existing.title || caseId}`,
+              description: [
+                `Case: ${existing.title || caseId}`,
+                nextNotes ? `Notes: ${nextNotes}` : '',
+                previousDueAt ? `Rescheduled from ${previousDueAt}.` : 'Review rescheduled via Employee Portal.',
+              ].filter(Boolean).join('\n'),
+              startDate: dueAt,
+            },
+          ));
+        }
+
         if (body.outcomePreset) {
           const preset = outcomePresetById(body.outcomePreset);
           if (!preset) {
@@ -1230,6 +1438,7 @@ function createPeopleCasesApi({
             : [];
 
           if (finalizeOutcome) {
+            if (!(await assertNoPendingAmendments(caseId, res))) return;
             const outcomeDetailsCheck = toTrimmedString(body.outcomeDetails);
             if (!outcomeDetailsCheck) {
               res.status(400).json({ error: 'Outcome details / reasons are required.' });
@@ -1266,6 +1475,12 @@ function createPeopleCasesApi({
               res.status(400).json({ error: 'Choose a 6 or 12 month duration for this outcome.' });
               return;
             }
+            const restrictionCheck = sanitizeRestrictionInput(body, existing.processFamily || 'disciplinary');
+            if (!restrictionCheck.ok) {
+              res.status(400).json({ error: restrictionCheck.error });
+              return;
+            }
+            restrictionForOutcome = restrictionCheck.patch;
           }
 
           if (
@@ -1380,6 +1595,17 @@ function createPeopleCasesApi({
               method: 'portal_issue',
             }
             : null;
+          const restrictionLetterFields = restrictionForOutcome?.restrictionActive
+            ? {
+              restrictionType: restrictionForOutcome.restrictionType || '',
+              restrictionDetail: restrictionForOutcome.restrictionDetail || '',
+              restrictionExpiresAt: restrictionForOutcome.restrictionExpiresAt || '',
+            }
+            : {
+              restrictionType: '',
+              restrictionDetail: '',
+              restrictionExpiresAt: '',
+            };
           const outcomeLetterHtml = buildOutcomeLetterHtml({
             employeeName,
             caseTitle: existing.title || '',
@@ -1389,6 +1615,7 @@ function createPeopleCasesApi({
             expectedStandard,
             supportMonitoringRetraining,
             reviewDates: reviewInputs,
+            ...restrictionLetterFields,
             warningEffectiveAt: patch.warningEffectiveAt || '',
             warningExpiresAt: patch.warningExpiresAt || '',
             durationLabel,
@@ -1433,6 +1660,7 @@ function createPeopleCasesApi({
             expectedStandard,
             supportMonitoringRetraining,
             reviewDates: reviewInputs,
+            ...restrictionLetterFields,
             appealRecipientName,
             appealDeadlineLabel,
             createdAt: outcomeNow,
@@ -1460,6 +1688,19 @@ function createPeopleCasesApi({
                 createdAt: admin.firestore.FieldValue.serverTimestamp(),
                 updatedAt: admin.firestore.FieldValue.serverTimestamp(),
               });
+              calendarEvents.push(calendarEventFromOptions(
+                `review-${caseId}-${review.dueAt}.ics`,
+                {
+                  uid: `review-${caseId}-${review.dueAt}-${review.title}@countrylion.co.uk`,
+                  summary: `${review.title} — ${existing.employeeNameSnapshot || existing.title || caseId}`,
+                  description: [
+                    `Case: ${existing.title || caseId}`,
+                    review.notes ? `Notes: ${review.notes}` : '',
+                    'Review meeting scheduled via Employee Portal.',
+                  ].filter(Boolean).join('\n'),
+                  startDate: review.dueAt,
+                },
+              ));
             }
             if (reviewInputs.length) {
               const nextDue = [...reviewInputs]
@@ -1512,6 +1753,7 @@ function createPeopleCasesApi({
         }
 
         if (body.closeCase === true) {
+          if (!(await assertNoPendingAmendments(caseId, res))) return;
           const family = existing.processFamily || 'disciplinary';
           const currentStage = normalizeStage(family, existing.stage);
           if (['outcome_pack', 'appeal'].includes(currentStage)) {
@@ -1626,6 +1868,55 @@ function createPeopleCasesApi({
           events.push(['linked_disciplinary_opened', { linkedCaseId: linked.id }]);
         }
 
+        const appliesRestriction = body.closeWithNotes === true
+          || body.issueFileNoteForImprovement === true
+          || body.finalizeOutcome === true;
+        if (body.closeAsInformalAction === true) {
+          // Informal resolution cannot carry a work restriction.
+          Object.assign(patch, {
+            restrictionType: '',
+            restrictionDetail: '',
+            restrictionExpiresAt: '',
+            restrictionActive: false,
+          });
+        } else if (appliesRestriction) {
+          let restrictionPatch = null;
+          if (body.finalizeOutcome === true && restrictionForOutcome) {
+            restrictionPatch = restrictionForOutcome;
+          } else {
+            const restriction = sanitizeRestrictionInput(body, existing.processFamily || 'disciplinary');
+            if (!restriction.ok) {
+              res.status(400).json({ error: restriction.error });
+              return;
+            }
+            restrictionPatch = restriction.patch;
+          }
+          if (restrictionPatch) {
+            Object.assign(patch, restrictionPatch);
+            if (restrictionPatch.restrictionActive) {
+              events.push(['restriction_added', {
+                restrictionType: restrictionPatch.restrictionType,
+                restrictionDetail: restrictionPatch.restrictionDetail || '',
+                restrictionExpiresAt: restrictionPatch.restrictionExpiresAt,
+              }]);
+              calendarEvents.push(calendarEventFromOptions(
+                `restriction-${caseId}-${restrictionPatch.restrictionExpiresAt}.ics`,
+                {
+                  uid: `restriction-${caseId}-${restrictionPatch.restrictionExpiresAt}@countrylion.co.uk`,
+                  summary: `Restriction ends — ${restrictionLabel(restrictionPatch.restrictionType, restrictionPatch.restrictionDetail)}`,
+                  description: [
+                    `Case: ${existing.title || caseId}`,
+                    `Employee: ${existing.employeeNameSnapshot || ''}`,
+                    `Restriction: ${restrictionLabel(restrictionPatch.restrictionType, restrictionPatch.restrictionDetail)}`,
+                    'Reminder: work restriction expiry from Employee Portal.',
+                  ].filter(Boolean).join('\n'),
+                  startDate: restrictionPatch.restrictionExpiresAt,
+                },
+              ));
+            }
+          }
+        }
+
         patch.updatedAt = admin.firestore.FieldValue.serverTimestamp();
         patch.updatedByUid = session.profile.uid;
         await caseSnap.ref.update(patch);
@@ -1639,6 +1930,10 @@ function createPeopleCasesApi({
           responseBody.message = 'File note issued to the employee portal for digital signature. Manager signature applied. Case closed pending employee sign-off.';
           responseBody.fileNoteHtml = fileNoteHtml;
           responseBody.fileNoteDocumentId = patch.fileNoteDocumentId || '';
+        }
+        if (calendarEvents.length) {
+          responseBody.calendarEvents = calendarEvents;
+          responseBody.message = `${responseBody.message} Use Add to Outlook below to put the reminder in your calendar (recommended for New Outlook).`;
         }
         res.status(200).json(responseBody);
       } catch (error) {
@@ -1977,7 +2272,25 @@ function createPeopleCasesApi({
           createdAt: admin.firestore.FieldValue.serverTimestamp(),
         });
         await appendEvent(caseId, 'review_scheduled', { reviewId: ref.id, dueAt, title }, session.profile);
-        res.status(200).json({ id: ref.id, message: 'Review scheduled.' });
+        const caseData = caseSnap.data() || {};
+        const calendarEvent = calendarEventFromOptions(
+          `review-${caseId}-${dueAt}.ics`,
+          {
+            uid: `review-${caseId}-${ref.id}@countrylion.co.uk`,
+            summary: `${title} — ${caseData.employeeNameSnapshot || caseData.title || caseId}`,
+            description: [
+              `Case: ${caseData.title || caseId}`,
+              toTrimmedString(body.notes) ? `Notes: ${toTrimmedString(body.notes)}` : '',
+              'Review meeting scheduled via Employee Portal.',
+            ].filter(Boolean).join('\n'),
+            startDate: dueAt,
+          },
+        );
+        res.status(200).json({
+          id: ref.id,
+          message: 'Review scheduled. Use Add to Outlook to put it in your calendar.',
+          calendarEvents: [calendarEvent],
+        });
       } catch (error) {
         console.error('createCaseReview failed', error);
         res.status(500).json({ error: 'Failed to schedule review.' });
@@ -2357,6 +2670,9 @@ function createPeopleCasesApi({
             expectedStandard: docData.expectedStandard || caseData.expectedStandard || '',
             supportMonitoringRetraining: docData.supportMonitoringRetraining || caseData.supportMonitoringRetraining || '',
             reviewDates: Array.isArray(docData.reviewDates) ? docData.reviewDates : [],
+            restrictionType: docData.restrictionType || caseData.restrictionType || '',
+            restrictionDetail: docData.restrictionDetail || caseData.restrictionDetail || '',
+            restrictionExpiresAt: docData.restrictionExpiresAt || caseData.restrictionExpiresAt || '',
             warningEffectiveAt: docData.warningEffectiveAt || caseData.warningEffectiveAt || '',
             warningExpiresAt: docData.warningExpiresAt || caseData.warningExpiresAt || '',
             durationLabel: durationMonths ? `${durationMonths} months` : '',
@@ -2781,6 +3097,7 @@ function createPeopleCasesApi({
         for (const doc of snap.docs) {
           const data = doc.data();
           if (data.warningClearedAt) continue;
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(String(data.warningExpiresAt || '').slice(0, 10))) continue;
           await doc.ref.update({
             warningClearedAt: admin.firestore.FieldValue.serverTimestamp(),
             warningClearedReason: 'expired',
@@ -2793,6 +3110,489 @@ function createPeopleCasesApi({
       } catch (error) {
         console.error('clearExpiredWarnings failed', error);
         res.status(500).json({ error: 'Failed to clear expired warnings.' });
+      }
+    }),
+  );
+
+  const ACTIVE_MEASURE_PRESETS = new Set([
+    'informal_action',
+    'file_note_for_improvement',
+    'verbal_warning',
+    'written_warning',
+    'final_written_warning',
+    'pip',
+  ]);
+  const SIX_MONTH_MEASURE_PRESETS = new Set([
+    'informal_action',
+    'file_note_for_improvement',
+  ]);
+
+  function isIsoDateOnly(value) {
+    return /^\d{4}-\d{2}-\d{2}$/.test(String(value || '').slice(0, 10));
+  }
+
+  function toIsoDateOnly(value) {
+    if (!value) return '';
+    if (typeof value === 'string') {
+      const match = value.match(/^(\d{4}-\d{2}-\d{2})/);
+      return match ? match[1] : '';
+    }
+    if (typeof value.toDate === 'function') {
+      try {
+        return value.toDate().toISOString().slice(0, 10);
+      } catch (_) {
+        return '';
+      }
+    }
+    if (typeof value._seconds === 'number') {
+      return new Date(value._seconds * 1000).toISOString().slice(0, 10);
+    }
+    if (typeof value.seconds === 'number') {
+      return new Date(value.seconds * 1000).toISOString().slice(0, 10);
+    }
+    return '';
+  }
+
+  async function softClearExpiredMeasures(actorProfile) {
+    const today = new Date().toISOString().slice(0, 10);
+    const snap = await db.collection('disciplinary_cases')
+      .where('warningExpiresAt', '<=', today)
+      .limit(500)
+      .get();
+    let cleared = 0;
+    for (const doc of snap.docs) {
+      const data = doc.data() || {};
+      if (data.warningClearedAt) continue;
+      // Empty-string warningExpiresAt is stored on new cases and must NOT be treated as expired.
+      if (!isIsoDateOnly(data.warningExpiresAt)) continue;
+      if (String(data.warningExpiresAt).slice(0, 10) > today) continue;
+      await doc.ref.update({
+        warningClearedAt: admin.firestore.FieldValue.serverTimestamp(),
+        warningClearedReason: 'expired',
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      if (actorProfile) {
+        await appendEvent(doc.id, 'warning_expired_cleared', {}, actorProfile);
+      }
+      cleared += 1;
+    }
+    return cleared;
+  }
+
+  function addMonthsIsoLocal(isoDate, months) {
+    const text = toIsoDateOnly(isoDate);
+    if (!text) return '';
+    const date = new Date(`${text}T00:00:00Z`);
+    if (Number.isNaN(date.getTime())) return '';
+    date.setUTCMonth(date.getUTCMonth() + Number(months || 0));
+    return date.toISOString().slice(0, 10);
+  }
+
+  function measureGivenAt(item) {
+    return toIsoDateOnly(item.warningEffectiveAt)
+      || toIsoDateOnly(item.informalActionTakenAt)
+      || toIsoDateOnly(item.fileNoteIssuedAt)
+      || toIsoDateOnly(item.closedAt)
+      || toIsoDateOnly(item.updatedAt)
+      || toIsoDateOnly(item.createdAt)
+      || '';
+  }
+
+  function measureExpiresAt(item) {
+    // Informal / file-note live for 6 months from the given date.
+    // Prefer the computed window so false-positive clears (empty warningExpiresAt) cannot hide them.
+    if (SIX_MONTH_MEASURE_PRESETS.has(item.outcomePreset)) {
+      const given = measureGivenAt(item);
+      if (given) return addMonthsIsoLocal(given, 6);
+    }
+    if (isIsoDateOnly(item.warningExpiresAt)) {
+      return String(item.warningExpiresAt).slice(0, 10);
+    }
+    return '';
+  }
+
+  function isSupersededMeasure(item) {
+    return String(item.warningClearedReason || '') === 'superseded';
+  }
+
+  function isActiveDisciplinaryMeasure(item, today) {
+    if (!item || !ACTIVE_MEASURE_PRESETS.has(item.outcomePreset)) return false;
+    const family = item.processFamily || 'disciplinary';
+    if (family !== 'disciplinary') return false;
+    if (isSupersededMeasure(item)) return false;
+
+    if (SIX_MONTH_MEASURE_PRESETS.has(item.outcomePreset)) {
+      const expiresAt = measureExpiresAt(item);
+      // If we cannot derive a given date, still show rather than hide a live informal/file note.
+      if (expiresAt && expiresAt < today) return false;
+      return true;
+    }
+
+    if (item.warningClearedAt) return false;
+    const expiresAt = measureExpiresAt(item);
+    if (expiresAt && expiresAt < today) return false;
+    return true;
+  }
+
+  function measureReason(item) {
+    return toTrimmedString(item.warningTitle)
+      || toTrimmedString(item.issue)
+      || toTrimmedString(item.informalActionDetails)
+      || toTrimmedString(item.fileNoteReason)
+      || toTrimmedString(item.outcomeDetails)
+      || toTrimmedString(item.title)
+      || '—';
+  }
+
+  const getActiveDisciplinaryMeasures = onRequest(
+    { region: 'europe-west2' },
+    withCors(async (req, res) => {
+      if (req.method !== 'GET') {
+        res.status(405).json({ error: 'Method not allowed.' });
+        return;
+      }
+      const session = await getVerifiedSessionUser(req);
+      if (!assertManager(session, res)) return;
+
+      try {
+        const today = new Date().toISOString().slice(0, 10);
+        const employeeUidFilter = toTrimmedString(req.query?.employeeUid);
+        let cleared = await softClearExpiredMeasures(session.profile);
+        let restored = 0;
+
+        const [usersSnap, casesSnap] = await Promise.all([
+          employeeUidFilter
+            ? db.collection('users').doc(employeeUidFilter).get().then((doc) => ({ docs: doc.exists ? [doc] : [] }))
+            : db.collection('users').get(),
+          employeeUidFilter
+            ? db.collection('disciplinary_cases').where('employeeUid', '==', employeeUidFilter).get()
+            : db.collection('disciplinary_cases').get(),
+        ]);
+
+        const employeesByUid = new Map();
+        for (const doc of usersSnap.docs) {
+          const data = doc.data() || {};
+          if (data.isActive === false) continue;
+          employeesByUid.set(doc.id, {
+            uid: doc.id,
+            fullName: data.fullName || data.email || 'Unknown',
+            email: data.email || '',
+            department: data.employeeProfile?.department || data.department || '',
+            isActive: true,
+          });
+        }
+
+        const measuresByEmployee = new Map();
+        for (const doc of casesSnap.docs) {
+          const item = serializeCase(doc);
+          if (!ACTIVE_MEASURE_PRESETS.has(item.outcomePreset)) continue;
+          if ((item.processFamily || 'disciplinary') !== 'disciplinary') continue;
+          if (isSupersededMeasure(item)) continue;
+
+          const expiresAt = measureExpiresAt(item);
+          const active = isActiveDisciplinaryMeasure(item, today);
+
+          // Restore false-positive expiry clears so case records stay consistent.
+          if (item.warningClearedAt && active && !isSupersededMeasure(item)) {
+            const reason = String(item.warningClearedReason || '');
+            const shouldRestore = !reason
+              || reason.startsWith('expired')
+              || SIX_MONTH_MEASURE_PRESETS.has(item.outcomePreset);
+            if (shouldRestore) {
+              const given = measureGivenAt(item) || today;
+              const patch = {
+                warningClearedAt: admin.firestore.FieldValue.delete(),
+                warningClearedReason: admin.firestore.FieldValue.delete(),
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              };
+              if (SIX_MONTH_MEASURE_PRESETS.has(item.outcomePreset)) {
+                patch.warningEffectiveAt = toIsoDateOnly(item.warningEffectiveAt) || given;
+                patch.warningExpiresAt = expiresAt || addMonthsIsoLocal(given, 6);
+                patch.warningDurationMonths = 6;
+              }
+              // eslint-disable-next-line no-await-in-loop
+              await doc.ref.update(patch);
+              // eslint-disable-next-line no-await-in-loop
+              await appendEvent(doc.id, 'warning_expiry_restored', {
+                outcomePreset: item.outcomePreset,
+                reason: reason || 'missing_clear_reason',
+              }, session.profile);
+              item.warningClearedAt = null;
+              item.warningClearedReason = '';
+              if (patch.warningExpiresAt) item.warningExpiresAt = patch.warningExpiresAt;
+              restored += 1;
+            }
+          }
+
+          if (!active) {
+            if (
+              SIX_MONTH_MEASURE_PRESETS.has(item.outcomePreset)
+              && expiresAt
+              && expiresAt < today
+              && !item.warningClearedAt
+            ) {
+              // eslint-disable-next-line no-await-in-loop
+              await doc.ref.update({
+                warningEffectiveAt: toIsoDateOnly(item.warningEffectiveAt) || measureGivenAt(item) || today,
+                warningExpiresAt: expiresAt,
+                warningDurationMonths: 6,
+                warningClearedAt: admin.firestore.FieldValue.serverTimestamp(),
+                warningClearedReason: 'expired',
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              });
+              // eslint-disable-next-line no-await-in-loop
+              await appendEvent(doc.id, 'warning_expired_cleared', { outcomePreset: item.outcomePreset }, session.profile);
+              cleared += 1;
+            }
+            continue;
+          }
+
+          if (item.warningClearedAt) {
+            // Still marked cleared after restore attempt — do not show.
+            continue;
+          }
+
+          if (SIX_MONTH_MEASURE_PRESETS.has(item.outcomePreset) && expiresAt) {
+            const storedExpiry = toIsoDateOnly(item.warningExpiresAt);
+            const storedEffective = toIsoDateOnly(item.warningEffectiveAt);
+            const given = measureGivenAt(item) || today;
+            if (storedExpiry !== expiresAt || !storedEffective || Number(item.warningDurationMonths) !== 6) {
+              // eslint-disable-next-line no-await-in-loop
+              await doc.ref.update({
+                warningEffectiveAt: storedEffective || given,
+                warningExpiresAt: expiresAt,
+                warningDurationMonths: 6,
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              });
+            }
+          }
+
+          const preset = outcomePresetById(item.outcomePreset);
+          const measure = {
+            caseId: item.id,
+            outcomePreset: item.outcomePreset,
+            measureType: preset?.label || item.outcomePreset,
+            reason: measureReason(item),
+            givenAt: measureGivenAt(item),
+            expiresAt: expiresAt || '',
+            durationMonths: item.warningDurationMonths
+              || (SIX_MONTH_MEASURE_PRESETS.has(item.outcomePreset) ? 6 : null),
+            title: item.title || '',
+            employeeNameSnapshot: item.employeeNameSnapshot || '',
+          };
+          if (!item.employeeUid) continue;
+          const list = measuresByEmployee.get(item.employeeUid) || [];
+          list.push(measure);
+
+          // Soft-clear and/or surface optional outcome restrictions.
+          if (item.restrictionActive && item.restrictionType) {
+            const restrictionExpires = String(item.restrictionExpiresAt || '').slice(0, 10);
+            if (restrictionExpires && restrictionExpires < today && !item.restrictionClearedAt) {
+              // eslint-disable-next-line no-await-in-loop
+              await doc.ref.update({
+                restrictionActive: false,
+                restrictionClearedAt: admin.firestore.FieldValue.serverTimestamp(),
+                restrictionClearedReason: 'expired',
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              });
+              // eslint-disable-next-line no-await-in-loop
+              await appendEvent(doc.id, 'restriction_expired_cleared', {
+                restrictionType: item.restrictionType,
+              }, session.profile);
+              cleared += 1;
+            } else if (isActiveRestriction(item, today)) {
+              list.push(restrictionMeasureFromCase(item));
+            }
+          }
+
+          measuresByEmployee.set(item.employeeUid, list);
+        }
+
+        // Cases with only a restriction (e.g. NFA + restriction) still need a pass when
+        // outcome preset is outside ACTIVE_MEASURE_PRESETS.
+        for (const doc of casesSnap.docs) {
+          const item = serializeCase(doc);
+          if ((item.processFamily || 'disciplinary') !== 'disciplinary') continue;
+          if (!item.employeeUid || !item.restrictionType) continue;
+          if (ACTIVE_MEASURE_PRESETS.has(item.outcomePreset)) continue; // already handled above
+          if (!isActiveRestriction(item, today)) {
+            const restrictionExpires = String(item.restrictionExpiresAt || '').slice(0, 10);
+            if (
+              item.restrictionActive
+              && restrictionExpires
+              && restrictionExpires < today
+              && !item.restrictionClearedAt
+            ) {
+              // eslint-disable-next-line no-await-in-loop
+              await doc.ref.update({
+                restrictionActive: false,
+                restrictionClearedAt: admin.firestore.FieldValue.serverTimestamp(),
+                restrictionClearedReason: 'expired',
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              });
+              cleared += 1;
+            }
+            continue;
+          }
+          const list = measuresByEmployee.get(item.employeeUid) || [];
+          if (!list.some((m) => m.isRestriction && m.caseId === item.id)) {
+            list.push(restrictionMeasureFromCase(item));
+            measuresByEmployee.set(item.employeeUid, list);
+          }
+        }
+        for (const list of measuresByEmployee.values()) {
+          list.sort((left, right) => String(right.givenAt || '').localeCompare(String(left.givenAt || '')));
+        }
+
+        const employeeUids = new Set([
+          ...employeesByUid.keys(),
+          ...measuresByEmployee.keys(),
+        ]);
+        const rows = [...employeeUids]
+          .map((uid) => {
+            const employee = employeesByUid.get(uid);
+            const measures = measuresByEmployee.get(uid) || [];
+            return {
+              employeeUid: uid,
+              employeeName: employee?.fullName || measures[0]?.employeeNameSnapshot || 'Unknown employee',
+              employeeEmail: employee?.email || '',
+              department: employee?.department || '',
+              measures,
+            };
+          })
+          .sort((a, b) => String(a.employeeName).localeCompare(String(b.employeeName)));
+
+        res.status(200).json({
+          today,
+          clearedExpired: cleared,
+          restored,
+          rows,
+          ...(employeeUidFilter ? {
+            employeeUid: employeeUidFilter,
+            items: rows[0]?.measures || [],
+          } : {}),
+        });
+      } catch (error) {
+        console.error('getActiveDisciplinaryMeasures failed', error);
+        res.status(500).json({ error: 'Failed to load active disciplinary measures.' });
+      }
+    }),
+  );
+
+  const BONUS_DEDUCTION_AMOUNTS = {
+    written_warning: 50,
+    final_written_warning: 100,
+  };
+
+  const getBonusDeductions = onRequest(
+    { region: 'europe-west2' },
+    withCors(async (req, res) => {
+      if (req.method !== 'GET') {
+        res.status(405).json({ error: 'Method not allowed.' });
+        return;
+      }
+      const session = await getVerifiedSessionUser(req);
+      if (!assertManager(session, res)) return;
+
+      try {
+        const employeeUidFilter = toTrimmedString(req.query?.employeeUid);
+        const [usersSnap, casesSnap] = await Promise.all([
+          employeeUidFilter
+            ? db.collection('users').doc(employeeUidFilter).get().then((doc) => ({ docs: doc.exists ? [doc] : [] }))
+            : db.collection('users').get(),
+          employeeUidFilter
+            ? db.collection('disciplinary_cases').where('employeeUid', '==', employeeUidFilter).get()
+            : db.collection('disciplinary_cases').get(),
+        ]);
+
+        const employeesByUid = new Map();
+        for (const doc of usersSnap.docs) {
+          const data = doc.data() || {};
+          if (data.isActive === false) continue;
+          employeesByUid.set(doc.id, {
+            uid: doc.id,
+            fullName: data.fullName || data.email || 'Unknown',
+            email: data.email || '',
+            department: data.employeeProfile?.department || data.department || '',
+          });
+        }
+
+        const deductionsByEmployee = new Map();
+        for (const doc of casesSnap.docs) {
+          const item = serializeCase(doc);
+          const amount = BONUS_DEDUCTION_AMOUNTS[item.outcomePreset];
+          if (!amount) continue;
+          if ((item.processFamily || 'disciplinary') !== 'disciplinary') continue;
+          if (!item.employeeUid) continue;
+          // Only count issued outcomes (finalised / closed / pending employee sign-off).
+          if (!item.outcomeIssuedAt && !item.closedAt && !item.warningEffectiveAt) continue;
+
+          const givenAt = measureGivenAt(item)
+            || toIsoDateOnly(item.outcomeIssuedAt)
+            || toIsoDateOnly(item.closedAt)
+            || toIsoDateOnly(item.warningEffectiveAt)
+            || '';
+          const preset = outcomePresetById(item.outcomePreset);
+          const entry = {
+            caseId: item.id,
+            outcomePreset: item.outcomePreset,
+            warningLabel: preset?.label || item.outcomePreset,
+            amount,
+            currency: 'GBP',
+            reason: measureReason(item),
+            title: item.title || '',
+            warningTitle: item.warningTitle || '',
+            givenAt,
+            warningExpiresAt: toIsoDateOnly(item.warningExpiresAt) || '',
+            status: item.status || '',
+            warningClearedAt: item.warningClearedAt || null,
+            superseded: isSupersededMeasure(item),
+            employeeNameSnapshot: item.employeeNameSnapshot || '',
+          };
+          const list = deductionsByEmployee.get(item.employeeUid) || [];
+          list.push(entry);
+          deductionsByEmployee.set(item.employeeUid, list);
+        }
+
+        for (const list of deductionsByEmployee.values()) {
+          list.sort((left, right) => String(right.givenAt || '').localeCompare(String(left.givenAt || '')));
+        }
+
+        const employeeUids = new Set([
+          ...employeesByUid.keys(),
+          ...deductionsByEmployee.keys(),
+        ]);
+        const rows = [...employeeUids]
+          .map((uid) => {
+            const employee = employeesByUid.get(uid);
+            const deductions = deductionsByEmployee.get(uid) || [];
+            const totalAmount = deductions.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+            return {
+              employeeUid: uid,
+              employeeName: employee?.fullName || deductions[0]?.employeeNameSnapshot || 'Unknown employee',
+              employeeEmail: employee?.email || '',
+              department: employee?.department || '',
+              deductions,
+              totalAmount,
+              deductionCount: deductions.length,
+            };
+          })
+          .sort((a, b) => String(a.employeeName).localeCompare(String(b.employeeName)));
+
+        const grandTotal = rows.reduce((sum, row) => sum + (Number(row.totalAmount) || 0), 0);
+        res.status(200).json({
+          amounts: BONUS_DEDUCTION_AMOUNTS,
+          grandTotal,
+          currency: 'GBP',
+          rows,
+          ...(employeeUidFilter ? {
+            employeeUid: employeeUidFilter,
+            items: rows[0]?.deductions || [],
+          } : {}),
+        });
+      } catch (error) {
+        console.error('getBonusDeductions failed', error);
+        res.status(500).json({ error: 'Failed to load bonus deductions.' });
       }
     }),
   );
@@ -2921,6 +3721,8 @@ function createPeopleCasesApi({
     clearExpiredWarnings,
     deletePeopleCase,
     getEmployeeInformalHistory,
+    getActiveDisciplinaryMeasures,
+    getBonusDeductions,
     DOCUMENT_TYPES,
   };
 }

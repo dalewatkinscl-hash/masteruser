@@ -12,6 +12,8 @@ import EmployeesDirectory from './pages/EmployeesDirectory';
 import EmployeeDetail from './pages/EmployeeDetail';
 import DuplicateEmployees from './pages/DuplicateEmployees';
 import BirthdaysAnniversaries from './pages/BirthdaysAnniversaries';
+import ActiveDisciplinaryMeasures from './pages/ActiveDisciplinaryMeasures';
+import BonusDeductions from './pages/BonusDeductions';
 import DisciplinaryDashboard from './pages/DisciplinaryDashboard';
 import DisciplinaryCase from './pages/DisciplinaryCase';
 import BumpCardPage from './pages/BumpCardPage';
@@ -98,6 +100,22 @@ export default function App() {
                 element={(
                   <ProtectedRoute requireEmployeeDirectory>
                     <BirthdaysAnniversaries />
+                  </ProtectedRoute>
+                )}
+              />
+              <Route
+                path="employees/active-disciplinary-measures"
+                element={(
+                  <ProtectedRoute requireCasesManager>
+                    <ActiveDisciplinaryMeasures />
+                  </ProtectedRoute>
+                )}
+              />
+              <Route
+                path="employees/bonus-deductions"
+                element={(
+                  <ProtectedRoute requireCasesManager>
+                    <BonusDeductions />
                   </ProtectedRoute>
                 )}
               />

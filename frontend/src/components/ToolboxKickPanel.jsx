@@ -88,10 +88,13 @@ export const DEFAULT_TUNING = {
   birdSlow: 0.93,
 };
 
-/** Bar oscillation speeds by play mode. */
+/**
+ * Bar oscillation speeds in units/second.
+ * Tuned to match the old per-frame rates at 60fps, so 120Hz screens feel the same.
+ */
 const BAR_SPEED = {
-  careful: { power: 0.0225, angle: 0.02 },
-  allOrNothing: { power: 0.011, angle: 0.01 },
+  careful: { power: 0.0225 * 60, angle: 0.02 * 60 },
+  allOrNothing: { power: 0.011 * 60, angle: 0.01 * 60 },
 };
 
 const PHASE = {
@@ -639,6 +642,8 @@ function isPerfectAngle(deg) {
 
 /** Combined perfect power + angle → launch flash + speed multiplier. */
 const PERFECT_LAUNCH_BOOST = 1.25;
+/** Weekly power-up: +40% launch speed for one kick. */
+const SUPER_RAGE_BOOST = 1.4;
 
 function perfectLaunchGrade() {
   return {
@@ -648,6 +653,17 @@ function perfectLaunchGrade() {
     epic: true,
     color: '#fde68a',
     glow: '#f59e0b',
+  };
+}
+
+function superRageGrade() {
+  return {
+    label: 'ENERGY DRINK!!!',
+    sub: 'Dick chugged it · +40% launch speed',
+    gold: true,
+    epic: true,
+    color: '#fecaca',
+    glow: '#ef4444',
   };
 }
 
@@ -1333,12 +1349,61 @@ function RpgPopup({ popup }) {
   );
 }
 
+function EnergyDrinkBanner({ practice = false, superRage = null, alreadyDone = false }) {
+  if (practice) {
+    return (
+      <div className="rounded-xl border border-lime-500/35 bg-lime-500/10 px-4 py-3 space-y-1">
+        <p className="text-sm font-semibold text-lime-100">Dick’s energy drink · practice</p>
+        <p className="text-xs text-slate-300 leading-relaxed">
+          Free to try here. In the real daily game you get <span className="text-white font-medium">one drink per week</span>
+          {' '}(+40% launch speed on one kick). Everyone’s fridge refills on Monday.
+        </p>
+      </div>
+    );
+  }
+
+  const ready = Boolean(superRage?.available);
+  const refill = superRage?.refillDayKey || 'Monday';
+
+  return (
+    <div
+      className={`rounded-xl border px-4 py-3 space-y-1 ${
+        ready
+          ? 'border-rose-500/40 bg-rose-500/10'
+          : 'border-slate-500/35 bg-slate-500/10'
+      }`}
+    >
+      <p className={`text-sm font-semibold ${ready ? 'text-rose-100' : 'text-slate-200'}`}>
+        {ready ? 'Dick’s energy drink · ready' : 'Dick’s energy drink · empty'}
+      </p>
+      <p className="text-xs text-slate-300 leading-relaxed">
+        {ready ? (
+          <>
+            One can this week. Tap <span className="text-white font-medium">Drink energy drink</span> before a kick
+            for <span className="text-white font-medium">+40% speed</span> on that kick only.
+            After that it’s gone until Monday — same for everyone.
+          </>
+        ) : (
+          <>
+            You’ve already had this week’s can
+            {alreadyDone ? ' (or it’s used up)' : ''}.
+            {' '}Everyone gets a fresh energy drink on <span className="text-white font-medium">Monday</span>
+            {refill && refill !== 'Monday' ? ` (${refill})` : ''}.
+          </>
+        )}
+      </p>
+    </div>
+  );
+}
+
 function ToolboxKickGame({
   mode = 'careful',
   onChangeMode,
   competitive = false,
   onRoundComplete = null,
   devCheats = false,
+  superRageAvailable = false,
+  onActivateSuperRage = null,
 }) {
   const canvasRef = useRef(null);
   const stageRef = useRef(null);
@@ -1348,6 +1413,7 @@ function ToolboxKickGame({
   const competitiveRef = useRef(competitive);
   const devCheatsRef = useRef(devCheats);
   const onRoundCompleteRef = useRef(onRoundComplete);
+  const rageUiRef = useRef({ onConsumed: null });
   const popupIdRef = useRef(0);
   const [hud, setHud] = useState({
     phase: PHASE.READY,
@@ -1364,6 +1430,10 @@ function ToolboxKickGame({
   const [popup, setPopup] = useState(null);
   const [roundDone, setRoundDone] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+  const [rageAvailable, setRageAvailable] = useState(Boolean(superRageAvailable));
+  const [rageArmed, setRageArmed] = useState(false);
+  const [rageBusy, setRageBusy] = useState(false);
+  const [rageError, setRageError] = useState('');
 
   useEffect(() => {
     modeRef.current = mode;
@@ -1381,6 +1451,20 @@ function ToolboxKickGame({
     onRoundCompleteRef.current = onRoundComplete;
   }, [onRoundComplete]);
 
+  useEffect(() => {
+    setRageAvailable(Boolean(superRageAvailable));
+  }, [superRageAvailable]);
+
+  useEffect(() => {
+    rageUiRef.current.onConsumed = () => {
+      setRageArmed(false);
+      // Sandbox / practice: free Super Rage every kick.
+      if (typeof onActivateSuperRage !== 'function') {
+        setRageAvailable(true);
+      }
+    };
+  }, [onActivateSuperRage]);
+
   const showRpgPopup = useCallback((grade, durationMs = 1150) => {
     const id = (popupIdRef.current += 1);
     setPopup({ id, ...grade });
@@ -1392,6 +1476,30 @@ function ToolboxKickGame({
   useEffect(() => {
     popupFnRef.current = showRpgPopup;
   }, [showRpgPopup]);
+
+  const armSuperRage = useCallback(async () => {
+    if (rageBusy || rageArmed || roundDone) return;
+    const st = stateRef.current;
+    if (st && (st.phase === PHASE.FLIGHT || st.phase === PHASE.RUNUP || st.phase === PHASE.LANDED)) {
+      setRageError('Drink the energy drink before you kick.');
+      return;
+    }
+    setRageError('');
+    setRageBusy(true);
+    try {
+      if (typeof onActivateSuperRage === 'function') {
+        await onActivateSuperRage();
+      }
+      setRageAvailable(false);
+      setRageArmed(true);
+      if (stateRef.current) stateRef.current.superRageArmed = true;
+      showRpgPopup(superRageGrade(), 1400);
+    } catch (err) {
+      setRageError(err?.message || 'Could not drink energy drink.');
+    } finally {
+      setRageBusy(false);
+    }
+  }, [rageBusy, rageArmed, roundDone, onActivateSuperRage, showRpgPopup]);
 
   const initShot = useCallback((opts = {}) => {
     const keepBest = typeof opts === 'boolean' ? opts : opts.keepBest !== false;
@@ -1457,6 +1565,14 @@ function ToolboxKickGame({
       launchSpeed: 0,
       launchAngleDeg: 45,
       dickCatch: null,
+      superRageArmed: opts.freshRound
+        ? false
+        : Boolean(opts.keepRageArmed || (stateRef.current && stateRef.current.superRageArmed)),
+      superRageUsed: false,
+      roundBestUsedEnergyDrink: opts.freshRound
+        ? false
+        : Boolean(opts.roundBestUsedEnergyDrink
+          ?? (stateRef.current && stateRef.current.roundBestUsedEnergyDrink)),
     };
     setHud({
       phase: PHASE.READY,
@@ -1507,6 +1623,7 @@ function ToolboxKickGame({
           attempt: st.attempt + 1,
           roundBest: st.roundBest,
           attemptDistances: st.attemptDistances || [],
+          roundBestUsedEnergyDrink: st.roundBestUsedEnergyDrink,
         });
       } else if (!competitiveRef.current) {
         initShot({ keepBest: true, attempt: 1, freshRound: true });
@@ -1610,6 +1727,7 @@ function ToolboxKickGame({
     if (!canvas) return undefined;
     const ctx = canvas.getContext('2d');
     let raf = 0;
+    let lastTs = 0;
 
     const syncHud = (st) => {
       setHud({
@@ -1624,7 +1742,7 @@ function ToolboxKickGame({
       });
     };
 
-    const step = () => {
+    const step = (ts) => {
       const st = stateRef.current;
       const tun = tuningRef.current || DEFAULT_TUNING;
       const bar = BAR_SPEED[modeRef.current] || BAR_SPEED.careful;
@@ -1632,13 +1750,17 @@ function ToolboxKickGame({
         raf = requestAnimationFrame(step);
         return;
       }
+      const rawDt = lastTs ? (ts - lastTs) / 1000 : 1 / 60;
+      lastTs = ts;
+      // Cap so a backgrounded tab doesn't jump the meter
+      const dt = Math.min(0.05, Math.max(0, rawDt));
       st.frame += 1;
 
       if (st.phase === PHASE.POWER) {
-        st.powerT += bar.power;
+        st.powerT += bar.power * dt;
         st.power = meterValue(st.powerT);
       } else if (st.phase === PHASE.ANGLE) {
-        st.angleT += bar.angle;
+        st.angleT += bar.angle * dt;
         st.angleDeg = 15 + meterValue(st.angleT) * 60;
       } else if (st.phase === PHASE.RUNUP) {
         st.runup += 1;
@@ -1652,6 +1774,15 @@ function ToolboxKickGame({
           if (st.perfectLaunch) {
             speed *= PERFECT_LAUNCH_BOOST;
             popupFnRef.current?.(perfectLaunchGrade(), 1700);
+          }
+          if (st.superRageArmed) {
+            speed *= SUPER_RAGE_BOOST;
+            st.superRageArmed = false;
+            st.superRageUsed = true;
+            popupFnRef.current?.(superRageGrade(), 1800);
+            if (typeof rageUiRef.current?.onConsumed === 'function') {
+              rageUiRef.current.onConsumed();
+            }
           }
           st.launchSpeed = speed;
           st.launchAngleDeg = st.angleDeg;
@@ -1909,9 +2040,11 @@ function ToolboxKickGame({
               const dist = Math.floor(st.distance);
               if (!Array.isArray(st.attemptDistances)) st.attemptDistances = [];
               // Highest distance wins — negatives are valid (and hilarious)
-              st.roundBest = st.attemptDistances.length === 0
-                ? dist
-                : Math.max(st.roundBest, dist);
+              const prevBest = st.attemptDistances.length === 0 ? null : st.roundBest;
+              if (prevBest === null || dist > prevBest) {
+                st.roundBest = dist;
+                st.roundBestUsedEnergyDrink = Boolean(st.superRageUsed);
+              }
               st.attemptDistances = [...st.attemptDistances, dist];
               if (dist > st.best) {
                 st.best = dist;
@@ -1928,6 +2061,7 @@ function ToolboxKickGame({
                   onRoundCompleteRef.current?.({
                     distanceM: st.roundBest,
                     attempts: [...st.attemptDistances],
+                    energyDrinkUsed: Boolean(st.roundBestUsedEnergyDrink),
                   });
                 }
               } else {
@@ -2103,24 +2237,46 @@ function ToolboxKickGame({
 
       if (st.phase === PHASE.ANGLE) {
         const rad = (st.angleDeg * Math.PI) / 180;
-        const speed = launchSpeedForPower(st.power, tun);
+        const rage = Boolean(st.superRageArmed);
+        let speed = launchSpeedForPower(st.power, tun);
+        if (rage) speed *= SUPER_RAGE_BOOST;
         let gx = BOX_REST_X;
         let gy = GROUND_Y - 12;
         let vx = Math.cos(rad) * speed;
         let vy = -Math.sin(rad) * speed;
-        ctx.strokeStyle = 'rgba(56,189,248,0.45)';
-        ctx.setLineDash([4, 4]);
-        ctx.beginPath();
-        ctx.moveTo(gx - cam, gy);
-        for (let i = 0; i < 50; i += 1) {
+        const points = [{ x: gx - cam, y: gy }];
+        for (let i = 0; i < 55; i += 1) {
           vy += tun.gravity;
           gx += vx;
           gy += vy;
           if (gy > GROUND_Y - 10) break;
-          ctx.lineTo(gx - cam, gy);
+          points.push({ x: gx - cam, y: gy });
         }
+        // Soft under-glow so the arc reads against sky/ground
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.setLineDash([]);
+        ctx.strokeStyle = rage ? 'rgba(239,68,68,0.35)' : 'rgba(255,255,255,0.55)';
+        ctx.lineWidth = 7;
+        ctx.beginPath();
+        points.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
+        ctx.stroke();
+        // Bright dashed aim line
+        ctx.strokeStyle = rage ? 'rgba(248,113,113,0.98)' : 'rgba(14,165,233,0.95)';
+        ctx.lineWidth = 3.5;
+        ctx.setLineDash([10, 7]);
+        ctx.beginPath();
+        points.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
         ctx.stroke();
         ctx.setLineDash([]);
+        // Origin marker
+        ctx.fillStyle = rage ? '#f87171' : '#38bdf8';
+        ctx.beginPath();
+        ctx.arc(points[0].x, points[0].y, 5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = 'rgba(11,18,32,0.7)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
       }
 
       raf = requestAnimationFrame(step);
@@ -2235,6 +2391,24 @@ function ToolboxKickGame({
         >
           Space / tap action
         </button>
+        {(rageAvailable || rageArmed) && !roundDone ? (
+          <button
+            type="button"
+            onClick={armSuperRage}
+            disabled={rageBusy || rageArmed || (competitive && !rageAvailable && !rageArmed)}
+            className={`px-3 py-2 rounded-lg text-sm font-semibold border disabled:opacity-50 ${
+              rageArmed
+                ? 'border-rose-400/60 bg-rose-500/25 text-rose-100'
+                : 'border-rose-500/45 text-rose-100 hover:bg-rose-500/15'
+            }`}
+          >
+            {rageBusy
+              ? 'Chugging…'
+              : rageArmed
+                ? 'Energy drink active · next kick'
+                : 'Drink energy drink (+40%)'}
+          </button>
+        ) : null}
         {!competitive ? (
           <>
             <button
@@ -2261,6 +2435,12 @@ function ToolboxKickGame({
           </button>
         ) : null}
       </div>
+      {rageError ? <p className="text-xs text-rose-300">{rageError}</p> : null}
+      {rageArmed ? (
+        <p className="text-xs text-rose-200/90">
+          Energy drink active — next kick gets +40% speed. One drink per week; everyone refills Monday.
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -2294,6 +2474,10 @@ function IntroBubble({ open, onClose }) {
               Little Dick is mad. Drivers keep defecting buses, he can&apos;t get the part to fit,
               and he&apos;s just dropped his 10mm right in the engine bay. He&apos;s about to kick
               his toolbox — see how far it can go!
+            </p>
+            <p className="text-sm text-rose-200/90 leading-relaxed mt-2">
+              Once a week he can chug an energy drink for Super Rage (+40% speed on one kick).
+              Everyone&apos;s fridge refills on Monday.
             </p>
           </div>
           <label className="flex items-center gap-2 text-xs text-slate-400 cursor-pointer select-none">
@@ -2329,7 +2513,7 @@ function ModeSelect({ onPick, competitive = false }) {
       <p className="text-sm text-slate-300">
         How do you want to boot Dick&apos;s toolbox?
         {competitive
-          ? ' One competitive round per day — pick a mode, then your best distance hits today’s leaderboard.'
+          ? ' One competitive round per day — pick a mode, then your best distance hits today’s leaderboard. One energy drink per week (refills Monday).'
           : ''}
       </p>
       <div className="grid sm:grid-cols-2 gap-3">
@@ -2361,39 +2545,75 @@ function ModeSelect({ onPick, competitive = false }) {
 export function ToolboxKickSandbox() {
   const [introOpen, setIntroOpen] = useState(() => !hasSeenIntro());
   const [mode, setMode] = useState(null);
+  /** Preview what staff see in Fun daily (not practice). */
+  const [drinkPreview, setDrinkPreview] = useState('ready'); // ready | empty
+  const previewRage = drinkPreview === 'ready'
+    ? { available: true, refillDayKey: '2026-09-14', boostPct: 40 }
+    : { available: false, usedThisWeek: true, refillDayKey: '2026-09-14', boostPct: 40 };
 
   return (
     <div className="space-y-4">
       <IntroBubble open={introOpen} onClose={() => setIntroOpen(false)} />
 
-      <div className="rounded-xl border border-[#1a2540] p-4 space-y-2">
-        <p className="text-sm text-slate-300">
-          <span className="text-white font-medium">Little Dicks Toolbox</span>
-          {' '}— Dev sandbox. Tap for power, then angle. Distance callouts head south from Northampton.
-          Competitive Fun from <span className="text-white font-medium">{TOOLBOX_KICK_LIVE_FROM}</span>.
+      <div className="rounded-xl border border-sky-500/35 bg-sky-500/10 px-4 py-3 space-y-2">
+        <p className="text-sm font-semibold text-sky-100">Daily Fun preview</p>
+        <p className="text-xs text-slate-300 leading-relaxed">
+          Layout below matches what players see on the Fun tab (competitive copy, energy-drink banner,
+          drink button). Dev cheats still work. Toggle ready/empty to preview both states.
         </p>
-        <p className="text-xs text-amber-200/90">
-          Dev keys (sandbox only): Y · U · M spawn Julies Car · L spawn Little Dick.
-          Fullscreen button on the canvas.
-        </p>
-        {!introOpen ? (
+        <div className="flex flex-wrap gap-2">
           <button
             type="button"
-            onClick={() => setIntroOpen(true)}
-            className="text-xs text-orange-200/80 hover:text-orange-100 underline-offset-2 hover:underline"
+            onClick={() => setDrinkPreview('ready')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${
+              drinkPreview === 'ready'
+                ? 'border-rose-400/60 bg-rose-500/25 text-rose-100'
+                : 'border-[#1a2540] text-slate-300 hover:bg-white/[0.04]'
+            }`}
           >
-            Show intro again
+            Preview · drink ready
           </button>
-        ) : null}
+          <button
+            type="button"
+            onClick={() => setDrinkPreview('empty')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold border ${
+              drinkPreview === 'empty'
+                ? 'border-slate-400/50 bg-slate-500/25 text-slate-100'
+                : 'border-[#1a2540] text-slate-300 hover:bg-white/[0.04]'
+            }`}
+          >
+            Preview · drink empty
+          </button>
+          {!introOpen ? (
+            <button
+              type="button"
+              onClick={() => setIntroOpen(true)}
+              className="px-3 py-1.5 rounded-lg text-xs text-orange-200/90 border border-orange-500/30 hover:bg-orange-500/10"
+            >
+              Show intro again
+            </button>
+          ) : null}
+        </div>
+        <p className="text-[11px] text-slate-500">
+          Dev keys: Y · U · M · L · Fullscreen on canvas. Cheats only in this sandbox.
+        </p>
       </div>
 
+      <p className="text-sm text-slate-400">
+        One competitive round per London day. Furthest distance wins. Leaderboard resets each weekday.
+      </p>
+
+      <EnergyDrinkBanner practice={false} superRage={previewRage} />
+
       {!mode ? (
-        <ModeSelect onPick={setMode} />
+        <ModeSelect competitive onPick={setMode} />
       ) : (
         <ToolboxKickGame
-          key={mode}
+          key={`${mode}-${drinkPreview}`}
           mode={mode}
+          competitive={false}
           devCheats
+          superRageAvailable={drinkPreview === 'ready'}
           onChangeMode={() => setMode(null)}
         />
       )}
@@ -2409,6 +2629,8 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
   const [error, setError] = useState('');
   const [game, setGame] = useState(null);
   const [leaderboard, setLeaderboard] = useState([]);
+  const [allTimeRecord, setAllTimeRecord] = useState(null);
+  const [superRage, setSuperRage] = useState(null);
   const [mode, setMode] = useState(null);
   const [introOpen, setIntroOpen] = useState(() => !hasSeenIntro());
   const practice = dayKey !== todayKey;
@@ -2423,6 +2645,8 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
     if (payload.weekend || payload.sittingOut) {
       setGame(null);
       setLeaderboard([]);
+      setAllTimeRecord(null);
+      setSuperRage(null);
       setMode(null);
       setError(payload.message || 'Little Dicks Toolbox isn’t in today’s Fun rotation.');
       return;
@@ -2430,6 +2654,8 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
     setError('');
     setGame(payload.game || null);
     setLeaderboard(payload.leaderboard || []);
+    setAllTimeRecord(payload.allTimeRecord || null);
+    setSuperRage(payload.superRage || null);
     if (payload.game?.status === 'won') {
       setMode(payload.game.mode || 'careful');
     } else {
@@ -2457,7 +2683,7 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
     };
   }, [dayKey, load]);
 
-  const submitRound = useCallback(async ({ distanceM, attempts }) => {
+  const submitRound = useCallback(async ({ distanceM, attempts, energyDrinkUsed = false }) => {
     if (practice || !mode) return;
     try {
       setSubmitting(true);
@@ -2469,6 +2695,7 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
           mode,
           distanceM,
           attempts,
+          energyDrinkUsed: Boolean(energyDrinkUsed),
           dayKey: dayKey !== todayKey ? dayKey : undefined,
         }),
       });
@@ -2476,6 +2703,8 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
       if (!response.ok) throw new Error(payload.error || 'Failed to submit score.');
       setGame(payload.game || null);
       if (Array.isArray(payload.leaderboard)) setLeaderboard(payload.leaderboard);
+      if (payload.allTimeRecord !== undefined) setAllTimeRecord(payload.allTimeRecord || null);
+      if (payload.superRage) setSuperRage(payload.superRage);
       if (Array.isArray(payload.achievements) && onAchievements) {
         onAchievements(payload.achievements);
       }
@@ -2487,11 +2716,25 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
     }
   }, [practice, mode, dayKey, todayKey, onAchievements]);
 
+  const activateSuperRage = useCallback(async () => {
+    if (practice) return; // practice: free client-side arm, no cooldown burn
+    const response = await fetch('/api/activateToolboxSuperRage', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    const payload = (await readJsonResponse(response)) || {};
+    if (!response.ok) throw new Error(payload.error || 'Could not activate Super Rage.');
+    if (payload.superRage) setSuperRage(payload.superRage);
+  }, [practice]);
+
   if (loading) return <p className="text-sm text-slate-400">Loading Little Dicks Toolbox…</p>;
   if (error && !game) return <p className="text-sm text-rose-300">{error}</p>;
 
   const alreadyDone = game?.status === 'won';
   const modeLabel = game?.mode === 'allOrNothing' ? 'All or nothing' : '3 goes';
+  const rageReady = practice || Boolean(superRage?.available);
 
   return (
     <div className="space-y-3">
@@ -2512,6 +2755,8 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
         </p>
       )}
 
+      <EnergyDrinkBanner practice={practice} superRage={superRage} alreadyDone={alreadyDone} />
+
       {error ? <p className="text-sm text-rose-300">{error}</p> : null}
 
       <IntroBubble open={introOpen} onClose={() => setIntroOpen(false)} />
@@ -2524,6 +2769,7 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
           </p>
           <p className="text-xs text-slate-400">
             Mode: {modeLabel}
+            {game.energyDrinkUsed ? ' · energy drink' : ''}
             {Array.isArray(game.attempts) && game.attempts.length > 1
               ? ` · attempts ${game.attempts.map((n) => formatDistance(n)).join(', ')}`
               : ''}
@@ -2541,24 +2787,44 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
           mode={mode}
           competitive={!practice}
           onRoundComplete={practice ? null : submitRound}
+          superRageAvailable={rageReady}
+          onActivateSuperRage={practice ? null : activateSuperRage}
         />
+      ) : null}
+
+      {!practice && allTimeRecord ? (
+        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-amber-200/90">
+            All-time record
+          </p>
+          <p className="text-sm text-amber-50 mt-1">
+            <span className="font-semibold">{allTimeRecord.resultLabel || formatDistance(allTimeRecord.distanceM)}</span>
+            {' · '}
+            {allTimeRecord.fullName}
+            {allTimeRecord.uid === currentUserUid ? ' (you)' : ''}
+            {allTimeRecord.dayKey ? ` · ${allTimeRecord.dayKey}` : ''}
+          </p>
+        </div>
       ) : null}
 
       {!practice && leaderboard.length ? (
         <div className="rounded-xl border border-[#1a2540] overflow-hidden">
           <div className="px-4 py-3 border-b border-[#1a2540]">
             <h4 className="text-sm font-semibold text-indigo-200">
-              Today’s leaderboard · furthest distance
+              Today’s leaderboard · furthest distance · {leaderboard.length} player{leaderboard.length === 1 ? '' : 's'}
             </h4>
           </div>
           <ol className="divide-y divide-[#1a2540] px-4 py-2 space-y-0">
-            {leaderboard.slice(0, 15).map((row) => (
+            {leaderboard.map((row) => (
               <FunLeaderboardRow
                 key={row.uid || row.rank}
                 row={row}
                 currentUserUid={currentUserUid}
                 resultText={row.resultLabel || formatDistance(row.distanceM)}
-                metaText={row.mode === 'allOrNothing' ? 'All or nothing' : '3 goes'}
+                metaText={[
+                  row.mode === 'allOrNothing' ? 'All or nothing' : '3 goes',
+                  row.energyDrinkUsed ? '⚡ energy drink' : null,
+                ].filter(Boolean).join(' · ')}
               />
             ))}
           </ol>

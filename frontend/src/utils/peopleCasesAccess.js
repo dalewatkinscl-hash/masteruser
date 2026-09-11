@@ -11,6 +11,50 @@ export function canManagePeopleCases(user) {
   return role === 'manager' || role === 'admin' || role === 'hr';
 }
 
+/** Roles a manager already held on this case (for appeal-recipient conflict warnings). */
+export function describePriorCaseInvolvement(caseData, uid) {
+  if (!caseData || !uid) return [];
+  const roles = [];
+  if (caseData.createdByUid === uid) roles.push('opened the case');
+  if (
+    caseData.ownerManagerUid === uid
+    || caseData.managerUid === uid
+  ) {
+    roles.push('case owner / assigned manager');
+  }
+  if (caseData.investigatorUid === uid) roles.push('investigator');
+  if (caseData.hearingManagerUid === uid) roles.push('hearing manager');
+  if (caseData.decisionMakerUid === uid) roles.push('decision-maker (outcome)');
+  if (caseData.fileNoteIssuedByUid === uid) roles.push('issued the file note');
+  return [...new Set(roles)];
+}
+
+export const ACTIVE_DISCIPLINARY_MEASURE_PRESETS = [
+  'informal_action',
+  'file_note_for_improvement',
+  'verbal_warning',
+  'written_warning',
+  'final_written_warning',
+  'pip',
+];
+
+export const RESTRICTION_OPTIONS = [
+  { id: 'no_tour_work', label: 'No Tour Work' },
+  { id: 'no_vip_sports', label: 'No VIP/Sports' },
+  { id: 'no_large_vehicles', label: 'No Large Vehicles' },
+  { id: 'other', label: 'Other' },
+];
+
+export function restrictionLabel(type, otherDetail = '') {
+  const match = RESTRICTION_OPTIONS.find((item) => item.id === type);
+  if (!match) return type || '';
+  if (type === 'other') {
+    const detail = String(otherDetail || '').trim();
+    return detail ? `Other — ${detail}` : 'Other';
+  }
+  return match.label;
+}
+
 export const PROCESS_FAMILIES = [
   { id: 'disciplinary', label: 'Disciplinary' },
   { id: 'grievance', label: 'Grievance' },
@@ -401,8 +445,8 @@ export function formatCaseTimeToResolution(caseItem = {}) {
 }
 
 export const OUTCOME_PRESETS = [
-  { id: 'informal_action', label: 'Informal action (recorded)', suggestedExpiryMonths: null },
-  { id: 'file_note_for_improvement', label: 'File note for improvement', suggestedExpiryMonths: null },
+  { id: 'informal_action', label: 'Informal action (recorded)', suggestedExpiryMonths: 6 },
+  { id: 'file_note_for_improvement', label: 'File note for improvement', suggestedExpiryMonths: 6 },
   { id: 'no_further_action', label: 'No further action', suggestedExpiryMonths: null },
 
   { id: 'written_warning', label: 'Written warning', suggestedExpiryMonths: 6 },

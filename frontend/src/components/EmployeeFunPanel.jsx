@@ -9,7 +9,6 @@ import { EncloseDailyPanel, EnclosePracticePanel } from './EnclosePanel';
 import { LetterboxDailyPanel, LetterboxPracticePanel } from './LetterboxPanel';
 import { PipesDailyPanel } from './PipesPanel';
 import { ToolboxKickDailyPanel } from './ToolboxKickPanel';
-import { CoinFlipDailyPanel } from './CoinFlipPanel';
 import { WantedDailyPanel } from './WantedPanel';
 import AchievementsPanel from './AchievementsPanel';
 import FunDayPicker, { getLondonDayKey } from './FunDayPicker';
@@ -308,7 +307,6 @@ export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
       letterboxPractice: true,
       pipes: true,
       toolboxkick: true,
-      coinflip: true,
       wanted: true,
       achievements: false,
     };
@@ -445,17 +443,6 @@ export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
       ),
     },
     {
-      id: 'coinflip',
-      title: 'Coin Flip Streak',
-      render: () => (
-        <CoinFlipDailyPanel
-          currentUserUid={currentUserUid}
-          onAchievements={refreshAchievements}
-          isAdmin={isAdmin}
-        />
-      ),
-    },
-    {
       id: 'wanted',
       title: 'Daily Wanted',
       render: () => (
@@ -520,9 +507,6 @@ export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
             : ''}
           {rotation.games?.includes('toolboxkick')
             ? ' Little Dicks Toolbox: one round a day (all or nothing or 3 goes) — furthest distance wins.'
-            : ''}
-          {rotation.games?.includes('coinflip')
-            ? ' Coin Flip: 3 runs a day — one miss ends a run; longest streak wins.'
             : ''}
           {rotation.games?.includes('wanted')
             ? ' Wanted: one attempt — Standard then Impossible; fastest combined time wins.'

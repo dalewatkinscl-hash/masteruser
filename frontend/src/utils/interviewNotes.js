@@ -31,7 +31,9 @@ export function interviewStatusTone(displayStatus) {
 }
 
 export function isAmendmentPending(item = {}) {
-  return item.status === 'amendment_requested';
+  return item.status === 'amendment_requested'
+    || item.status === 'disputed'
+    || item.disputed === true;
 }
 
 export function pendingAmendmentRequests(item = {}) {

@@ -154,20 +154,13 @@ const {
   serializeToolboxKickGame,
   compareToolboxKickRows,
   toolboxKickResultLabel,
+  collectToolboxKickRecords,
   clampDistance: clampToolboxKickDistance,
   normalizeMode: normalizeToolboxKickMode,
+  getSuperRageStatus,
+  SUPER_RAGE_COLLECTION,
   TOOLBOX_KICK_LIVE_FROM,
 } = require('./toolboxKick');
-const {
-  getLondonDayKey: getCoinFlipDayKey,
-  serializeCoinFlipGame,
-  compareCoinFlipRows,
-  coinFlipResultLabel,
-  clampStreak: clampCoinFlipStreak,
-  clampRunsUsed: clampCoinFlipRunsUsed,
-  COIN_FLIP_LIVE_FROM,
-  MAX_RUNS: COIN_FLIP_MAX_RUNS,
-} = require('./coinFlip');
 const {
   getLondonDayKey: getWantedDayKey,
   serializeWantedGame,
@@ -3172,6 +3165,8 @@ exports.clearExpiredPeopleCaseWarnings = onSchedule(
     for (const doc of snap.docs) {
       const data = doc.data();
       if (data.warningClearedAt) continue;
+      // New cases store warningExpiresAt as "" — do not treat that as expired.
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(String(data.warningExpiresAt || '').slice(0, 10))) continue;
       await doc.ref.update({
         warningClearedAt: admin.firestore.FieldValue.serverTimestamp(),
         warningClearedReason: 'expired_scheduler',
@@ -3833,6 +3828,8 @@ exports.exportPeopleCase = peopleCasesApi.exportPeopleCase;
 exports.clearExpiredWarnings = peopleCasesApi.clearExpiredWarnings;
 exports.deletePeopleCase = peopleCasesApi.deletePeopleCase;
 exports.getEmployeeInformalHistory = peopleCasesApi.getEmployeeInformalHistory;
+exports.getActiveDisciplinaryMeasures = peopleCasesApi.getActiveDisciplinaryMeasures;
+exports.getBonusDeductions = peopleCasesApi.getBonusDeductions;
 exports.downloadCaseDocumentTemplate = peopleCasesApi.downloadCaseDocumentTemplate;
 
 const rollCallListsApi = createRollCallListsApi({
@@ -4250,7 +4247,7 @@ async function buildTriviaLeaderboard(dayKey) {
   const snap = await db
     .collection('trivia_answers')
     .where('dayKey', '==', dayKey)
-    .limit(200)
+    .limit(FUN_LEADERBOARD_LIMIT)
     .get();
 
   const rows = snap.docs.map((doc) => {
@@ -5230,7 +5227,7 @@ async function buildWordleLeaderboard(dayKey) {
   const snap = await db
     .collection('wordle_games')
     .where('dayKey', '==', dayKey)
-    .limit(200)
+    .limit(FUN_LEADERBOARD_LIMIT)
     .get();
 
   const rows = snap.docs.map((doc) => {
@@ -5586,7 +5583,7 @@ async function buildSokobanLeaderboard(dayKey) {
   const snap = await db
     .collection('sokoban_games')
     .where('dayKey', '==', dayKey)
-    .limit(200)
+    .limit(FUN_LEADERBOARD_LIMIT)
     .get();
 
   const rows = snap.docs.map((doc) => {
@@ -6115,7 +6112,7 @@ async function buildNonogramLeaderboard(dayKey) {
   const snap = await db
     .collection('nonogram_games')
     .where('dayKey', '==', dayKey)
-    .limit(200)
+    .limit(FUN_LEADERBOARD_LIMIT)
     .get();
 
   const rows = snap.docs.map((doc) => {
@@ -6593,7 +6590,7 @@ exports.submitNonogramState = onRequest(
 );
 
 async function buildBoggleLeaderboard(dayKey) {
-  const snap = await db.collection('boggle_games').where('dayKey', '==', dayKey).limit(200).get();
+  const snap = await db.collection('boggle_games').where('dayKey', '==', dayKey).limit(FUN_LEADERBOARD_LIMIT).get();
   const rows = snap.docs.map((doc) => {
     const data = doc.data() || {};
     return {
@@ -6634,7 +6631,7 @@ async function buildBoggleLeaderboard(dayKey) {
 }
 
 async function buildConnectionsLeaderboard(dayKey) {
-  const snap = await db.collection('connections_games').where('dayKey', '==', dayKey).limit(200).get();
+  const snap = await db.collection('connections_games').where('dayKey', '==', dayKey).limit(FUN_LEADERBOARD_LIMIT).get();
   const rows = snap.docs.map((doc) => {
     const data = doc.data() || {};
     return {
@@ -7843,7 +7840,9 @@ exports.getDailyToolboxKick = onRequest(
         return;
       }
 
-      const leaderboard = practice ? [] : await buildToolboxKickLeaderboard(dayKey);
+      const { leaderboard, allTimeRecord } = practice
+        ? { leaderboard: [], allTimeRecord: null }
+        : await buildToolboxKickLeaderboardBundle(dayKey);
       let gameData = {
         dayKey,
         status: 'in_progress',
@@ -7854,6 +7853,12 @@ exports.getDailyToolboxKick = onRequest(
         if (snap.exists) gameData = snap.data() || gameData;
       }
 
+      const powerSnap = await db.collection(SUPER_RAGE_COLLECTION).doc(session.profile.uid).get();
+      const superRage = getSuperRageStatus(
+        powerSnap.exists ? powerSnap.data() || {} : {},
+        dayKey,
+      );
+
       res.status(200).json({
         practice,
         weekend: false,
@@ -7861,7 +7866,9 @@ exports.getDailyToolboxKick = onRequest(
         toolboxKickLiveFrom: TOOLBOX_KICK_LIVE_FROM,
         game: serializeToolboxKickGame(gameData),
         leaderboard,
+        allTimeRecord: practice ? null : allTimeRecord,
         totalSolved: leaderboard.length,
+        superRage,
       });
     } catch (error) {
       console.error('getDailyToolboxKick failed', error);
@@ -7906,6 +7913,7 @@ exports.submitToolboxKickResult = onRequest(
       const attempts = Array.isArray(req.body?.attempts)
         ? req.body.attempts.map((n) => clampToolboxKickDistance(n)).slice(0, 3)
         : [distanceM];
+      const energyDrinkUsed = req.body?.energyDrinkUsed === true || req.body?.energyDrinkUsed === 'true';
       if (!Number.isFinite(Number(req.body?.distanceM))) {
         res.status(400).json({ error: 'Need a valid distance.' });
         return;
@@ -7921,6 +7929,7 @@ exports.submitToolboxKickResult = onRequest(
             mode,
             distanceM,
             attempts,
+            energyDrinkUsed,
             completedAt: new Date().toISOString(),
           }),
           leaderboard: [],
@@ -7933,11 +7942,12 @@ exports.submitToolboxKickResult = onRequest(
       const ref = db.collection('toolbox_kick_games').doc(gameId);
       const existing = await ref.get();
       if (existing.exists && existing.data()?.status === 'won') {
-        const leaderboard = await buildToolboxKickLeaderboard(dayKey);
+        const { leaderboard, allTimeRecord } = await buildToolboxKickLeaderboardBundle(dayKey);
         res.status(200).json({
           practice: false,
           game: serializeToolboxKickGame(existing.data() || {}),
           leaderboard,
+          allTimeRecord,
           totalSolved: leaderboard.length,
           alreadySubmitted: true,
         });
@@ -7953,6 +7963,7 @@ exports.submitToolboxKickResult = onRequest(
         mode,
         distanceM,
         attempts,
+        energyDrinkUsed,
         completedAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       };
@@ -7975,7 +7986,7 @@ exports.submitToolboxKickResult = onRequest(
       const achievements = serializeAchievements({ ...all, toolboxkick: streaks }, dayKey);
 
       const snap = await ref.get();
-      const leaderboard = await buildToolboxKickLeaderboard(dayKey);
+      const { leaderboard, allTimeRecord } = await buildToolboxKickLeaderboardBundle(dayKey);
       await syncDayMedals(db, {
         gameKey: 'toolboxkick',
         dayKey,
@@ -7987,8 +7998,13 @@ exports.submitToolboxKickResult = onRequest(
         practice: false,
         game: serializeToolboxKickGame(snap.data() || {}),
         leaderboard,
+        allTimeRecord,
         totalSolved: leaderboard.length,
         achievements,
+        superRage: getSuperRageStatus(
+          (await db.collection(SUPER_RAGE_COLLECTION).doc(session.profile.uid).get()).data() || {},
+          dayKey,
+        ),
       });
     } catch (error) {
       console.error('submitToolboxKickResult failed', error);
@@ -7997,75 +8013,8 @@ exports.submitToolboxKickResult = onRequest(
   }),
 );
 
-// GET → Coin Flip Streak state + leaderboard for a London day.
-exports.getDailyCoinFlip = onRequest(
-  { region: 'europe-west2' },
-  withCors(async (req, res) => {
-    if (req.method !== 'GET') {
-      res.status(405).json({ error: 'Method not allowed.' });
-      return;
-    }
-
-    const session = await getVerifiedSessionUser(req);
-    if (!session) {
-      res.status(401).json({ error: 'Authentication required.' });
-      return;
-    }
-
-    try {
-      const todayKey = getCoinFlipDayKey();
-      const sandbox = parseSandboxFlag(req) && canManagePortalAccess(session.profile);
-      if (todayKey < COIN_FLIP_LIVE_FROM && !sandbox) {
-        res.status(403).json({
-          error: `Coin Flip goes live ${COIN_FLIP_LIVE_FROM}.`,
-          coinFlipLiveFrom: COIN_FLIP_LIVE_FROM,
-        });
-        return;
-      }
-      const { dayKey, practice } = resolvePlayableDayKey(req.query?.dayKey, todayKey, {
-        sandbox,
-        allowFuturePreview: sandbox,
-      });
-      const access = await enforceFunGameAccess('coinflip', { dayKey, practice, sandbox }, { softWeekend: true });
-      if (access.closed) {
-        res.status(200).json({
-          ...funAccessClosedPayload(dayKey, access),
-          totalSolved: 0,
-        });
-        return;
-      }
-
-      const leaderboard = practice ? [] : await buildCoinFlipLeaderboard(dayKey);
-      let gameData = {
-        dayKey,
-        status: 'in_progress',
-        bestStreak: 0,
-        runsUsed: 0,
-      };
-      if (!practice) {
-        const snap = await db.collection('coin_flip_games').doc(`${dayKey}_${session.profile.uid}`).get();
-        if (snap.exists) gameData = snap.data() || gameData;
-      }
-
-      res.status(200).json({
-        practice,
-        weekend: false,
-        rotation: access.rotation,
-        coinFlipLiveFrom: COIN_FLIP_LIVE_FROM,
-        game: serializeCoinFlipGame(gameData),
-        leaderboard,
-        totalSolved: leaderboard.length,
-      });
-    } catch (error) {
-      console.error('getDailyCoinFlip failed', error);
-      res.status(error.status || 500).json({ error: error.message || 'Failed to load Coin Flip.' });
-    }
-  }),
-);
-
-// POST { bestStreak?, runComplete?, dayKey?, sandbox? }
-// Improves today's best streak; runComplete marks one of the 3 daily runs as used.
-exports.submitCoinFlipResult = onRequest(
+// POST → drink this week’s energy drink (one Super Rage; refills Monday).
+exports.activateToolboxSuperRage = onRequest(
   { region: 'europe-west2' },
   withCors(async (req, res) => {
     if (req.method !== 'POST') {
@@ -8080,144 +8029,76 @@ exports.submitCoinFlipResult = onRequest(
     }
 
     try {
-      const todayKey = getCoinFlipDayKey();
+      const todayKey = getToolboxKickDayKey();
       const sandbox = parseSandboxFlag(req) && canManagePortalAccess(session.profile);
-      if (todayKey < COIN_FLIP_LIVE_FROM && !sandbox) {
+      if (todayKey < TOOLBOX_KICK_LIVE_FROM && !sandbox) {
         res.status(403).json({
-          error: `Coin Flip goes live ${COIN_FLIP_LIVE_FROM}. Practice scores are not submitted.`,
-          coinFlipLiveFrom: COIN_FLIP_LIVE_FROM,
+          error: `Little Dicks Toolbox goes live ${TOOLBOX_KICK_LIVE_FROM}.`,
+          toolboxKickLiveFrom: TOOLBOX_KICK_LIVE_FROM,
         });
         return;
       }
-      const { dayKey, practice } = resolvePlayableDayKey(req.body?.dayKey, todayKey, {
-        sandbox,
-        allowFuturePreview: sandbox,
-      });
-      await enforceFunGameAccess('coinflip', { dayKey, practice, sandbox });
-
-      const runComplete = req.body?.runComplete === true || req.body?.runComplete === 'true';
-      const bestStreak = clampCoinFlipStreak(req.body?.bestStreak);
-      if (!runComplete && (!Number.isFinite(Number(req.body?.bestStreak)) || bestStreak < 1)) {
-        res.status(400).json({ error: 'Need a streak of at least 1.' });
-        return;
-      }
-
-      if (practice || sandbox) {
-        res.status(200).json({
-          practice: true,
-          sandbox: Boolean(sandbox),
-          game: serializeCoinFlipGame({
-            dayKey,
-            status: 'won',
-            bestStreak,
-            runsUsed: runComplete ? 1 : 0,
-            completedAt: new Date().toISOString(),
-          }),
-          leaderboard: [],
-          totalSolved: 0,
-        });
-        return;
-      }
-
-      const gameId = `${dayKey}_${session.profile.uid}`;
-      const ref = db.collection('coin_flip_games').doc(gameId);
-      const existing = await ref.get();
-      const prev = existing.exists ? existing.data() || {} : {};
-      const prevBest = clampCoinFlipStreak(prev.bestStreak);
-      const prevRuns = clampCoinFlipRunsUsed(prev.runsUsed);
-      const nextBest = Math.max(prevBest, bestStreak);
-      const nextRuns = runComplete
-        ? Math.min(COIN_FLIP_MAX_RUNS, prevRuns + 1)
-        : prevRuns;
-      const dayComplete = nextRuns >= COIN_FLIP_MAX_RUNS;
-      const hadWin = existing.exists && (prev.status === 'won' || prev.status === 'complete') && prevBest >= 1;
-      const firstWin = !hadWin && nextBest >= 1;
-
-      if (!runComplete && nextBest <= prevBest && prevRuns >= COIN_FLIP_MAX_RUNS) {
-        const leaderboard = await buildCoinFlipLeaderboard(dayKey);
-        res.status(200).json({
+      if (!sandbox) {
+        await enforceFunGameAccess('toolboxkick', {
+          dayKey: todayKey,
           practice: false,
-          game: serializeCoinFlipGame(prev),
-          leaderboard,
-          totalSolved: leaderboard.length,
-          alreadySubmitted: true,
+          sandbox: false,
         });
-        return;
       }
 
-      if (!runComplete && nextBest <= prevBest) {
-        const leaderboard = await buildCoinFlipLeaderboard(dayKey);
-        res.status(200).json({
-          practice: false,
-          game: serializeCoinFlipGame(prev),
-          leaderboard,
-          totalSolved: leaderboard.length,
-          alreadySubmitted: true,
-        });
-        return;
-      }
-
-      const payload = {
-        uid: session.profile.uid,
-        fullName: session.profile.fullName || session.profile.email || 'Colleague',
-        email: session.profile.email || '',
-        dayKey,
-        status: dayComplete ? 'complete' : (nextBest >= 1 ? 'won' : 'in_progress'),
-        bestStreak: nextBest,
-        runsUsed: nextRuns,
-        completedAt: prev.completedAt || admin.firestore.FieldValue.serverTimestamp(),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      };
-      if (nextBest > prevBest || (runComplete && dayComplete)) {
-        payload.completedAt = admin.firestore.FieldValue.serverTimestamp();
-      }
-      await ref.set(payload, { merge: true });
-
-      let achievements = null;
-      if (firstWin) {
-        const streaks = await recordFunStreakWin(db, {
+      const ref = db.collection(SUPER_RAGE_COLLECTION).doc(session.profile.uid);
+      const result = await db.runTransaction(async (tx) => {
+        const snap = await tx.get(ref);
+        const data = snap.exists ? snap.data() || {} : {};
+        const status = getSuperRageStatus(data, todayKey);
+        if (!status.available) {
+          const err = new Error(
+            `Energy drink empty — everyone gets a fresh one Monday${status.refillDayKey ? ` (${status.refillDayKey})` : ''}.`,
+          );
+          err.status = 409;
+          err.superRage = status;
+          throw err;
+        }
+        const weekKey = status.weekKey;
+        const payload = {
           uid: session.profile.uid,
-          fullName: payload.fullName,
-          email: payload.email,
-          gameKey: 'coinflip',
-          dayKey,
-          FieldValue: admin.firestore.FieldValue,
-        });
-        const all = await loadFunStreaks(db, session.profile.uid, {
-          todayKey: dayKey,
-          fullName: payload.fullName,
-          email: payload.email,
-          FieldValue: admin.firestore.FieldValue,
-        });
-        achievements = serializeAchievements({ ...all, coinflip: streaks }, dayKey);
-      }
-
-      const snap = await ref.get();
-      const leaderboard = await buildCoinFlipLeaderboard(dayKey);
-      await syncDayMedals(db, {
-        gameKey: 'coinflip',
-        dayKey,
-        leaderboardRows: leaderboard,
-        FieldValue: admin.firestore.FieldValue,
+          fullName: session.profile.fullName || session.profile.email || 'Colleague',
+          email: session.profile.email || '',
+          lastUsedAt: admin.firestore.FieldValue.serverTimestamp(),
+          lastUsedDayKey: todayKey,
+          lastUsedWeekKey: weekKey,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        };
+        tx.set(ref, payload, { merge: true });
+        return getSuperRageStatus({
+          lastUsedDayKey: todayKey,
+          lastUsedWeekKey: weekKey,
+          lastUsedAt: new Date(),
+        }, todayKey);
       });
 
       res.status(200).json({
-        practice: false,
-        game: serializeCoinFlipGame(snap.data() || {}),
-        leaderboard,
-        totalSolved: leaderboard.length,
-        achievements,
+        ok: true,
+        superRage: result,
       });
     } catch (error) {
-      console.error('submitCoinFlipResult failed', error);
-      res.status(error.status || 500).json({ error: error.message || 'Failed to submit Coin Flip.' });
+      if (error.superRage) {
+        res.status(error.status || 409).json({
+          error: error.message || 'Energy drink already used this week.',
+          superRage: error.superRage,
+        });
+        return;
+      }
+      console.error('activateToolboxSuperRage failed', error);
+      res.status(error.status || 500).json({ error: error.message || 'Failed to activate energy drink.' });
     }
   }),
 );
 
+
 async function buildWantedChallengeLeaderboard(dayKey, challenge) {
   const challengeKey = normalizeWantedChallenge(challenge);
-  const snap = await db.collection('wanted_games').where('dayKey', '==', dayKey).limit(200).get();
+  const snap = await db.collection('wanted_games').where('dayKey', '==', dayKey).limit(FUN_LEADERBOARD_LIMIT).get();
   const rows = snap.docs.map((doc) => {
     const data = doc.data() || {};
     const best = data[challengeKey] || null;
@@ -8254,7 +8135,7 @@ async function buildWantedChallengeLeaderboard(dayKey, challenge) {
 }
 
 async function buildWantedCombinedLeaderboard(dayKey) {
-  const snap = await db.collection('wanted_games').where('dayKey', '==', dayKey).limit(200).get();
+  const snap = await db.collection('wanted_games').where('dayKey', '==', dayKey).limit(FUN_LEADERBOARD_LIMIT).get();
   const rows = snap.docs.map((doc) => {
     const data = doc.data() || {};
     const standard = data.standard;
@@ -8543,6 +8424,8 @@ exports.submitWantedResult = onRequest(
   }),
 );
 
+const FUN_LEADERBOARD_LIMIT = 2000;
+
 const FUN_GAME_COLLECTIONS = {
   trivia: 'trivia_answers',
   wordle: 'wordle_games',
@@ -8554,12 +8437,11 @@ const FUN_GAME_COLLECTIONS = {
   letterbox: 'letterbox_games',
   pipes: 'pipes_games',
   toolboxkick: 'toolbox_kick_games',
-  coinflip: 'coin_flip_games',
   wanted: 'wanted_games',
 };
 
 async function buildPipesLeaderboard(dayKey) {
-  const snap = await db.collection('pipes_games').where('dayKey', '==', dayKey).limit(200).get();
+  const snap = await db.collection('pipes_games').where('dayKey', '==', dayKey).limit(FUN_LEADERBOARD_LIMIT).get();
   const rows = snap.docs.map((doc) => {
     const data = doc.data() || {};
     return {
@@ -8594,8 +8476,14 @@ async function buildPipesLeaderboard(dayKey) {
   });
 }
 
-async function buildToolboxKickLeaderboard(dayKey) {
-  const snap = await db.collection('toolbox_kick_games').where('dayKey', '==', dayKey).limit(200).get();
+async function buildToolboxKickLeaderboardBundle(dayKey) {
+  const snap = await db.collection('toolbox_kick_games')
+    .where('status', '==', 'won')
+    .limit(FUN_LEADERBOARD_LIMIT)
+    .get();
+  const { worldRecord, personalBests } = collectToolboxKickRecords(snap.docs);
+  const wrDistance = worldRecord ? worldRecord.distanceM : null;
+
   const rows = snap.docs.map((doc) => {
     const data = doc.data() || {};
     return {
@@ -8604,58 +8492,49 @@ async function buildToolboxKickLeaderboard(dayKey) {
       status: data.status || 'in_progress',
       mode: normalizeToolboxKickMode(data.mode),
       distanceM: clampToolboxKickDistance(data.distanceM),
+      energyDrinkUsed: Boolean(data.energyDrinkUsed),
+      dayKey: data.dayKey || '',
       completedAt: data.completedAt?.toDate?.()?.toISOString?.() || null,
     };
-  }).filter((row) => row.status === 'won');
+  }).filter((row) => row.status === 'won' && row.dayKey === dayKey);
 
   rows.sort(compareToolboxKickRows);
   assignJointRanks(rows, (a, b) => a.distanceM === b.distanceM);
 
-  return rows.map((row) => ({
-    uid: row.uid,
-    fullName: row.fullName,
-    status: row.status,
-    mode: row.mode,
-    distanceM: row.distanceM,
-    rank: row.rank,
-    joint: row.joint,
-    medal: row.medal,
-    completedAt: row.completedAt,
-    resultLabel: toolboxKickResultLabel(row),
-  }));
-}
-
-async function buildCoinFlipLeaderboard(dayKey) {
-  const snap = await db.collection('coin_flip_games').where('dayKey', '==', dayKey).limit(200).get();
-  const rows = snap.docs.map((doc) => {
-    const data = doc.data() || {};
+  const leaderboard = rows.map((row) => {
+    const personalBest = personalBests.get(row.uid);
+    const isPersonalBest = Boolean(
+      personalBest && personalBest.distanceM === row.distanceM,
+    );
+    const isWorldRecord = wrDistance != null && row.distanceM === wrDistance;
     return {
-      uid: data.uid || doc.id,
-      fullName: data.fullName || 'Colleague',
-      status: data.status || 'in_progress',
-      bestStreak: clampCoinFlipStreak(data.bestStreak),
-      completedAt: data.completedAt?.toDate?.()?.toISOString?.() || null,
+      uid: row.uid,
+      fullName: row.fullName,
+      status: row.status,
+      mode: row.mode,
+      distanceM: row.distanceM,
+      energyDrinkUsed: row.energyDrinkUsed,
+      rank: row.rank,
+      joint: row.joint,
+      medal: row.medal,
+      completedAt: row.completedAt,
+      resultLabel: toolboxKickResultLabel(row),
+      isPersonalBest,
+      isWorldRecord,
     };
-  }).filter((row) => (row.status === 'won' || row.status === 'complete') && row.bestStreak >= 1);
+  });
 
-  rows.sort(compareCoinFlipRows);
-  assignJointRanks(rows, (a, b) => a.bestStreak === b.bestStreak);
-
-  return rows.map((row) => ({
-    uid: row.uid,
-    fullName: row.fullName,
-    status: row.status,
-    bestStreak: row.bestStreak,
-    rank: row.rank,
-    joint: row.joint,
-    medal: row.medal,
-    completedAt: row.completedAt,
-    resultLabel: coinFlipResultLabel(row),
-  }));
+  return { leaderboard, allTimeRecord: worldRecord };
 }
+
+async function buildToolboxKickLeaderboard(dayKey) {
+  const { leaderboard } = await buildToolboxKickLeaderboardBundle(dayKey);
+  return leaderboard;
+}
+
 
 async function buildLetterboxLeaderboard(dayKey) {
-  const snap = await db.collection('letterbox_games').where('dayKey', '==', dayKey).limit(200).get();
+  const snap = await db.collection('letterbox_games').where('dayKey', '==', dayKey).limit(FUN_LEADERBOARD_LIMIT).get();
   const rows = snap.docs.map((doc) => {
     const data = doc.data() || {};
     return {
@@ -8699,7 +8578,7 @@ async function buildLetterboxLeaderboard(dayKey) {
 }
 
 async function buildEncloseLeaderboard(dayKey) {
-  const snap = await db.collection('enclose_games').where('dayKey', '==', dayKey).limit(200).get();
+  const snap = await db.collection('enclose_games').where('dayKey', '==', dayKey).limit(FUN_LEADERBOARD_LIMIT).get();
   const rows = snap.docs.map((doc) => {
     const data = doc.data() || {};
     return {
@@ -8771,7 +8650,6 @@ async function buildLeaderboardForGame(gameKey, dayKey) {
   if (gameKey === 'letterbox') return buildLetterboxLeaderboard(dayKey);
   if (gameKey === 'pipes') return buildPipesLeaderboard(dayKey);
   if (gameKey === 'toolboxkick') return buildToolboxKickLeaderboard(dayKey);
-  if (gameKey === 'coinflip') return buildCoinFlipLeaderboard(dayKey);
   if (gameKey === 'wanted') return buildWantedLeaderboard(dayKey);
   return [];
 }
@@ -9226,7 +9104,7 @@ exports.adminResetFunGame = onRequest(
       let deleted = 0;
 
       if (scope === 'day') {
-        const snap = await db.collection(collectionName).where('dayKey', '==', dayKey).limit(200).get();
+        const snap = await db.collection(collectionName).where('dayKey', '==', dayKey).limit(FUN_LEADERBOARD_LIMIT).get();
         const batch = db.batch();
         snap.docs.forEach((doc) => {
           batch.delete(doc.ref);
@@ -9315,7 +9193,6 @@ exports.adminBackfillFunMedals = onRequest(
         letterbox: (dayKey) => buildLetterboxLeaderboard(dayKey),
         pipes: (dayKey) => buildPipesLeaderboard(dayKey),
         toolboxkick: (dayKey) => buildToolboxKickLeaderboard(dayKey),
-        coinflip: (dayKey) => buildCoinFlipLeaderboard(dayKey),
         wanted: (dayKey) => buildWantedLeaderboard(dayKey),
       };
       const dayKeysByGame = {};

@@ -15,6 +15,29 @@ const inputClass = 'w-full bg-[#060e1a] border border-[#1a2540] text-slate-100 t
 const btnSecondary = 'px-3 py-2 text-sm border border-[#1a2540] rounded-lg text-slate-200 hover:bg-[#0b1220]';
 const btnPrimary = 'px-3 py-2 text-sm rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium disabled:opacity-50';
 
+function localDateIso(date = new Date()) {
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, '0'),
+    String(date.getDate()).padStart(2, '0'),
+  ].join('-');
+}
+
+function localTimeHm(date = new Date()) {
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+}
+
+function freshInterviewForm(intervieweeUid = '') {
+  const now = new Date();
+  return {
+    interviewAt: localDateIso(now),
+    interviewTime: localTimeHm(now),
+    intervieweeUid: intervieweeUid || '',
+    managersPresentUids: [],
+    content: '',
+  };
+}
+
 function RecordStatusBadge({ record }) {
   return (
     <span className={`inline-flex px-2 py-0.5 rounded-full text-[10px] uppercase tracking-wide border ${interviewStatusTone(record.status)}`}>
@@ -87,26 +110,24 @@ export default function CaseDocumentationHub({
   onUploadForTemplate,
   onIssueToEmployee,
   onRespondToMinutes,
+  focusMinutesId = null,
+  onFocusMinutesHandled,
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuPos, setMenuPos] = useState({ top: 0, left: 0 });
   const [showInterviewForm, setShowInterviewForm] = useState(false);
+  const [dismissedInitialInterview, setDismissedInitialInterview] = useState(false);
   const [showTemplates, setShowTemplates] = useState(false);
   const [listFilter, setListFilter] = useState('all');
   const [openRecord, setOpenRecord] = useState(null);
   const [interviewError, setInterviewError] = useState('');
   const uploadInputRef = useRef(null);
   const addMenuRef = useRef(null);
+  const autoOpenedKeyRef = useRef('');
 
   const defaultIntervieweeUid = caseData?.employeeUid || '';
 
-  const [interviewForm, setInterviewForm] = useState({
-    interviewAt: new Date().toISOString().slice(0, 10),
-    interviewTime: '10:00',
-    intervieweeUid: defaultIntervieweeUid,
-    managersPresentUids: [],
-    content: '',
-  });
+  const [interviewForm, setInterviewForm] = useState(() => freshInterviewForm(defaultIntervieweeUid));
 
   const allRecords = useMemo(
     () => buildDocumentationRecords({ minutes, documents, caseData }),
@@ -118,6 +139,30 @@ export default function CaseDocumentationHub({
     [allRecords, stageKey],
   );
 
+  const stageInterviewCount = useMemo(
+    () => stageRecords.filter((item) => item.kind === 'interview').length,
+    [stageRecords],
+  );
+
+  /** Stages that open the interview form by default until at least one interview exists. */
+  const isRequiredInterviewStage = (
+    (processFamily === 'disciplinary' && (stageKey === 'fact_finding' || stageKey === 'hearing'))
+    || (processFamily === 'grievance' && stageKey === 'investigation')
+  );
+  const needsRequiredInterview = Boolean(
+    canAdd
+    && isRequiredInterviewStage
+    && stageInterviewCount === 0,
+  );
+  const requiredInterviewTitle = stageKey === 'hearing'
+    ? 'Hearing interview'
+    : stageKey === 'fact_finding'
+      ? 'Initial interview'
+      : 'Interview';
+  const requiredInterviewHint = stageKey === 'hearing'
+    ? 'Required for this hearing. Additional interviews can be added from Add documentation.'
+    : 'Required for this case. Additional interviews can be added from Add documentation.';
+
   const visibleRecords = listFilter === 'stage' ? stageRecords : allRecords;
   const recordsEmptyMessage = documentationEmptyMessage(processFamily, stageKey, listFilter);
   const letterTemplates = useMemo(
@@ -125,6 +170,42 @@ export default function CaseDocumentationHub({
     [templates],
   );
   const missingInterviewNotes = missingDocuments.some((item) => item.documentType === 'minutes');
+
+  useEffect(() => {
+    setDismissedInitialInterview(false);
+  }, [stageKey, caseData?.id]);
+
+  useEffect(() => {
+    if (!focusMinutesId) return;
+    const record = allRecords.find((item) => item.minute?.id === focusMinutesId);
+    if (record) {
+      setListFilter('all');
+      setOpenRecord(record);
+    }
+    onFocusMinutesHandled?.();
+  }, [focusMinutesId, allRecords, onFocusMinutesHandled]);
+
+  useEffect(() => {
+    if (!needsRequiredInterview || dismissedInitialInterview) return;
+    const key = `${caseData?.id || ''}:${stageKey}`;
+    setShowInterviewForm(true);
+    if (autoOpenedKeyRef.current !== key) {
+      autoOpenedKeyRef.current = key;
+      setInterviewForm(freshInterviewForm(defaultIntervieweeUid));
+      return;
+    }
+    setInterviewForm((prev) => ({
+      ...prev,
+      intervieweeUid: prev.intervieweeUid || defaultIntervieweeUid,
+    }));
+  }, [needsRequiredInterview, dismissedInitialInterview, defaultIntervieweeUid, caseData?.id, stageKey]);
+
+  useEffect(() => {
+    if (!defaultIntervieweeUid) return;
+    setInterviewForm((prev) => (
+      prev.intervieweeUid ? prev : { ...prev, intervieweeUid: defaultIntervieweeUid }
+    ));
+  }, [defaultIntervieweeUid]);
 
   useEffect(() => {
     if (!menuOpen) return undefined;
@@ -155,13 +236,7 @@ export default function CaseDocumentationHub({
   };
 
   const resetInterviewForm = () => {
-    setInterviewForm({
-      interviewAt: new Date().toISOString().slice(0, 10),
-      interviewTime: '10:00',
-      intervieweeUid: defaultIntervieweeUid,
-      managersPresentUids: [],
-      content: '',
-    });
+    setInterviewForm(freshInterviewForm(defaultIntervieweeUid));
   };
 
   const submitInterview = async () => {
@@ -213,7 +288,14 @@ export default function CaseDocumentationHub({
               Interview notes are recorded on the portal; Word upload is only needed for letters and outcome documents.
             </p>
           </div>
-          {missingInterviewNotes && canAdd && (
+          {needsRequiredInterview && (
+            <p className="text-xs text-amber-300 w-full">
+              {stageKey === 'hearing'
+                ? 'Record the hearing interview below before continuing to the outcome. You can add more interviews later if needed.'
+                : 'Every disciplinary and grievance case needs an initial interview. The form below is ready — complete it before choosing how the case continues. You can add more interviews later if needed.'}
+            </p>
+          )}
+          {!needsRequiredInterview && missingInterviewNotes && canAdd && (
             <p className="text-xs text-amber-300 w-full">
               Record an interview for this stage before continuing to the next step.
             </p>
@@ -237,10 +319,7 @@ export default function CaseDocumentationHub({
                     type="button"
                     className="block w-full text-left px-4 py-2 text-sm text-slate-200 hover:bg-[#060e1a]"
                     onClick={() => {
-                      setInterviewForm((prev) => ({
-                        ...prev,
-                        intervieweeUid: prev.intervieweeUid || defaultIntervieweeUid,
-                      }));
+                      setInterviewForm(freshInterviewForm(defaultIntervieweeUid));
                       setShowInterviewForm(true);
                       setShowTemplates(false);
                       setMenuOpen(false);
@@ -288,9 +367,27 @@ export default function CaseDocumentationHub({
         {canAdd && showInterviewForm && (
           <div className="rounded-lg border border-indigo-500/30 bg-indigo-500/5 p-4 space-y-3">
             <div className="flex items-center justify-between gap-2">
-              <p className="text-sm font-medium text-indigo-100">Record interview — {stageLabel(stageKey)}</p>
-              <button type="button" className="text-xs text-slate-400 hover:text-slate-200" onClick={() => setShowInterviewForm(false)}>
-                Cancel
+              <div>
+                <p className="text-sm font-medium text-indigo-100">
+                  {needsRequiredInterview
+                    ? `${requiredInterviewTitle} — ${stageLabel(stageKey)}`
+                    : `Record interview — ${stageLabel(stageKey)}`}
+                </p>
+                {needsRequiredInterview && (
+                  <p className="text-xs text-indigo-200/70 mt-0.5">
+                    {requiredInterviewHint}
+                  </p>
+                )}
+              </div>
+              <button
+                type="button"
+                className="text-xs text-slate-400 hover:text-slate-200"
+                onClick={() => {
+                  setShowInterviewForm(false);
+                  if (needsRequiredInterview) setDismissedInitialInterview(true);
+                }}
+              >
+                {needsRequiredInterview ? 'Hide for now' : 'Cancel'}
               </button>
             </div>
             <label className="block space-y-1">

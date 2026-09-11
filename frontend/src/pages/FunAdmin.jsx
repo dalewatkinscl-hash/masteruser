@@ -12,7 +12,6 @@ import { LetterboxSandbox } from '../components/LetterboxPanel';
 import { PipesSandbox } from '../components/PipesPanel';
 import { CasefileSandbox } from '../components/CasefilePanel';
 import { ToolboxKickSandbox } from '../components/ToolboxKickPanel';
-import { CoinFlipSandbox } from '../components/CoinFlipPanel';
 import { WantedSandbox } from '../components/WantedPanel';
 import EmployeeSelect from '../components/EmployeeSelect';
 import SokobanBuilder from '../components/SokobanBuilder';
@@ -363,7 +362,6 @@ function ContentLibrary({ items, onRefresh, onDelete }) {
 const TABS = [
   { id: 'overview', label: 'Rotation' },
   { id: 'test', label: 'Test / preview' },
-  { id: 'coinflip', label: 'Dev · Coin Flip' },
   { id: 'wanted', label: 'Dev · Wanted' },
   { id: 'wordle-suspects', label: 'Wordle suspects' },
   { id: 'enclose', label: 'Dev · Enclose (cow)' },
@@ -1039,7 +1037,6 @@ export default function FunAdmin() {
 
         {tab === 'overview' && <RotationSettingsPanel />}
 
-        {tab === 'coinflip' && <CoinFlipSandbox />}
         {tab === 'wanted' && <WantedSandbox />}
 
         {tab === 'test' && (

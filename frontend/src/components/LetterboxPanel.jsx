@@ -553,7 +553,7 @@ function LetterboxPlayArea({
         <div className="space-y-2">
           <h4 className="text-xs font-semibold uppercase tracking-wider text-slate-400">Leaderboard</h4>
           <ol className="space-y-1.5">
-            {leaderboard.slice(0, 10).map((row) => (
+            {leaderboard.map((row) => (
               <FunLeaderboardRow
                 key={row.uid || row.rank}
                 row={row}

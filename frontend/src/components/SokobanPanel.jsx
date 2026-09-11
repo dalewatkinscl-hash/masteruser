@@ -629,7 +629,7 @@ export default function SokobanPanel({
               <p className="px-4 py-3 text-xs text-slate-500">Nobody has solved today’s Sokoban yet.</p>
             ) : (
               <ol className="divide-y divide-[#1a2540]">
-                {leaderboard.slice(0, 10).map((row) => (
+                {leaderboard.map((row) => (
                   <FunLeaderboardRow
                     key={row.uid || row.rank}
                     row={row}

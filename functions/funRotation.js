@@ -27,9 +27,6 @@ const PIPES_GAME = { key: 'pipes', label: 'Daily Pipes' };
 const TOOLBOX_KICK_LIVE_FROM = '2026-08-26';
 const TOOLBOX_KICK_GAME = { key: 'toolboxkick', label: 'Little Dicks Toolbox' };
 
-const COIN_FLIP_LIVE_FROM = '2026-09-07';
-const COIN_FLIP_GAME = { key: 'coinflip', label: 'Coin Flip Streak' };
-
 /** Live on Fun from this London day key. */
 const WANTED_LIVE_FROM = '2026-09-08';
 const WANTED_GAME = { key: 'wanted', label: 'Daily Wanted' };
@@ -48,7 +45,6 @@ const FUN_GAMES = [
   LETTERBOX_GAME,
   PIPES_GAME,
   TOOLBOX_KICK_GAME,
-  COIN_FLIP_GAME,
   WANTED_GAME,
 ];
 const FUN_GAME_ROSTER = FUN_GAMES;
@@ -155,7 +151,6 @@ function getRosterForDay(dayKey) {
   if (key >= LETTERBOX_LIVE_FROM) roster.push(LETTERBOX_GAME);
   if (key >= PIPES_LIVE_FROM) roster.push(PIPES_GAME);
   if (key >= TOOLBOX_KICK_LIVE_FROM) roster.push(TOOLBOX_KICK_GAME);
-  if (key >= COIN_FLIP_LIVE_FROM) roster.push(COIN_FLIP_GAME);
   if (key >= WANTED_LIVE_FROM) roster.push(WANTED_GAME);
   return roster;
 }
@@ -297,7 +292,6 @@ function getFunRotationForDay(dayKey = getLondonDayKey(), settings = getActiveRo
       pipesLive: key >= PIPES_LIVE_FROM,
       pipesPractice: false,
       toolboxKickLive: key >= TOOLBOX_KICK_LIVE_FROM,
-      coinFlipLive: key >= COIN_FLIP_LIVE_FROM,
       wantedLive: key >= WANTED_LIVE_FROM,
     };
   }
@@ -341,7 +335,6 @@ function getFunRotationForDay(dayKey = getLondonDayKey(), settings = getActiveRo
     pipesLive: key >= PIPES_LIVE_FROM,
     pipesPractice: key < PIPES_LIVE_FROM && !isWeekendDayKey(key),
     toolboxKickLive: key >= TOOLBOX_KICK_LIVE_FROM,
-    coinFlipLive: key >= COIN_FLIP_LIVE_FROM,
     wantedLive: key >= WANTED_LIVE_FROM,
   };
 }
@@ -418,8 +411,6 @@ module.exports = {
   PIPES_LIVE_FROM,
   TOOLBOX_KICK_GAME,
   TOOLBOX_KICK_LIVE_FROM,
-  COIN_FLIP_GAME,
-  COIN_FLIP_LIVE_FROM,
   WANTED_GAME,
   WANTED_LIVE_FROM,
   PERMANENT_FUN_FROM,

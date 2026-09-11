@@ -19,6 +19,7 @@ import {
   sortEmployees,
 } from '../utils/employeeDirectory';
 import { canManagePortalAccess } from '../utils/portalAccess';
+import { canManagePeopleCases } from '../utils/peopleCasesAccess';
 import { useAuth } from '../context/AuthContext';
 import WorkspaceTabs from '../components/WorkspaceTabs';
 
@@ -347,6 +348,7 @@ export default function EmployeesDirectory() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const isAdmin = canManagePortalAccess(user);
+  const canViewDisciplinaryMeasures = canManagePeopleCases(user);
   const [employees, setEmployees] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -571,6 +573,24 @@ export default function EmployeesDirectory() {
           >
             Birthdays and anniversaries
           </button>
+          {canViewDisciplinaryMeasures && (
+            <>
+              <button
+                type="button"
+                onClick={() => navigate('/dashboard/employees/active-disciplinary-measures')}
+                className="px-4 py-2.5 rounded-lg border border-[#1a2540] text-slate-200 text-sm font-medium hover:bg-[#0b1220] transition-colors"
+              >
+                Active disciplinary measures
+              </button>
+              <button
+                type="button"
+                onClick={() => navigate('/dashboard/employees/bonus-deductions')}
+                className="px-4 py-2.5 rounded-lg border border-[#1a2540] text-slate-200 text-sm font-medium hover:bg-[#0b1220] transition-colors"
+              >
+                Bonus deductions
+              </button>
+            </>
+          )}
           <button
             type="button"
             onClick={() => navigate('/dashboard/roll-calls')}

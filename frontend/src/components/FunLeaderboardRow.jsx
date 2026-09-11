@@ -48,6 +48,30 @@ export function FunRankLabel({ row, className = '' }) {
   );
 }
 
+function RecordBadges({ row }) {
+  if (!row?.isWorldRecord && !row?.isPersonalBest) return null;
+  return (
+    <span className="inline-flex items-center gap-1 flex-shrink-0">
+      {row.isWorldRecord ? (
+        <span
+          className="px-1.5 py-0.5 rounded text-[10px] font-semibold tracking-wide uppercase bg-amber-500/20 text-amber-200 border border-amber-500/35"
+          title="All-time world record"
+        >
+          WR
+        </span>
+      ) : null}
+      {row.isPersonalBest ? (
+        <span
+          className="px-1.5 py-0.5 rounded text-[10px] font-semibold tracking-wide uppercase bg-sky-500/15 text-sky-200 border border-sky-500/30"
+          title="Personal record"
+        >
+          PR
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
 export default function FunLeaderboardRow({
   row,
   currentUserUid,
@@ -64,12 +88,13 @@ export default function FunLeaderboardRow({
       <div className="flex items-center gap-2 min-w-0">
         <FunRankBadge row={row} />
         <div className="min-w-0">
-          <div className="flex items-center gap-2 min-w-0">
+          <div className="flex items-center gap-2 min-w-0 flex-wrap">
             <span className={`truncate ${isMe ? 'text-indigo-300 font-semibold text-base' : 'text-slate-100'}`}>
               {row.fullName}
               {isMe ? ' (you)' : ''}
             </span>
             <FunRankLabel row={row} />
+            <RecordBadges row={row} />
           </div>
         </div>
       </div>

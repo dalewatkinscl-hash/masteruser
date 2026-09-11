@@ -5,6 +5,7 @@ import CaseGuidePanel from '../components/CaseGuidePanel';
 import CaseDocumentationHub from '../components/CaseDocumentationHub';
 import CaseProgressRail from '../components/CaseProgressRail';
 import EmployeeSelect from '../components/EmployeeSelect';
+import WorkspaceTabs from '../components/WorkspaceTabs';
 import { useAuth } from '../context/AuthContext';
 import {
   INFORMAL_RESOLUTION_OPTIONS,
@@ -23,11 +24,15 @@ import {
   stagesForCaseDisplay,
   getCaseProgressStatus,
   caseProgressToneClass,
+  describePriorCaseInvolvement,
+  RESTRICTION_OPTIONS,
 } from '../utils/peopleCasesAccess';
 import { nameForUid } from '../utils/caseStageHistory';
 import { buildHearingInviteHtml, printHearingInvite } from '../utils/hearingInvitePrint';
 import { buildFileNoteForImprovementHtml, printHtmlDocument } from '../utils/fileNoteForImprovementPrint';
 import { ALLOW_DELETE_CASES } from '../utils/featureFlags';
+import { isAmendmentPending } from '../utils/interviewNotes';
+import { buildHearingCalendarOffer, buildReviewCalendarOffer, downloadIcsFromOffer } from '../utils/calendarLinks';
 
 const CASE_TYPES = ['attendance', 'conduct', 'performance', 'policy', 'capability', 'grievance', 'vehicle_accident', 'other'];
 const DOCUMENT_TYPES = ['evidence', 'letter', 'minutes', 'warning', 'outcome', 'invite', 'suspension_letter', 'training_outline', 'pip_plan', 'other'];
@@ -91,6 +96,56 @@ function ChoiceButton({ title, help, onClick, disabled, primary, selected }) {
   );
 }
 
+function CalendarOffersBlock({ events, compact = false }) {
+  if (!Array.isArray(events) || !events.length) return null;
+  return (
+    <div className={`rounded-lg border border-sky-500/25 bg-sky-500/10 ${compact ? 'p-3' : 'p-4'} space-y-3`}>
+      <div>
+        <p className={`font-medium text-sky-100 ${compact ? 'text-sm' : 'text-sm'}`}>Add to your calendar</p>
+        <p className="text-xs text-sky-200/80 mt-1">
+          New Outlook often ignores downloaded .ics files. Use Add to Outlook (opens Outlook on the web with the event ready to save).
+        </p>
+      </div>
+      <ul className="space-y-3">
+        {events.map((event, index) => (
+          <li key={`${event.fileName || 'event'}-${index}`} className="rounded-lg border border-sky-500/20 bg-[#060e1a]/50 p-3 space-y-2">
+            <p className="text-sm text-slate-200">{event.summary || event.fileName || `Event ${index + 1}`}</p>
+            <div className="flex flex-wrap gap-2">
+              {event.outlookUrl && (
+                <a
+                  href={event.outlookUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className={`${btnPrimary} text-xs`}
+                >
+                  Add to Outlook
+                </a>
+              )}
+              {event.googleUrl && (
+                <a
+                  href={event.googleUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className={`${btnSecondary} text-xs`}
+                >
+                  Google Calendar
+                </a>
+              )}
+              <button
+                type="button"
+                className={`${btnSecondary} text-xs`}
+                onClick={() => downloadIcsFromOffer(event, index)}
+              >
+                Download .ics
+              </button>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 export default function DisciplinaryCase() {
   const { caseId } = useParams();
   const [searchParams] = useSearchParams();
@@ -116,8 +171,15 @@ export default function DisciplinaryCase() {
   const [sharePointFolderConfirmed, setSharePointFolderConfirmed] = useState(false);
   const [documentTemplates, setDocumentTemplates] = useState([]);
   const [missingDocuments, setMissingDocuments] = useState([]);
-  const [informalHistory, setInformalHistory] = useState([]);
-  const [informalHistoryLoading, setInformalHistoryLoading] = useState(false);
+  const [activeMeasures, setActiveMeasures] = useState([]);
+  const [activeMeasuresLoading, setActiveMeasuresLoading] = useState(false);
+  const [outcomeRestriction, setOutcomeRestriction] = useState({
+    enabled: false,
+    type: '',
+    other: '',
+    duration: '', // '3' | '6' | 'custom'
+    expiresAt: '',
+  });
   const [uploading, setUploading] = useState(false);
   const [uploadType, setUploadType] = useState('evidence');
   const [closeNotes, setCloseNotes] = useState('');
@@ -125,6 +187,8 @@ export default function DisciplinaryCase() {
   const [fileNoteReason, setFileNoteReason] = useState('');
   const [fileNoteActionRequired, setFileNoteActionRequired] = useState('');
   const [selectedFactFindingOutcome, setSelectedFactFindingOutcome] = useState('');
+  const [showFactFindingSuspension, setShowFactFindingSuspension] = useState(false);
+  const [showFactFindingHistoryDetails, setShowFactFindingHistoryDetails] = useState(false);
   const signedFileNoteInputRef = useRef(null);
   const [viewStage, setViewStage] = useState(null);
   const [showExtras, setShowExtras] = useState(false);
@@ -133,6 +197,15 @@ export default function DisciplinaryCase() {
   const [acknowledgeShortNotice, setAcknowledgeShortNotice] = useState(false);
   const [outcomeModal, setOutcomeModal] = useState(null);
   const [outcomeShowErrors, setOutcomeShowErrors] = useState(false);
+  const [calendarOffers, setCalendarOffers] = useState([]);
+  const [focusAmendmentMinutesId, setFocusAmendmentMinutesId] = useState(null);
+  const [amendmentAlertActive, setAmendmentAlertActive] = useState(false);
+  const [reschedulingHearing, setReschedulingHearing] = useState(false);
+  const [reschedulingReviewId, setReschedulingReviewId] = useState(null);
+  const [rescheduleReviewDueAt, setRescheduleReviewDueAt] = useState('');
+  const caseAlertsRef = useRef(null);
+  const docsSectionRef = useRef(null);
+  const hearingScheduleRef = useRef(null);
   const [hearingForm, setHearingForm] = useState({
     hearingScheduledAt: '',
     hearingScheduledTime: '10:00',
@@ -148,7 +221,7 @@ export default function DisciplinaryCase() {
     ownerManagerUid: '',
     processFamily: prefilledFamily,
     caseType: prefilledFamily === 'grievance' ? 'grievance' : prefilledFamily === 'vehicle_accident' ? 'vehicle_accident' : 'conduct',
-    title: '',
+    issue: '',
     summary: '',
     informalResolutionPath: 'resolve_informally',
     informalNotes: '',
@@ -167,6 +240,46 @@ export default function DisciplinaryCase() {
     () => (isNew ? null : normalizeStage(family, caseData?.stage)),
     [isNew, family, caseData?.stage],
   );
+  const hasPendingAmendment = useMemo(
+    () => (Array.isArray(minutes) ? minutes : []).some((item) => isAmendmentPending(item)),
+    [minutes],
+  );
+  const pendingAmendmentMinute = useMemo(
+    () => (Array.isArray(minutes) ? minutes : []).find((item) => isAmendmentPending(item)) || null,
+    [minutes],
+  );
+
+  useEffect(() => {
+    if (!hasPendingAmendment) setAmendmentAlertActive(false);
+  }, [hasPendingAmendment]);
+
+  useEffect(() => {
+    if (!amendmentAlertActive) return;
+    const timer = window.setTimeout(() => {
+      caseAlertsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 50);
+    return () => window.clearTimeout(timer);
+  }, [amendmentAlertActive, error]);
+
+  const scrollToCaseAlerts = () => {
+    requestAnimationFrame(() => {
+      caseAlertsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  };
+
+  const jumpToPendingAmendment = () => {
+    if (!pendingAmendmentMinute) {
+      scrollToCaseAlerts();
+      return;
+    }
+    if (pendingAmendmentMinute.stageKey) {
+      setViewStage(pendingAmendmentMinute.stageKey);
+    }
+    setFocusAmendmentMinutesId(pendingAmendmentMinute.id);
+    window.setTimeout(() => {
+      docsSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 80);
+  };
 
   useEffect(() => {
     if (currentStage) setViewStage(currentStage);
@@ -205,6 +318,16 @@ export default function DisciplinaryCase() {
     return employees.find((item) => item.uid === uid)?.fullName || '';
   }, [caseData?.hearingManagerUid, employees]);
 
+  const appealRecipientPriorRoles = useMemo(
+    () => describePriorCaseInvolvement(caseData, outcomeModal?.appealRecipientUid),
+    [caseData, outcomeModal?.appealRecipientUid],
+  );
+
+  const appealOwnerPriorRoles = useMemo(
+    () => describePriorCaseInvolvement(caseData, caseData?.appealOwnerUid),
+    [caseData],
+  );
+
   const recordedByName = useMemo(() => {
     if (!caseData) return '';
     if (caseData.createdByName) return caseData.createdByName;
@@ -228,6 +351,19 @@ export default function DisciplinaryCase() {
     if (caseData.managerNameSnapshot) return caseData.managerNameSnapshot;
     return nameForUid(caseData.ownerManagerUid || caseData.managerUid, employees);
   }, [caseData, employees]);
+
+  const selectedEmployeeName = useMemo(() => {
+    if (!form.employeeUid) return prefilledEmployeeName || '';
+    const person = employees.find((item) => item.uid === form.employeeUid);
+    return person?.fullName || person?.email || prefilledEmployeeName || '';
+  }, [employees, form.employeeUid, prefilledEmployeeName]);
+
+  const composedCaseTitle = useMemo(() => {
+    const name = selectedEmployeeName.trim() || 'Employee';
+    const issue = String(form.issue || '').trim() || '…';
+    const dateLabel = new Date().toLocaleDateString('en-GB');
+    return `${name} - ${issue} - ${dateLabel}`;
+  }, [selectedEmployeeName, form.issue]);
 
   const todayIso = new Date().toISOString().slice(0, 10);
   const hearingAt = hearingForm.hearingScheduledAt
@@ -273,9 +409,8 @@ export default function DisciplinaryCase() {
     setForm((prev) => ({
       ...prev,
       employeeUid: prefilledEmployeeUid,
-      title: prev.title || (prefilledEmployeeName ? `Case: ${prefilledEmployeeName}` : ''),
     }));
-  }, [isNew, prefilledEmployeeUid, prefilledEmployeeName]);
+  }, [isNew, prefilledEmployeeUid]);
 
   useEffect(() => {
     const loadEmployees = async () => {
@@ -335,25 +470,180 @@ export default function DisciplinaryCase() {
     setForm((prev) => ({
       ...prev,
       employeeUid: resolvedUid,
-      title: prev.title?.trim()
-        ? prev.title
-        : (person?.fullName ? `Case: ${person.fullName}` : prev.title),
     }));
-    setInformalHistory([]);
+    setActiveMeasures([]);
     if (resolvedUid) {
-      setInformalHistoryLoading(true);
-      fetch(`/api/getEmployeeInformalHistory?employeeUid=${encodeURIComponent(resolvedUid)}`, { credentials: 'include' })
+      setActiveMeasuresLoading(true);
+      fetch(`/api/getActiveDisciplinaryMeasures?employeeUid=${encodeURIComponent(resolvedUid)}`, { credentials: 'include' })
         .then((r) => readJsonResponse(r).then((d) => ({ ok: r.ok, d })))
-        .then(({ ok, d }) => { if (ok) setInformalHistory((d || {}).items || []); })
+        .then(({ ok, d }) => {
+          if (ok) setActiveMeasures((d || {}).items || (d || {}).rows?.[0]?.measures || []);
+        })
         .catch(() => {})
-        .finally(() => setInformalHistoryLoading(false));
+        .finally(() => setActiveMeasuresLoading(false));
     }
+  };
+
+  const emptyRestriction = {
+    enabled: false,
+    type: '',
+    other: '',
+    duration: '',
+    expiresAt: '',
+  };
+
+  const restrictionPayload = (restriction = outcomeRestriction) => {
+    if (!restriction?.enabled) {
+      return { restrictionEnabled: false };
+    }
+    return {
+      restrictionEnabled: true,
+      restrictionType: restriction.type || '',
+      restrictionDetail: restriction.other || '',
+      restrictionExpiresAt: restriction.expiresAt || '',
+    };
+  };
+
+  const restrictionReady = (restriction = outcomeRestriction) => {
+    if (!restriction?.enabled) return true;
+    if (!restriction.type) return false;
+    if (restriction.type === 'other' && !String(restriction.other || '').trim()) return false;
+    if (!restriction.duration) return false;
+    if (!String(restriction.expiresAt || '').trim()) return false;
+    return true;
+  };
+
+  const applyRestrictionDuration = (prev, duration) => {
+    const today = new Date().toISOString().slice(0, 10);
+    if (duration === '3') {
+      return { ...prev, duration: '3', expiresAt: addMonthsIso(today, 3) };
+    }
+    if (duration === '6') {
+      return { ...prev, duration: '6', expiresAt: addMonthsIso(today, 6) };
+    }
+    if (duration === 'custom') {
+      return { ...prev, duration: 'custom', expiresAt: prev.duration === 'custom' ? prev.expiresAt : '' };
+    }
+    return { ...prev, duration: '', expiresAt: '' };
+  };
+
+  const renderRestrictionFields = (restriction, setRestriction, { disabled = false } = {}) => (
+    <div className="rounded-lg border border-[#1a2540] bg-[#060e1a]/40 p-3 space-y-3">
+      <label className="flex items-start gap-2 text-sm text-slate-200">
+        <input
+          type="checkbox"
+          className="mt-0.5"
+          checked={Boolean(restriction.enabled)}
+          disabled={disabled}
+          onChange={(e) => setRestriction((prev) => (
+            e.target.checked
+              ? { ...prev, enabled: true }
+              : { ...emptyRestriction }
+          ))}
+        />
+        <span>
+          Add a work restriction
+          <span className="block text-xs text-slate-500 mt-0.5">
+            Optional add-on to this outcome (not an outcome itself).
+          </span>
+        </span>
+      </label>
+      {restriction.enabled && (
+        <div className="space-y-3">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <Field label="Restriction">
+              <select
+                className={inputClass}
+                value={restriction.type}
+                disabled={disabled}
+                onChange={(e) => setRestriction((prev) => ({ ...prev, type: e.target.value }))}
+              >
+                <option value="">Select restriction…</option>
+                {RESTRICTION_OPTIONS.map((item) => (
+                  <option key={item.id} value={item.id}>{item.label}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Restriction length">
+              <div className="flex flex-wrap gap-2">
+                {[
+                  { id: '3', label: '3 months' },
+                  { id: '6', label: '6 months' },
+                  { id: 'custom', label: 'Custom date' },
+                ].map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    disabled={disabled}
+                    className={`px-3 py-2 text-sm rounded-lg border ${
+                      restriction.duration === opt.id
+                        ? 'border-indigo-500 bg-indigo-500/20 text-indigo-100'
+                        : 'border-[#1a2540] text-slate-300 hover:bg-[#0b1220]'
+                    }`}
+                    onClick={() => setRestriction((prev) => applyRestrictionDuration(prev, opt.id))}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </Field>
+          </div>
+          {restriction.duration === 'custom' && (
+            <Field label="Restriction expires">
+              <input
+                type="date"
+                className={inputClass}
+                value={restriction.expiresAt}
+                disabled={disabled}
+                min={new Date().toISOString().slice(0, 10)}
+                onChange={(e) => setRestriction((prev) => ({
+                  ...prev,
+                  duration: 'custom',
+                  expiresAt: e.target.value,
+                }))}
+              />
+            </Field>
+          )}
+          {restriction.duration && restriction.duration !== 'custom' && restriction.expiresAt && (
+            <p className="text-xs text-slate-500">
+              Expires {String(restriction.expiresAt).slice(0, 10).split('-').reverse().join('/')}
+            </p>
+          )}
+          {restriction.type === 'other' && (
+            <Field label="Specify other restriction">
+              <input
+                className={inputClass}
+                value={restriction.other}
+                disabled={disabled}
+                placeholder="Describe the restriction…"
+                onChange={(e) => setRestriction((prev) => ({ ...prev, other: e.target.value }))}
+              />
+            </Field>
+          )}
+        </div>
+      )}
+    </div>
+  );
+
+  const applyCalendarOffers = (events = []) => {
+    const list = Array.isArray(events) ? events.filter(Boolean) : [];
+    if (!list.length) return;
+    setCalendarOffers(list);
+    window.setTimeout(() => {
+      caseAlertsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 60);
   };
 
   const apiUpdate = async (body) => {
     setSaving(true);
     setError('');
     setMessage('');
+    const keepCalendar = body.issueHearingInvite === true
+      || body.finalizeOutcome === true
+      || body.closeWithNotes === true
+      || body.issueFileNoteForImprovement === true
+      || Boolean(body.rescheduleReview);
+    if (!keepCalendar) setCalendarOffers([]);
     try {
       const response = await fetch('/api/updatePeopleCase', {
         method: 'POST',
@@ -371,7 +661,15 @@ export default function DisciplinaryCase() {
           setError(data.error || 'Upload required documents before continuing.');
           return { ok: false, code: 'missing_documents', data };
         }
+        if (data.code === 'amendment_pending') {
+          setAmendmentAlertActive(true);
+          setError(data.error || 'Address the employee amendment request before continuing.');
+          return { ok: false, code: 'amendment_pending', data };
+        }
         throw new Error(data.error || `Update failed (${response.status}).`);
+      }
+      if (Array.isArray(data.calendarEvents) && data.calendarEvents.length) {
+        applyCalendarOffers(data.calendarEvents);
       }
       setMessage(data.message || 'Updated.');
       await reload();
@@ -389,6 +687,10 @@ export default function DisciplinaryCase() {
       setError('Select the employee this case is about, then open the case.');
       return;
     }
+    if (!String(form.issue || '').trim()) {
+      setError('Enter the issue before opening the case.');
+      return;
+    }
     if ((form.processFamily === 'disciplinary' || form.processFamily === 'grievance') && !form.informalResolutionPath) {
       setError('Choose how you are starting the case before opening it.');
       return;
@@ -402,6 +704,8 @@ export default function DisciplinaryCase() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...form,
+          issue: String(form.issue || '').trim(),
+          title: composedCaseTitle,
           informalTried: form.informalResolutionPath === 'proceed_formal',
         }),
       });
@@ -587,33 +891,38 @@ export default function DisciplinaryCase() {
     && stageAllowsDocumentation(family, currentStage);
 
   const documentationHub = !isNew && displayStage ? (
-    <CaseDocumentationHub
-      stageKey={displayStage}
-      processFamily={family}
-      caseData={caseData}
-      minutes={minutes}
-      documents={documents}
-      templates={documentTemplates}
-      missingDocuments={missingDocuments}
-      sharePointConfigured={sharePointConfigured}
-      sharePointPath={sharePointPath}
-      sharePointFolderConfirmed={sharePointFolderConfirmed}
-      employees={employees}
-      employeesLoading={employeesLoading}
-      uploading={uploading}
-      saving={saving}
-      canAdd={canAddDocumentation && !viewingPastStage}
-      meetingType={meetingTypeForStage}
-      documentTypes={DOCUMENT_TYPES}
-      uploadType={uploadType}
-      onUploadTypeChange={setUploadType}
-      onRecordInterview={recordInterview}
-      onUploadDocument={handleUploadDocument}
-      onDownloadTemplate={handleDownloadTemplate}
-      onUploadForTemplate={(template, event) => handleUploadDocument(event, template)}
-      onIssueToEmployee={issueDocumentToEmployee}
-      onRespondToMinutes={respondToMinutes}
-    />
+    <div ref={docsSectionRef} id="case-documentation-hub">
+      <CaseDocumentationHub
+        stageKey={displayStage}
+        processFamily={family}
+        caseData={caseData}
+        minutes={minutes}
+        documents={documents}
+        templates={documentTemplates}
+        missingDocuments={missingDocuments}
+        sharePointConfigured={sharePointConfigured}
+        sharePointPath={sharePointPath}
+        sharePointFolderConfirmed={sharePointFolderConfirmed}
+        employees={employees}
+        employeesLoading={employeesLoading}
+        uploading={uploading}
+        saving={saving}
+        canAdd={canAddDocumentation && !viewingPastStage}
+        meetingType={meetingTypeForStage}
+        documentTypes={DOCUMENT_TYPES}
+        uploadType={uploadType}
+        onUploadTypeChange={setUploadType}
+        onRecordInterview={recordInterview}
+        onUploadDocument={handleUploadDocument}
+        onDownloadTemplate={handleDownloadTemplate}
+        onUploadForTemplate={(template, event) => handleUploadDocument(event, template)}
+        onIssueToEmployee={issueDocumentToEmployee}
+        onRespondToMinutes={respondToMinutes}
+        focusMinutesId={focusAmendmentMinutesId}
+        onFocusMinutesHandled={() => setFocusAmendmentMinutesId(null)}
+        key={caseData?.id || 'case-docs'}
+      />
+    </div>
   ) : null;
 
   const exportCase = async () => {
@@ -709,6 +1018,11 @@ export default function DisciplinaryCase() {
         || (needsDuration(presetId) ? 6 : null),
       reviews: [{ title: 'Review meeting', dueAt: '', notes: '' }],
       supersedeCaseIds: [],
+      restrictionEnabled: false,
+      restrictionType: '',
+      restrictionOther: '',
+      restrictionDuration: '',
+      restrictionExpiresAt: '',
     });
   };
 
@@ -759,6 +1073,12 @@ export default function DisciplinaryCase() {
     if (!String(modal.supportMonitoringRetraining || '').trim()) return false;
     if (!String(modal.appealRecipientUid || '').trim()) return false;
     if (needsDuration(modal.presetId) && !modal.durationMonths) return false;
+    if (modal.restrictionEnabled) {
+      if (!modal.restrictionType) return false;
+      if (modal.restrictionType === 'other' && !String(modal.restrictionOther || '').trim()) return false;
+      if (!modal.restrictionDuration) return false;
+      if (!String(modal.restrictionExpiresAt || '').trim()) return false;
+    }
     return true;
   };
 
@@ -824,6 +1144,14 @@ export default function DisciplinaryCase() {
       body.warningExpiresAt = addMonthsIso(today, durationMonths);
       body.warningDurationMonths = durationMonths;
     }
+    if (outcomeModal.restrictionEnabled) {
+      body.restrictionEnabled = true;
+      body.restrictionType = outcomeModal.restrictionType || '';
+      body.restrictionDetail = outcomeModal.restrictionOther || '';
+      body.restrictionExpiresAt = outcomeModal.restrictionExpiresAt || '';
+    } else {
+      body.restrictionEnabled = false;
+    }
     const result = await apiUpdate(body);
     if (result?.ok) {
       setOutcomeModal(null);
@@ -867,32 +1195,195 @@ export default function DisciplinaryCase() {
     </div>
   );
 
+  const factFindingHistoryPanel = (
+    <div className="rounded-xl border border-[#1a2540] bg-[#060e1a]/40 p-4 space-y-3">
+      <div>
+        <p className="text-sm font-semibold text-white">Unexpired disciplinary history</p>
+        <p className="text-xs text-slate-400 mt-1">
+          Review live warnings on this employee before the initial interview.
+        </p>
+      </div>
+      {history.length === 0 ? (
+        <p className="text-sm text-slate-500">No unexpired warnings on record.</p>
+      ) : (
+        <ul className="space-y-2">
+          {history.map((item) => (
+            <li key={item.id}>
+              <button
+                type="button"
+                className="w-full text-left text-sm text-slate-300 border border-[#1a2540] rounded-lg px-3 py-2 hover:border-indigo-500/40 hover:bg-indigo-500/10 hover:text-indigo-100"
+                onClick={() => openActiveWarningCase(item)}
+              >
+                {formatActiveWarning(item)}
+                <span className="block text-[11px] text-indigo-300 mt-1">Open case ↗</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <button
+        type="button"
+        className={btnSecondary}
+        disabled={saving || Boolean(caseData?.historyReviewedAt)}
+        onClick={() => apiUpdate({ historyReviewed: true })}
+      >
+        {caseData?.historyReviewedAt ? 'History reviewed ✓' : 'Mark history reviewed'}
+      </button>
+    </div>
+  );
+
+  const factFindingOptionalTools = (
+    <div className="rounded-xl border border-[#1a2540] border-dashed bg-[#060e1a]/25 p-4 space-y-3">
+      <div>
+        <p className="text-sm font-medium text-slate-300">Optional tools</p>
+        <p className="text-xs text-slate-500 mt-1">
+          History, suspension, and extra documentation — use if needed; the next step is choosing an outcome above.
+        </p>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          className={btnSecondary}
+          onClick={() => setShowFactFindingHistoryDetails((open) => !open)}
+        >
+          {showFactFindingHistoryDetails
+            ? 'Hide disciplinary history'
+            : `Disciplinary history${history.length ? ` (${history.length})` : ''}…`}
+        </button>
+        <button
+          type="button"
+          className={btnSecondary}
+          onClick={() => setShowFactFindingSuspension((open) => !open)}
+        >
+          {showFactFindingSuspension || caseData?.suspensionActive
+            ? 'Hide suspension options'
+            : 'Precautionary suspension…'}
+        </button>
+        {caseData?.suspensionActive && (
+          <span className="text-xs text-amber-300 self-center">Suspension currently active</span>
+        )}
+      </div>
+      {showFactFindingHistoryDetails && factFindingHistoryPanel}
+      {(showFactFindingSuspension || caseData?.suspensionActive) && (
+        <div className="rounded-lg border border-[#1a2540] p-3 space-y-2">
+          <p className="text-sm text-slate-300">Optional: precautionary suspension</p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              className={btnSecondary}
+              disabled={saving}
+              onClick={() => apiUpdate({
+                precautionarySuspension: true,
+                suspensionFrom: new Date().toISOString().slice(0, 10),
+                suspensionReason: 'Precautionary pending investigation',
+              })}
+            >
+              Start precautionary suspension
+            </button>
+            <button
+              type="button"
+              className={btnSecondary}
+              disabled={saving || !caseData?.suspensionActive}
+              onClick={() => apiUpdate({ endSuspension: true })}
+            >
+              End suspension
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+  const factFindingSuspensionControls = (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          className={btnSecondary}
+          onClick={() => setShowFactFindingSuspension((open) => !open)}
+        >
+          {showFactFindingSuspension || caseData?.suspensionActive
+            ? 'Hide suspension options'
+            : 'Precautionary suspension…'}
+        </button>
+        {caseData?.suspensionActive && (
+          <span className="text-xs text-amber-300">Suspension currently active</span>
+        )}
+      </div>
+      {(showFactFindingSuspension || caseData?.suspensionActive) && (
+        <div className="rounded-lg border border-[#1a2540] p-3 space-y-2">
+          <p className="text-sm text-slate-300">Optional: precautionary suspension</p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              className={btnSecondary}
+              disabled={saving}
+              onClick={() => apiUpdate({
+                precautionarySuspension: true,
+                suspensionFrom: new Date().toISOString().slice(0, 10),
+                suspensionReason: 'Precautionary pending investigation',
+              })}
+            >
+              Start precautionary suspension
+            </button>
+            <button
+              type="button"
+              className={btnSecondary}
+              disabled={saving || !caseData?.suspensionActive}
+              onClick={() => apiUpdate({ endSuspension: true })}
+            >
+              End suspension
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
   const closeWithNotes = async () => {
+    if (!restrictionReady()) {
+      setError('Complete the restriction details or turn the restriction off.');
+      return;
+    }
     const result = await apiUpdate({
       closeWithNotes: true,
       closeNotes,
       outcomePreset: 'no_further_action',
+      ...restrictionPayload(),
     });
-    if (result?.ok) setCloseNotes('');
+    if (result?.ok) {
+      setCloseNotes('');
+      setOutcomeRestriction({ ...emptyRestriction });
+    }
   };
 
   const closeAsInformalAction = async () => {
     const result = await apiUpdate({
       closeAsInformalAction: true,
       informalActionDetails,
+      restrictionEnabled: false,
     });
-    if (result?.ok) setInformalActionDetails('');
+    if (result?.ok) {
+      setInformalActionDetails('');
+      setOutcomeRestriction({ ...emptyRestriction });
+    }
   };
 
   const issueFileNoteForImprovement = async () => {
+    if (!restrictionReady()) {
+      setError('Complete the restriction details or turn the restriction off.');
+      return;
+    }
     const result = await apiUpdate({
       issueFileNoteForImprovement: true,
       fileNoteReason,
       fileNoteActionRequired,
+      ...restrictionPayload(),
     });
     if (result?.ok) {
       setFileNoteReason('');
       setFileNoteActionRequired('');
+      setOutcomeRestriction({ ...emptyRestriction });
       const html = result.data?.fileNoteHtml;
       if (html) {
         try {
@@ -1115,10 +1606,132 @@ export default function DisciplinaryCase() {
       precautionarySuspension: hearingForm.suspensionPending,
       suspensionReason: hearingForm.suspensionReason || '',
     });
-    if (result?.ok) {
-      setAcknowledgeShortNotice(false);
-      setMessage('Hearing invite sent to the employee portal.');
+    if (!result?.ok) return;
+    setAcknowledgeShortNotice(false);
+    const fromApi = Array.isArray(result.data?.calendarEvents) ? result.data.calendarEvents : [];
+    const localOffer = buildHearingCalendarOffer({
+      caseId,
+      employeeName: caseData?.employeeNameSnapshot || '',
+      caseTitle: caseData?.title || '',
+      hearingScheduledAt: hearingForm.hearingScheduledAt,
+      hearingScheduledTime: hearingForm.hearingScheduledTime,
+      hearingLocation: hearingForm.hearingLocation || 'Country Lion',
+      notes: hearingForm.hearingInviteNotes,
+    });
+    applyCalendarOffers(fromApi.length ? fromApi : (localOffer ? [localOffer] : []));
+    setReschedulingHearing(false);
+    setMessage(
+      fromApi.length || localOffer
+        ? 'Hearing invite sent. Use Add to Outlook below to put the hearing in your calendar.'
+        : 'Hearing invite sent to the employee portal.',
+    );
+  };
+
+  const beginRescheduleHearing = () => {
+    setReschedulingHearing(true);
+    window.setTimeout(() => {
+      hearingScheduleRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 50);
+  };
+
+  const saveRescheduledReview = async (review) => {
+    if (!review?.id || !rescheduleReviewDueAt) {
+      setError('Choose a new review date.');
+      return;
     }
+    const result = await apiUpdate({
+      rescheduleReview: {
+        reviewId: review.id,
+        dueAt: rescheduleReviewDueAt,
+        title: review.title || 'Review meeting',
+        notes: review.notes || '',
+      },
+    });
+    if (!result?.ok) return;
+    const fromApi = Array.isArray(result.data?.calendarEvents) ? result.data.calendarEvents : [];
+    const localOffer = buildReviewCalendarOffer({
+      caseId,
+      reviewId: review.id,
+      title: review.title || 'Review meeting',
+      employeeName: caseData?.employeeNameSnapshot || '',
+      caseTitle: caseData?.title || '',
+      dueAt: rescheduleReviewDueAt,
+      notes: review.notes || '',
+    });
+    applyCalendarOffers(fromApi.length ? fromApi : (localOffer ? [localOffer] : []));
+    setReschedulingReviewId(null);
+    setRescheduleReviewDueAt('');
+    setMessage('Review rescheduled. Use Add to Outlook below if you need an updated calendar entry.');
+  };
+
+  const renderScheduledReviews = (items = reviews) => {
+    if (!items.length) return null;
+    return (
+      <div className="rounded-lg border border-[#1a2540] p-3 space-y-2">
+        <p className="text-sm font-medium text-slate-200">Scheduled reviews</p>
+        <ul className="space-y-2">
+          {items.map((item) => {
+            const isOpen = item.status !== 'completed';
+            const editing = reschedulingReviewId === item.id;
+            return (
+              <li key={item.id} className="rounded-lg border border-[#1a2540] bg-[#060e1a]/40 px-3 py-2 space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm text-slate-300">
+                    {item.title || 'Review meeting'} · due {formatWarningExpiry(item.dueAt)} · {item.status || 'open'}
+                  </p>
+                  {isOpen && !editing && (
+                    <button
+                      type="button"
+                      className={`${btnSecondary} text-xs py-1`}
+                      disabled={saving}
+                      onClick={() => {
+                        setReschedulingReviewId(item.id);
+                        setRescheduleReviewDueAt(String(item.dueAt || '').slice(0, 10));
+                      }}
+                    >
+                      Reschedule
+                    </button>
+                  )}
+                </div>
+                {editing && (
+                  <div className="flex flex-wrap items-end gap-2">
+                    <label className="space-y-1">
+                      <span className="block text-[11px] uppercase tracking-wide text-slate-500">New date</span>
+                      <input
+                        type="date"
+                        className={inputClass}
+                        min={todayIso}
+                        value={rescheduleReviewDueAt}
+                        onChange={(e) => setRescheduleReviewDueAt(e.target.value)}
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      className={btnPrimary}
+                      disabled={saving || !rescheduleReviewDueAt}
+                      onClick={() => saveRescheduledReview(item)}
+                    >
+                      Save new date
+                    </button>
+                    <button
+                      type="button"
+                      className={btnSecondary}
+                      disabled={saving}
+                      onClick={() => {
+                        setReschedulingReviewId(null);
+                        setRescheduleReviewDueAt('');
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+    );
   };
 
   const uploadedDocumentsList = (
@@ -1155,226 +1768,158 @@ export default function DisciplinaryCase() {
 
   const renderDisciplinaryStep = () => {
     if (currentStage === 'fact_finding') {
+      if (needsPortalInterview) {
+        return null;
+      }
+
       return (
-        <StepCard title="Step 1 — Fact-finding interview">
+        <StepCard title="After fact-finding — choose one outcome">
           <p className="text-sm text-slate-400">
-            Hold an initial fact-finding interview (not a formal hearing). Record notes on the portal, then choose how the matter resolves.
+            Pick the route that matches what happened. Extra interviews and uploads are optional and sit below.
           </p>
 
-          <div className="rounded-lg border border-[#1a2540] p-3 space-y-3">
-            <p className="text-sm font-medium text-slate-200">Unexpired disciplinary history</p>
-            {history.length === 0 ? (
-              <p className="text-sm text-slate-500">No unexpired warnings on record.</p>
-            ) : (
-              <ul className="space-y-2">
-                {history.map((item) => (
-                  <li key={item.id}>
-                    <button
-                      type="button"
-                      className="w-full text-left text-sm text-slate-300 border border-[#1a2540] rounded-lg px-3 py-2 hover:border-indigo-500/40 hover:bg-indigo-500/10 hover:text-indigo-100"
-                      onClick={() => openActiveWarningCase(item)}
-                    >
-                      {formatActiveWarning(item)}
-                      <span className="block text-[11px] text-indigo-300 mt-1">Open case ↗</span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-            <button
-              type="button"
-              className={btnSecondary}
-              disabled={saving || Boolean(caseData?.historyReviewedAt)}
-              onClick={() => apiUpdate({ historyReviewed: true })}
-            >
-              {caseData?.historyReviewedAt ? 'History reviewed ✓' : 'Mark history reviewed'}
-            </button>
-          </div>
-
-          <Field label="Investigator (for this fact-finding)">
-            <EmployeeSelect
-              value={caseData?.investigatorUid || ''}
-              onChange={(uid) => apiUpdate({ investigatorUid: uid })}
-              employees={employees}
-              loading={employeesLoading}
-              mode="managers"
-              emptyLabel="Select investigator"
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+            <ChoiceButton
+              title="1. Close — no further action"
+              help="Use when fact-finding shows no case to answer, or no action is needed. Brief close notes are kept on the case only — not a file note and not informal action."
+              selected={selectedFactFindingOutcome === 'nfa'}
+              disabled={saving}
+              onClick={() => setSelectedFactFindingOutcome('nfa')}
             />
-          </Field>
-
-          <div className="rounded-lg border border-[#1a2540] p-3 space-y-2">
-            <p className="text-sm text-slate-300">Optional: precautionary suspension</p>
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                className={btnSecondary}
-                disabled={saving}
-                onClick={() => apiUpdate({
-                  precautionarySuspension: true,
-                  suspensionFrom: new Date().toISOString().slice(0, 10),
-                  suspensionReason: 'Precautionary pending investigation',
-                })}
-              >
-                Start precautionary suspension
-              </button>
-              <button type="button" className={btnSecondary} disabled={saving || !caseData?.suspensionActive} onClick={() => apiUpdate({ endSuspension: true })}>
-                End suspension
-              </button>
-            </div>
+            <ChoiceButton
+              title="2. Close — informal action"
+              help="Use when a quiet word or informal agreement resolved it (e.g. verbal reminder, agreed change). Recorded on the case but no file note document and not formal discipline."
+              selected={selectedFactFindingOutcome === 'informal'}
+              disabled={saving}
+              onClick={() => setSelectedFactFindingOutcome('informal')}
+            />
+            <ChoiceButton
+              title="3. Issue file note for improvement"
+              help="Use when standards must improve but formal discipline is not appropriate yet. Generates a printable file note for the personnel file — may be considered if issues recur."
+              selected={selectedFactFindingOutcome === 'file_note'}
+              disabled={saving}
+              onClick={() => setSelectedFactFindingOutcome('file_note')}
+            />
+            <ChoiceButton
+              primary
+              title="4. Schedule formal hearing →"
+              help="Use when the concern is serious, informal steps failed, or you are proceeding straight to formal discipline. Next step is the hearing invite."
+              selected={selectedFactFindingOutcome === 'formal_hearing'}
+              disabled={saving}
+              onClick={() => setSelectedFactFindingOutcome('formal_hearing')}
+            />
           </div>
 
-          <div className="border-t border-[#1a2540] pt-4 space-y-4">
-            <div>
-              <p className="text-sm font-medium text-white">After fact-finding — choose one outcome</p>
-              <p className="text-xs text-slate-400 mt-1">
-                Record interview notes on the portal first (Documentation &amp; interviews below). Then pick the route that matches what happened.
-              </p>
-              {needsPortalInterview && (
-                <p className="text-xs text-amber-300 mt-2">Record at least one interview for this stage before continuing.</p>
-              )}
-            </div>
+          {selectedFactFindingOutcome && (
+            <div className="rounded-xl border border-indigo-500/30 bg-indigo-500/5 p-4 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-sm font-medium text-indigo-100">Complete your chosen outcome</p>
+                <button
+                  type="button"
+                  className="text-xs text-slate-400 hover:text-slate-200"
+                  onClick={() => setSelectedFactFindingOutcome('')}
+                >
+                  Choose a different outcome
+                </button>
+              </div>
 
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-              <ChoiceButton
-                title="1. Close — no further action"
-                help="Use when fact-finding shows no case to answer, or no action is needed. Brief close notes are kept on the case only — not a file note and not informal action."
-                selected={selectedFactFindingOutcome === 'nfa'}
-                disabled={saving || needsPortalInterview}
-                onClick={() => setSelectedFactFindingOutcome('nfa')}
-              />
-              <ChoiceButton
-                title="2. Close — informal action"
-                help="Use when a quiet word or informal agreement resolved it (e.g. verbal reminder, agreed change). Recorded on the case but no file note document and not formal discipline."
-                selected={selectedFactFindingOutcome === 'informal'}
-                disabled={saving || needsPortalInterview}
-                onClick={() => setSelectedFactFindingOutcome('informal')}
-              />
-              <ChoiceButton
-                title="3. Issue file note for improvement"
-                help="Use when standards must improve but formal discipline is not appropriate yet. Generates a printable file note for the personnel file — may be considered if issues recur."
-                selected={selectedFactFindingOutcome === 'file_note'}
-                disabled={saving || needsPortalInterview}
-                onClick={() => setSelectedFactFindingOutcome('file_note')}
-              />
-              <ChoiceButton
-                primary
-                title="4. Schedule formal hearing →"
-                help="Use when the concern is serious, informal steps failed, or you are proceeding straight to formal discipline. Next step is the hearing invite."
-                selected={selectedFactFindingOutcome === 'formal_hearing'}
-                disabled={saving || needsPortalInterview}
-                onClick={() => setSelectedFactFindingOutcome('formal_hearing')}
-              />
-            </div>
-
-            {selectedFactFindingOutcome && (
-              <div className="rounded-xl border border-indigo-500/30 bg-indigo-500/5 p-4 space-y-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-sm font-medium text-indigo-100">Complete your chosen outcome</p>
+              {selectedFactFindingOutcome === 'nfa' && (
+                <>
+                  <Field label="Close notes">
+                    <textarea
+                      value={closeNotes}
+                      onChange={(e) => setCloseNotes(e.target.value)}
+                      rows={4}
+                      className={inputClass}
+                      placeholder="Why is the case being closed with no further action?"
+                    />
+                  </Field>
+                  {renderRestrictionFields(outcomeRestriction, setOutcomeRestriction, { disabled: saving })}
                   <button
                     type="button"
-                    className="text-xs text-slate-400 hover:text-slate-200"
-                    onClick={() => setSelectedFactFindingOutcome('')}
+                    className={btnPrimary}
+                    disabled={saving || !closeNotes.trim() || !restrictionReady()}
+                    onClick={closeWithNotes}
                   >
-                    Choose a different outcome
+                    Close case — no further action
                   </button>
-                </div>
+                </>
+              )}
 
-                {selectedFactFindingOutcome === 'nfa' && (
-                  <>
-                    <Field label="Close notes">
-                      <textarea
-                        value={closeNotes}
-                        onChange={(e) => setCloseNotes(e.target.value)}
-                        rows={4}
-                        className={inputClass}
-                        placeholder="Why is the case being closed with no further action?"
-                      />
-                    </Field>
-                    <button
-                      type="button"
-                      className={btnPrimary}
-                      disabled={saving || !closeNotes.trim()}
-                      onClick={closeWithNotes}
-                    >
-                      Close case — no further action
-                    </button>
-                  </>
-                )}
+              {selectedFactFindingOutcome === 'informal' && (
+                <>
+                  <Field label="What was said or agreed">
+                    <textarea
+                      value={informalActionDetails}
+                      onChange={(e) => setInformalActionDetails(e.target.value)}
+                      rows={4}
+                      className={inputClass}
+                      placeholder="e.g. Verbal reminder given; employee agreed to improve attendance."
+                    />
+                  </Field>
+                  <button
+                    type="button"
+                    className={btnPrimary}
+                    disabled={saving || !informalActionDetails.trim()}
+                    onClick={closeAsInformalAction}
+                  >
+                    Close case — informal action
+                  </button>
+                </>
+              )}
 
-                {selectedFactFindingOutcome === 'informal' && (
-                  <>
-                    <Field label="What was said or agreed">
-                      <textarea
-                        value={informalActionDetails}
-                        onChange={(e) => setInformalActionDetails(e.target.value)}
-                        rows={4}
-                        className={inputClass}
-                        placeholder="e.g. Verbal reminder given; employee agreed to improve attendance."
-                      />
-                    </Field>
-                    <button
-                      type="button"
-                      className={btnPrimary}
-                      disabled={saving || !informalActionDetails.trim()}
-                      onClick={closeAsInformalAction}
-                    >
-                      Close case — informal action
-                    </button>
-                  </>
-                )}
+              {selectedFactFindingOutcome === 'file_note' && (
+                <>
+                  <Field label="Reason the file note is being issued">
+                    <textarea
+                      value={fileNoteReason}
+                      onChange={(e) => setFileNoteReason(e.target.value)}
+                      rows={3}
+                      className={inputClass}
+                      placeholder="The reason improvement is required (shown on the file note document)."
+                    />
+                  </Field>
+                  <Field label="Improvement or action required">
+                    <textarea
+                      value={fileNoteActionRequired}
+                      onChange={(e) => setFileNoteActionRequired(e.target.value)}
+                      rows={3}
+                      className={inputClass}
+                      placeholder="What the employee must do differently going forward."
+                    />
+                  </Field>
+                  <p className="text-xs text-slate-400">
+                    Issuing applies your digital signature automatically and sends the file note to the employee portal for their digital signature. Print / scan / upload remains available as a backup on the closed case.
+                  </p>
+                  {renderRestrictionFields(outcomeRestriction, setOutcomeRestriction, { disabled: saving })}
+                  <button
+                    type="button"
+                    className={btnPrimary}
+                    disabled={saving || !fileNoteReason.trim() || !fileNoteActionRequired.trim() || !restrictionReady()}
+                    onClick={issueFileNoteForImprovement}
+                  >
+                    Issue to portal &amp; apply my signature
+                  </button>
+                </>
+              )}
 
-                {selectedFactFindingOutcome === 'file_note' && (
-                  <>
-                    <Field label="Reason the file note is being issued">
-                      <textarea
-                        value={fileNoteReason}
-                        onChange={(e) => setFileNoteReason(e.target.value)}
-                        rows={3}
-                        className={inputClass}
-                        placeholder="The reason improvement is required (shown on the file note document)."
-                      />
-                    </Field>
-                    <Field label="Improvement or action required">
-                      <textarea
-                        value={fileNoteActionRequired}
-                        onChange={(e) => setFileNoteActionRequired(e.target.value)}
-                        rows={3}
-                        className={inputClass}
-                        placeholder="What the employee must do differently going forward."
-                      />
-                    </Field>
-                    <p className="text-xs text-slate-400">
-                      Issuing applies your digital signature automatically and sends the file note to the employee portal for their digital signature. Print / scan / upload remains available as a backup on the closed case.
-                    </p>
-                    <button
-                      type="button"
-                      className={btnPrimary}
-                      disabled={saving || !fileNoteReason.trim() || !fileNoteActionRequired.trim()}
-                      onClick={issueFileNoteForImprovement}
-                    >
-                      Issue to portal &amp; apply my signature
-                    </button>
-                  </>
-                )}
-
-                {selectedFactFindingOutcome === 'formal_hearing' && (
-                  <>
-                    <p className="text-sm text-slate-300">
-                      You will move to the hearing invite step to set a date, send the portal invite, and prepare the formal hearing.
-                    </p>
-                    <button
-                      type="button"
-                      className={btnPrimary}
-                      disabled={saving}
-                      onClick={() => apiUpdate({ stage: 'hearing_invite' })}
-                    >
-                      Continue to schedule formal hearing
-                    </button>
-                  </>
-                )}
-              </div>
-            )}
-          </div>
+              {selectedFactFindingOutcome === 'formal_hearing' && (
+                <>
+                  <p className="text-sm text-slate-300">
+                    You will move to the hearing invite step to set a date, send the portal invite, and prepare the formal hearing.
+                  </p>
+                  <button
+                    type="button"
+                    className={btnPrimary}
+                    disabled={saving}
+                    onClick={() => apiUpdate({ stage: 'hearing_invite' })}
+                  >
+                    Continue to schedule formal hearing
+                  </button>
+                </>
+              )}
+            </div>
+          )}
         </StepCard>
       );
     }
@@ -1439,7 +1984,7 @@ export default function DisciplinaryCase() {
             </Field>
           )}
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <div ref={hearingScheduleRef} className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <Field label="Hearing date">
               <input
                 type="date"
@@ -1466,6 +2011,12 @@ export default function DisciplinaryCase() {
               />
             </Field>
           </div>
+
+          {reschedulingHearing && (
+            <p className="text-sm text-sky-200">
+              Choose the new hearing date and time, then confirm below to re-send the portal invite and refresh the calendar offer.
+            </p>
+          )}
 
           {hearingForm.hearingScheduledAt && (
             <p className={`text-sm ${hearingNoticeShort ? 'text-amber-200' : 'text-emerald-300'}`}>
@@ -1500,14 +2051,44 @@ export default function DisciplinaryCase() {
           )}
 
           {inviteIssued ? (
-            <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/10 p-4 space-y-2">
-              <p className="text-sm font-medium text-emerald-100">Invite sent to the employee portal</p>
-              <p className="text-sm text-emerald-50/90">
-                Hearing: {caseData.hearingScheduledAt}
-                {caseData.hearingScheduledTime ? ` at ${caseData.hearingScheduledTime}` : ''}
-                {caseData.hearingLocation ? ` · ${caseData.hearingLocation}` : ''}
-              </p>
-              <p className="text-xs text-emerald-100/80">Right to be accompanied is included on the invite.</p>
+            <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/10 p-4 space-y-3">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div className="space-y-2">
+                  <p className="text-sm font-medium text-emerald-100">Invite sent to the employee portal</p>
+                  <p className="text-sm text-emerald-50/90">
+                    Hearing: {caseData.hearingScheduledAt}
+                    {caseData.hearingScheduledTime ? ` at ${caseData.hearingScheduledTime}` : ''}
+                    {caseData.hearingLocation ? ` · ${caseData.hearingLocation}` : ''}
+                  </p>
+                  <p className="text-xs text-emerald-100/80">Right to be accompanied is included on the invite.</p>
+                </div>
+                <button
+                  type="button"
+                  className={`${btnSecondary} text-xs`}
+                  disabled={saving}
+                  onClick={beginRescheduleHearing}
+                >
+                  Reschedule
+                </button>
+              </div>
+              <CalendarOffersBlock
+                compact
+                events={
+                  calendarOffers.length
+                    ? calendarOffers
+                    : [
+                      buildHearingCalendarOffer({
+                        caseId,
+                        employeeName: caseData?.employeeNameSnapshot || '',
+                        caseTitle: caseData?.title || '',
+                        hearingScheduledAt: caseData?.hearingScheduledAt || hearingForm.hearingScheduledAt,
+                        hearingScheduledTime: caseData?.hearingScheduledTime || hearingForm.hearingScheduledTime,
+                        hearingLocation: caseData?.hearingLocation || hearingForm.hearingLocation || 'Country Lion',
+                        notes: caseData?.hearingInviteNotes || hearingForm.hearingInviteNotes,
+                      }),
+                    ].filter(Boolean)
+                }
+              />
             </div>
           ) : null}
 
@@ -1518,8 +2099,22 @@ export default function DisciplinaryCase() {
               disabled={saving || !hearingForm.hearingScheduledAt}
               onClick={handleSendHearingInvite}
             >
-              {inviteIssued ? 'Re-send invite via portal' : 'Send invite via portal'}
+              {reschedulingHearing
+                ? 'Confirm new date & re-send invite'
+                : inviteIssued
+                  ? 'Re-send invite via portal'
+                  : 'Send invite via portal'}
             </button>
+            {reschedulingHearing && (
+              <button
+                type="button"
+                className={btnSecondary}
+                disabled={saving}
+                onClick={() => setReschedulingHearing(false)}
+              >
+                Cancel reschedule
+              </button>
+            )}
             <button
               type="button"
               className={btnSecondary}
@@ -1572,16 +2167,27 @@ export default function DisciplinaryCase() {
     }
 
     if (currentStage === 'hearing') {
-      return (
-        <StepCard title="Step 3 — Formal hearing">
-          <p className="text-sm text-slate-400">
-            Hold the hearing, record companion attendance, and record the hearing using Add documentation below.
-          </p>
+      const hearingDetails = (
+        <div className="space-y-3">
           {(caseData?.hearingScheduledAt || caseData?.hearingLocation) && (
-            <div className="rounded-lg border border-[#1a2540] px-3 py-2 text-sm text-slate-300">
-              Scheduled: {caseData.hearingScheduledAt || '—'}
-              {caseData.hearingScheduledTime ? ` at ${caseData.hearingScheduledTime}` : ''}
-              {caseData.hearingLocation ? ` · ${caseData.hearingLocation}` : ''}
+            <div className="rounded-lg border border-[#1a2540] px-3 py-2 text-sm text-slate-300 flex flex-wrap items-center justify-between gap-2">
+              <span>
+                Scheduled: {caseData.hearingScheduledAt || '—'}
+                {caseData.hearingScheduledTime ? ` at ${caseData.hearingScheduledTime}` : ''}
+                {caseData.hearingLocation ? ` · ${caseData.hearingLocation}` : ''}
+              </span>
+              <button
+                type="button"
+                className={`${btnSecondary} text-xs py-1`}
+                disabled={saving}
+                onClick={async () => {
+                  setReschedulingHearing(true);
+                  const result = await apiUpdate({ stage: 'hearing_invite' });
+                  if (result?.ok) beginRescheduleHearing();
+                }}
+              >
+                Reschedule
+              </button>
             </div>
           )}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -1611,6 +2217,36 @@ export default function DisciplinaryCase() {
               />
             </Field>
           </div>
+        </div>
+      );
+
+      if (needsPortalInterview) {
+        return (
+          <div className="rounded-xl border border-[#1a2540] border-dashed bg-[#060e1a]/25 p-4 space-y-3">
+            <div>
+              <p className="text-sm font-medium text-slate-300">Hearing details</p>
+              <p className="text-xs text-slate-500 mt-1">
+                Companion attendance and postponement — optional while you record the hearing interview above.
+              </p>
+            </div>
+            {hearingDetails}
+            <button
+              type="button"
+              className={btnSecondary}
+              disabled={saving}
+              onClick={() => apiUpdate({ stage: 'hearing_invite' })}
+            >
+              ← Back to invite
+            </button>
+          </div>
+        );
+      }
+
+      return (
+        <StepCard title="Hearing complete — decide outcome">
+          <p className="text-sm text-slate-400">
+            Hearing notes are recorded. Continue to choose the outcome, or adjust companion details below if needed.
+          </p>
           <ChoiceRow>
             <ChoiceButton
               title="← Back to invite"
@@ -1619,14 +2255,15 @@ export default function DisciplinaryCase() {
             />
             <ChoiceButton
               primary
-              title="Hearing complete — decide outcome →"
-              disabled={saving || needsPortalInterview}
+              title="Continue to outcome →"
+              disabled={saving}
               onClick={() => apiUpdate({ stage: 'outcome_pack' })}
             />
           </ChoiceRow>
-          {needsPortalInterview && (
-            <p className="text-xs text-amber-300">Record hearing interview notes on the portal before continuing.</p>
-          )}
+          <div className="border-t border-[#1a2540] pt-4 space-y-3">
+            <p className="text-xs text-slate-500">Optional hearing details</p>
+            {hearingDetails}
+          </div>
         </StepCard>
       );
     }
@@ -1656,18 +2293,7 @@ export default function DisciplinaryCase() {
               </button>
             ))}
           </div>
-          {reviews.length > 0 && (
-            <div className="rounded-lg border border-[#1a2540] p-3 space-y-2">
-              <p className="text-sm font-medium text-slate-200">Scheduled reviews</p>
-              <ul className="space-y-1">
-                {reviews.map((item) => (
-                  <li key={item.id} className="text-sm text-slate-300">
-                    {item.title} · due {item.dueAt} · {item.status}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
+          {renderScheduledReviews()}
         </StepCard>
       );
     }
@@ -1720,15 +2346,7 @@ export default function DisciplinaryCase() {
               {caseData?.appealRecipientNameSnapshot && (
                 <p className="text-slate-400">Appeals to: {caseData.appealRecipientNameSnapshot}</p>
               )}
-              {reviews.length > 0 && (
-                <ul className="space-y-1 pt-1">
-                  {reviews.map((item) => (
-                    <li key={item.id} className="text-slate-400">
-                      Review: {item.title} · due {formatWarningExpiry(item.dueAt)} · {item.status}
-                    </li>
-                  ))}
-                </ul>
-              )}
+              {renderScheduledReviews()}
             </div>
           )}
           <div className="flex flex-wrap gap-2">
@@ -1749,6 +2367,13 @@ export default function DisciplinaryCase() {
                   emptyLabel="Select appeal owner"
                 />
               </Field>
+              {appealOwnerPriorRoles.length > 0 && (
+                <p className="text-sm text-amber-200 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2">
+                  Warning: this manager was already involved earlier in this case (
+                  {appealOwnerPriorRoles.join(', ')}
+                  ). Prefer an independent appeal manager where practicable.
+                </p>
+              )}
               <label className="flex items-start gap-2 text-sm text-amber-200">
                 <input type="checkbox" checked={acknowledgeSameAppealOwner} onChange={(e) => setAcknowledgeSameAppealOwner(e.target.checked)} />
                 Override: allow same person as original decision-maker for appeal
@@ -1788,6 +2413,13 @@ export default function DisciplinaryCase() {
               emptyLabel="Select appeal owner"
             />
           </Field>
+          {appealOwnerPriorRoles.length > 0 && (
+            <p className="text-sm text-amber-200 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2">
+              Warning: this manager was already involved earlier in this case (
+              {appealOwnerPriorRoles.join(', ')}
+              ). Prefer an independent appeal manager where practicable.
+            </p>
+          )}
           <div className="flex flex-wrap gap-2">
             {OUTCOME_PRESETS.filter((p) => p.id !== 'informal_action').map((preset) => (
               <button
@@ -1946,10 +2578,64 @@ export default function DisciplinaryCase() {
       : family === 'vehicle_accident'
         ? renderAccidentStep()
         : renderDisciplinaryStep();
+
+    const isFactFinding = !viewingPastStage
+      && family === 'disciplinary'
+      && displayStage === 'fact_finding';
+    const isHearing = !viewingPastStage
+      && family === 'disciplinary'
+      && displayStage === 'hearing';
+
+    if (isFactFinding) {
+      if (needsPortalInterview) {
+        return (
+          <div className="space-y-6">
+            {factFindingHistoryPanel}
+            {documentationHub}
+            {factFindingSuspensionControls}
+          </div>
+        );
+      }
+      return (
+        <div className="space-y-6">
+          {step}
+          {factFindingOptionalTools}
+          {documentationHub}
+        </div>
+      );
+    }
+
+    if (isHearing) {
+      if (needsPortalInterview) {
+        return (
+          <div className="space-y-6">
+            {documentationHub}
+            {step}
+          </div>
+        );
+      }
+      return (
+        <div className="space-y-6">
+          {step}
+          {documentationHub}
+        </div>
+      );
+    }
+
+    const showDocsFirst = !viewingPastStage && family === 'grievance' && displayStage === 'investigation';
     return (
       <div className="space-y-6">
-        {step}
-        {documentationHub}
+        {showDocsFirst ? (
+          <>
+            {documentationHub}
+            {step}
+          </>
+        ) : (
+          <>
+            {step}
+            {documentationHub}
+          </>
+        )}
       </div>
     );
   };
@@ -1957,19 +2643,28 @@ export default function DisciplinaryCase() {
   if (!isNew && (loading || !caseData)) {
     if (error && !loading) {
       return (
-        <div className="p-8 space-y-4 max-w-lg">
-          <div className="bg-red-500/10 border border-red-500/25 rounded-lg p-4 text-sm text-red-300">{error}</div>
-          <button type="button" onClick={() => navigate('/dashboard/cases')} className={btnSecondary}>
-            Back to cases
-          </button>
+        <div className="flex flex-col h-full">
+          <WorkspaceTabs />
+          <div className="p-8 space-y-4 max-w-lg">
+            <div className="bg-red-500/10 border border-red-500/25 rounded-lg p-4 text-sm text-red-300">{error}</div>
+            <button type="button" onClick={() => navigate('/dashboard/cases')} className={btnSecondary}>
+              Back to cases
+            </button>
+          </div>
         </div>
       );
     }
-    return <div className="p-8 text-sm text-slate-400">Loading case…</div>;
+    return (
+      <div className="flex flex-col h-full">
+        <WorkspaceTabs />
+        <div className="p-8 text-sm text-slate-400">Loading case…</div>
+      </div>
+    );
   }
 
   return (
     <div className="flex flex-col h-full">
+      <WorkspaceTabs />
       <div className="flex items-center justify-between px-8 py-5 border-b border-[#1a2540] gap-3 flex-wrap">
         <div>
           <h1 className="text-xl font-bold text-white">
@@ -2020,8 +2715,36 @@ export default function DisciplinaryCase() {
       </div>
 
       <div className="p-8 space-y-6 overflow-auto">
-        {error && <div className="bg-red-500/10 border border-red-500/25 rounded-lg p-4 text-sm text-red-300">{error}</div>}
-        {message && <div className="bg-emerald-500/10 border border-emerald-500/25 rounded-lg p-4 text-sm text-emerald-300">{message}</div>}
+        <div ref={caseAlertsRef} className="space-y-3">
+          {error && (
+            amendmentAlertActive || (error || '').toLowerCase().includes('amendment') ? (
+              <button
+                type="button"
+                onClick={jumpToPendingAmendment}
+                className="w-full text-left bg-red-500/10 border border-red-500/25 rounded-lg p-4 text-sm text-red-300 hover:bg-red-500/15 hover:border-red-400/40 transition-colors"
+              >
+                <span className="block">{error}</span>
+                <span className="block mt-1 text-xs text-red-200/80">Click to open the amendment request.</span>
+              </button>
+            ) : (
+              <div className="bg-red-500/10 border border-red-500/25 rounded-lg p-4 text-sm text-red-300">{error}</div>
+            )
+          )}
+          {message && <div className="bg-emerald-500/10 border border-emerald-500/25 rounded-lg p-4 text-sm text-emerald-300">{message}</div>}
+          {!isNew && hasPendingAmendment && (
+            <button
+              type="button"
+              onClick={jumpToPendingAmendment}
+              className="w-full text-left bg-orange-500/10 border border-orange-500/30 rounded-lg p-4 text-sm text-orange-200 hover:bg-orange-500/15 hover:border-orange-400/40 transition-colors"
+            >
+              An employee has requested an amendment to interview notes. Address the amendment before the case can move on.
+              <span className="block mt-1 text-xs text-orange-100/80">Click to open the amendment.</span>
+            </button>
+          )}
+          {calendarOffers.length > 0 && (
+            <CalendarOffersBlock events={calendarOffers} />
+          )}
+        </div>
 
         {isNew ? (
           <div className="bg-[#0b1220] border border-[#1a2540] rounded-xl p-5 space-y-4 max-w-3xl overflow-visible">
@@ -2065,8 +2788,26 @@ export default function DisciplinaryCase() {
                 />
               </Field>
             </div>
-            <Field label="Title">
-              <input name="title" value={form.title} onChange={handleChange} className={inputClass} />
+            <Field label="Issue">
+              <input
+                name="issue"
+                value={form.issue}
+                onChange={handleChange}
+                className={inputClass}
+                placeholder="Short description of the issue"
+                autoComplete="off"
+              />
+            </Field>
+            <Field label="Title (auto)">
+              <input
+                value={composedCaseTitle}
+                readOnly
+                className={`${inputClass} text-slate-400 cursor-not-allowed`}
+                aria-label="Case title is generated automatically"
+              />
+              <span className="block text-xs text-slate-500 mt-1">
+                Built as Employee name — Issue — Date
+              </span>
             </Field>
             <Field label="Summary">
               <textarea name="summary" value={form.summary} onChange={handleChange} rows={4} className={inputClass} />
@@ -2083,58 +2824,47 @@ export default function DisciplinaryCase() {
 
                 {!form.employeeUid && (
                   <p className="text-xs text-amber-300">
-                    Select an employee above to see their informal resolution history before choosing how to start.
+                    Select an employee above to see their current active measures before choosing how to start.
                   </p>
                 )}
 
                 {form.employeeUid && (
                   <div className="rounded-lg border border-[#1a2540] bg-[#060e1a]/60 p-3 space-y-2">
                     <p className="text-xs uppercase tracking-wide text-slate-500">
-                      Informal resolutions — past 12 months
+                      Current active measures
                     </p>
-                    {informalHistoryLoading && (
+                    {activeMeasuresLoading && (
                       <p className="text-xs text-slate-400">Loading…</p>
                     )}
-                    {!informalHistoryLoading && informalHistory.length === 0 && (
-                      <p className="text-xs text-slate-400">None on record in the last 12 months.</p>
+                    {!activeMeasuresLoading && activeMeasures.length === 0 && (
+                      <p className="text-xs text-slate-400">No active disciplinary measures.</p>
                     )}
-                    {!informalHistoryLoading && informalHistory.length > 0 && (
+                    {!activeMeasuresLoading && activeMeasures.length > 0 && (
                       <ul className="space-y-2">
-                        {informalHistory.map((item) => {
-                          const outcomeLabels = {
-                            informal_action: 'Informal action',
-                            file_note_for_improvement: 'File note for improvement',
-                            no_further_action: 'No further action',
-                            verbal_warning: 'Verbal warning',
-                            written_warning: 'Written warning',
-                            final_written_warning: 'Final written warning',
-                          };
-                          const dateStr = item.closedAt
-                            ? String(item.closedAt).slice(0, 10).split('-').reverse().join('/')
+                        {activeMeasures.map((item) => {
+                          const dateStr = item.givenAt
+                            ? String(item.givenAt).slice(0, 10).split('-').reverse().join('/')
                             : '—';
-                          const detail = item.informalActionDetails || item.fileNoteReason || item.closeNotes || '';
+                          const expiresStr = item.expiresAt
+                            ? String(item.expiresAt).slice(0, 10).split('-').reverse().join('/')
+                            : '—';
                           return (
-                            <li key={item.id}>
+                            <li key={`${item.caseId}-${item.outcomePreset}-${item.reason}`}>
                               <a
-                                href={`/dashboard/cases/${item.id}`}
+                                href={`/dashboard/cases/${item.caseId}`}
                                 target="_blank"
                                 rel="noreferrer"
                                 className="block text-xs border-l-2 border-amber-500/30 pl-2.5 space-y-0.5 hover:border-amber-400/70 hover:bg-amber-500/5 rounded-r-md pr-1 py-0.5 transition-colors"
                               >
                                 <p className="text-amber-200 font-medium">
-                                  {outcomeLabels[item.outcomePreset] || item.outcomePreset}
-                                  <span className="text-slate-400 font-normal"> · {dateStr}</span>
+                                  {item.measureType || item.outcomePreset}
+                                  <span className="text-slate-400 font-normal"> · given {dateStr}</span>
+                                  <span className="text-slate-500 font-normal"> · expires {expiresStr}</span>
                                   <span className="text-slate-600 ml-1">↗</span>
                                 </p>
-                                <p className="text-slate-300 truncate">{item.title}</p>
-                                {(item.recordedByName || item.openedByName) && (
-                                  <p className="text-slate-500">
-                                    {item.recordedByName
-                                      ? `Recorded by ${item.recordedByName}`
-                                      : `Opened by ${item.openedByName}`}
-                                  </p>
+                                {item.reason && item.reason !== item.measureType && (
+                                  <p className="text-slate-500 line-clamp-2">{item.reason}</p>
                                 )}
-                                {detail && <p className="text-slate-500 line-clamp-2">{detail}</p>}
                               </a>
                             </li>
                           );
@@ -2200,6 +2930,7 @@ export default function DisciplinaryCase() {
               disabled={
                 saving
                 || !form.employeeUid
+                || !String(form.issue || '').trim()
                 || ((form.processFamily === 'disciplinary' || form.processFamily === 'grievance') && !form.informalResolutionPath)
               }
               className={btnPrimary}
@@ -2209,6 +2940,11 @@ export default function DisciplinaryCase() {
             {!form.employeeUid && (
               <p className="text-xs text-amber-300">
                 Click the employee field and choose who the case is about. The open button stays disabled until an employee is selected.
+              </p>
+            )}
+            {form.employeeUid && !String(form.issue || '').trim() && (
+              <p className="text-xs text-amber-300">
+                Enter the issue — the case title is built from the employee name, issue, and today’s date.
               </p>
             )}
           </div>
@@ -2473,8 +3209,47 @@ export default function DisciplinaryCase() {
                 <p className="text-xs text-slate-500 mt-1">
                   The letter will confirm the right to appeal in writing to this person within 5 working days.
                 </p>
+                {appealRecipientPriorRoles.length > 0 && (
+                  <p className="text-sm text-amber-200 mt-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2">
+                    Warning: this manager was already involved earlier in this case (
+                    {appealRecipientPriorRoles.join(', ')}
+                    ). Prefer an independent appeal manager where practicable.
+                  </p>
+                )}
               </Field>
             </div>
+
+            {renderRestrictionFields(
+              {
+                enabled: Boolean(outcomeModal.restrictionEnabled),
+                type: outcomeModal.restrictionType || '',
+                other: outcomeModal.restrictionOther || '',
+                duration: outcomeModal.restrictionDuration || '',
+                expiresAt: outcomeModal.restrictionExpiresAt || '',
+              },
+              (updater) => {
+                setOutcomeModal((prev) => {
+                  if (!prev) return prev;
+                  const current = {
+                    enabled: Boolean(prev.restrictionEnabled),
+                    type: prev.restrictionType || '',
+                    other: prev.restrictionOther || '',
+                    duration: prev.restrictionDuration || '',
+                    expiresAt: prev.restrictionExpiresAt || '',
+                  };
+                  const next = typeof updater === 'function' ? updater(current) : updater;
+                  return {
+                    ...prev,
+                    restrictionEnabled: Boolean(next.enabled),
+                    restrictionType: next.type || '',
+                    restrictionOther: next.other || '',
+                    restrictionDuration: next.duration || '',
+                    restrictionExpiresAt: next.expiresAt || '',
+                  };
+                });
+              },
+              { disabled: saving },
+            )}
 
             {history.length > 0 && (
               <div className="space-y-3">

@@ -819,7 +819,7 @@ export function WantedDailyPanel({
             Combined leaderboard
           </div>
           <ul className="divide-y divide-[#1a2540]">
-            {leaderboard.slice(0, 15).map((row) => (
+            {leaderboard.map((row) => (
               <FunLeaderboardRow
                 key={row.uid || row.rank}
                 row={row}

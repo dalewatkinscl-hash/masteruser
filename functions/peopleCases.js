@@ -107,6 +107,23 @@ const OUTCOME_PRESETS = [
   { id: 'dismissal', label: 'Dismissal', warning: false },
 ];
 
+const RESTRICTION_OPTIONS = [
+  { id: 'no_tour_work', label: 'No Tour Work' },
+  { id: 'no_vip_sports', label: 'No VIP/Sports' },
+  { id: 'no_large_vehicles', label: 'No Large Vehicles' },
+  { id: 'other', label: 'Other' },
+];
+
+function restrictionLabel(type, otherDetail = '') {
+  const match = RESTRICTION_OPTIONS.find((item) => item.id === type);
+  if (!match) return type || '';
+  if (type === 'other') {
+    const detail = String(otherDetail || '').trim();
+    return detail ? `Other — ${detail}` : 'Other';
+  }
+  return match.label;
+}
+
 const INFORMAL_RESOLUTION_PATHS = new Set([
   'resolve_informally',
   'proceed_formal',
@@ -360,6 +377,7 @@ function sanitizeCaseCreateInput(input = {}) {
     employeeUid: toTrimmedString(input.employeeUid),
     processFamily: PROCESS_FAMILIES.has(processFamily) ? processFamily : 'disciplinary',
     caseType: CASE_TYPES.has(caseType) ? caseType : (processFamily === 'grievance' ? 'grievance' : processFamily === 'vehicle_accident' ? 'vehicle_accident' : 'other'),
+    issue: toTrimmedString(input.issue),
     title: toTrimmedString(input.title),
     summary: toTrimmedString(input.summary),
     severity: toTrimmedString(input.severity).toLowerCase() || '',
@@ -575,6 +593,9 @@ function buildOutcomeLetterHtml({
   expectedStandard = '',
   supportMonitoringRetraining = '',
   reviewDates = [],
+  restrictionType = '',
+  restrictionDetail = '',
+  restrictionExpiresAt = '',
   warningEffectiveAt,
   warningExpiresAt,
   durationLabel,
@@ -623,11 +644,25 @@ function buildOutcomeLetterHtml({
     .map((item) => ({
       title: toTrimmedString(item?.title) || 'Review meeting',
       dueAt: toTrimmedString(item?.dueAt),
+      notes: toTrimmedString(item?.notes),
     }))
     .filter((item) => item.dueAt);
   const reviewBlock = reviewItems.length
     ? `<p><strong>Review meeting(s):</strong></p>
-       <ul>${reviewItems.map((item) => `<li>${escapeHtml(item.title)} — ${escapeHtml(formatIsoDateUk(item.dueAt))}</li>`).join('')}</ul>`
+       <ul>${reviewItems.map((item) => {
+         const notesBit = item.notes ? ` — ${escapeHtml(item.notes)}` : '';
+         return `<li>${escapeHtml(item.title)} — ${escapeHtml(formatIsoDateUk(item.dueAt))}${notesBit}</li>`;
+       }).join('')}</ul>`
+    : '';
+
+  const restrictionText = restrictionLabel(restrictionType, restrictionDetail);
+  const restrictionBlock = toTrimmedString(restrictionType)
+    ? `<p><strong>Work restriction:</strong></p>
+       <p>The following restriction applies: <strong>${escapeHtml(restrictionText)}</strong>${
+         restrictionExpiresAt
+           ? ` until <strong>${escapeHtml(formatIsoDateUk(restrictionExpiresAt))}</strong>`
+           : ''
+       }.</p>`
     : '';
 
   const appealTo = toTrimmedString(appealRecipientName) || 'the nominated appeal manager';
@@ -678,6 +713,7 @@ function buildOutcomeLetterHtml({
   ${standardBlock}
   ${supportBlock}
   ${reviewBlock}
+  ${restrictionBlock}
   ${warningBlock}
   ${appealBlock}
   ${closingBlock}`;
@@ -746,6 +782,9 @@ function serializeCase(doc) {
     appealedAt: serializeTimestamp(data.appealedAt) || data.appealedAt || null,
     interviewNotesIssuedAt: serializeTimestamp(data.interviewNotesIssuedAt) || data.interviewNotesIssuedAt || null,
     outcomeIssuedAt: serializeTimestamp(data.outcomeIssuedAt) || data.outcomeIssuedAt || null,
+    informalActionTakenAt: serializeTimestamp(data.informalActionTakenAt) || data.informalActionTakenAt || null,
+    fileNoteIssuedAt: serializeTimestamp(data.fileNoteIssuedAt) || data.fileNoteIssuedAt || null,
+    warningClearedAt: serializeTimestamp(data.warningClearedAt) || data.warningClearedAt || null,
     stage: normalizeStage(data.processFamily || 'disciplinary', data.stage),
     guide: guideFor(data.processFamily || 'disciplinary', normalizeStage(data.processFamily || 'disciplinary', data.stage)),
   };
@@ -760,6 +799,8 @@ module.exports = {
   ACCIDENT_STAGES,
   CASE_TYPES,
   OUTCOME_PRESETS,
+  RESTRICTION_OPTIONS,
+  restrictionLabel,
   INFORMAL_RESOLUTION_PATHS,
   DOCUMENT_TYPES,
   STAGE_GUIDES,
