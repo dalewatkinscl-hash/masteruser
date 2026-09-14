@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import WorkspaceTabs from '../components/WorkspaceTabs';
 import EmployeeSelect from '../components/EmployeeSelect';
 import { readJsonResponse } from '../utils/employeeProfile';
 
@@ -56,13 +55,12 @@ export default function BumpPromptPage() {
 
   return (
     <div className="flex flex-col h-full">
-      <WorkspaceTabs />
       <div className="px-8 py-6 border-b border-[#1a2540] flex items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold text-white">Prompt bump card</h1>
           <p className="text-sm text-slate-400 mt-1">Create an in-portal task for a driver to complete a bump card.</p>
         </div>
-        <button type="button" onClick={() => navigate('/dashboard/cases')} className="px-3 py-2 text-sm border border-[#1a2540] rounded-lg text-slate-200">
+        <button type="button" onClick={() => navigate('/dashboard/hr/cases')} className="px-3 py-2 text-sm border border-[#1a2540] rounded-lg text-slate-200">
           Back
         </button>
       </div>

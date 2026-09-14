@@ -9,6 +9,7 @@ import DigitalClock from '../components/DigitalClock';
 import KudosWelcomeModal from '../components/KudosWelcomeModal';
 import KawaiiDecor from '../components/KawaiiDecor';
 import { useTheme } from '../context/ThemeContext';
+import { canAccessHrPortal } from '../utils/peopleCasesAccess';
 
 function MenuIcon({ className }) {
   return (
@@ -126,6 +127,8 @@ export default function Dashboard() {
   };
 
   const isProfileActive = location.pathname.includes('/profile');
+  const isHrPortalActive = location.pathname.includes('/dashboard/hr');
+  const showHrPortal = canAccessHrPortal(user);
   const mentoringRole = user?.portalsAccess?.mentoring_app || user?.portalsAccess?.mentor;
   const hasMentoringAccess = typeof mentoringRole === 'string' && mentoringRole.trim().length > 0;
   const assessmentRole = user?.portalsAccess?.assessment_app;
@@ -213,6 +216,13 @@ export default function Dashboard() {
           <UserCircleIcon className="w-5 h-5 flex-shrink-0" />
           {showLabels && <span>My Profile</span>}
         </button>
+
+        {showHrPortal && (
+          <button type="button" onClick={() => go('/dashboard/hr')} className={navClass(isHrPortalActive)}>
+            <BookOpenIcon className="w-5 h-5 flex-shrink-0" />
+            {showLabels && <span>HR</span>}
+          </button>
+        )}
 
         {portalLinks.map((portal) => (
           <a key={portal.href} href={portal.href} className="cl-nav-item">

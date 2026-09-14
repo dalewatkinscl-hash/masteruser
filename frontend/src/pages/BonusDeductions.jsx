@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState, Fragment } from 'react';
 import { useNavigate } from 'react-router-dom';
-import WorkspaceTabs from '../components/WorkspaceTabs';
 import { readJsonResponse } from '../utils/employeeProfile';
 
 function formatUkDate(value) {
@@ -166,12 +165,11 @@ export default function BonusDeductions() {
 
   return (
     <div className="flex flex-col h-full">
-      <WorkspaceTabs />
       <div className="flex items-center justify-between px-8 py-5 border-b border-[#1a2540] gap-3 flex-wrap">
         <div>
           <button
             type="button"
-            onClick={() => navigate('/dashboard/employees')}
+            onClick={() => navigate('/dashboard/hr/employees')}
             className="text-xs text-slate-500 hover:text-slate-300 mb-1"
           >
             ← Employees
@@ -304,7 +302,7 @@ export default function BonusDeductions() {
                               <div>
                                 <button
                                   type="button"
-                                  onClick={() => navigate(`/dashboard/employees/${row.employeeUid}`)}
+                                  onClick={() => navigate(`/dashboard/hr/employees/${row.employeeUid}`)}
                                   className="text-left font-medium text-white hover:text-indigo-300"
                                 >
                                   {row.employeeName || '—'}
@@ -348,7 +346,7 @@ export default function BonusDeductions() {
                             <td className="px-5 py-3 text-sm text-slate-200">
                               <button
                                 type="button"
-                                onClick={() => navigate(`/dashboard/cases/${item.caseId}`)}
+                                onClick={() => navigate(`/dashboard/hr/cases/${item.caseId}`)}
                                 className="text-left hover:text-indigo-300"
                               >
                                 {item.warningLabel}

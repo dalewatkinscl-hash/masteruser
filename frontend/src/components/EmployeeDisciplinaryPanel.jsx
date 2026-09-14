@@ -46,7 +46,7 @@ export default function EmployeeDisciplinaryPanel({ employeeUid, employeeName, e
   const startNewCase = () => {
     const params = new URLSearchParams({ employeeUid, processFamily: 'disciplinary' });
     if (employeeName) params.set('employeeName', employeeName);
-    navigate(`/dashboard/cases/new?${params.toString()}`);
+    navigate(`/dashboard/hr/cases/new?${params.toString()}`);
   };
 
   return (
@@ -101,7 +101,7 @@ export default function EmployeeDisciplinaryPanel({ employeeUid, employeeName, e
                         <td className="px-3 py-3 text-right">
                           <button
                             type="button"
-                            onClick={() => navigate(`/dashboard/cases/${item.id}`)}
+                            onClick={() => navigate(`/dashboard/hr/cases/${item.id}`)}
                             className="text-indigo-300 hover:text-indigo-200 text-sm"
                           >
                             Open

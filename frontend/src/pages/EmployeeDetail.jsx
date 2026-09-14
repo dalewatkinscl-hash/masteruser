@@ -11,7 +11,8 @@ import MergeEmployeeCard from '../components/MergeEmployeeCard';
 import YearsOfServiceBadge from '../components/YearsOfServiceBadge';
 import PortalAccessFields from '../components/PortalAccessFields';
 import { canViewAllEmployeeProfiles, readJsonResponse } from '../utils/employeeProfile';
-import { SHOW_HR_RECORDS } from '../utils/featureFlags';
+import { SHOW_CASES_PORTAL, SHOW_HR_RECORDS } from '../utils/featureFlags';
+import { canManagePeopleCases } from '../utils/peopleCasesAccess';
 import {
   buildPortalMappings,
   buildPortalsAccess,
@@ -28,6 +29,7 @@ const PERFORMANCE_SECTIONS = ['hrRecords'];
 const TAB_IDS = {
   overview: 'overview',
   performance: 'performance',
+  cases: 'cases',
   documents: 'documents',
   fun: 'fun',
   polls: 'polls',
@@ -203,6 +205,7 @@ export default function EmployeeDetail() {
   const canEditPortal = isAdmin && (isNew || !isHrOnly);
   const portalReadOnly = !canEditPortal;
   const portalCount = Object.values(accountForm.portalsAccess || {}).filter(Boolean).length;
+  const canStartCases = SHOW_CASES_PORTAL && canManagePeopleCases(user);
 
   const tabs = useMemo(() => {
     const items = [
@@ -210,6 +213,9 @@ export default function EmployeeDetail() {
     ];
     if (SHOW_HR_RECORDS) {
       items.push({ id: TAB_IDS.performance, label: 'Performance' });
+    }
+    if (canStartCases) {
+      items.push({ id: TAB_IDS.cases, label: 'Cases' });
     }
     items.push(
       { id: TAB_IDS.documents, label: 'Documents' },
@@ -228,7 +234,16 @@ export default function EmployeeDetail() {
       items.push({ id: TAB_IDS.admin, label: 'Admin' });
     }
     return items;
-  }, [canViewPortal, isAdmin, portalCount]);
+  }, [canStartCases, canViewPortal, isAdmin, portalCount]);
+
+  const startCaseFromProfile = () => {
+    const params = new URLSearchParams({
+      employeeUid: uid,
+      processFamily: 'disciplinary',
+    });
+    if (profileMeta?.fullName) params.set('employeeName', profileMeta.fullName);
+    navigate(`/dashboard/hr/cases/new?${params.toString()}`);
+  };
 
   const requestedTab = searchParams.get('tab') || TAB_IDS.overview;
   const activeTab = tabs.some((tab) => tab.id === requestedTab)
@@ -244,7 +259,7 @@ export default function EmployeeDetail() {
 
   useEffect(() => {
     if (isNew) {
-      if (!isAdmin) navigate('/dashboard/employees', { replace: true });
+      if (!isAdmin) navigate('/dashboard/hr/employees', { replace: true });
       setLoading(false);
       return;
     }
@@ -358,7 +373,7 @@ export default function EmployeeDetail() {
 
       setSuccess('Employee created successfully.');
       await refreshSession();
-      setTimeout(() => navigate('/dashboard/employees'), 1200);
+      setTimeout(() => navigate('/dashboard/hr/employees'), 1200);
     } catch (err) {
       setError(err.message || 'Failed to create employee.');
     } finally {
@@ -391,7 +406,7 @@ export default function EmployeeDetail() {
       setSuccess('Portal login created successfully.');
       await refreshSession();
       setTimeout(() => {
-        navigate(`/dashboard/employees/${data.uid}?tab=access`, { replace: true });
+        navigate(`/dashboard/hr/employees/${data.uid}?tab=access`, { replace: true });
       }, 800);
     } catch (err) {
       setError(err.message || 'Failed to create portal login.');
@@ -476,7 +491,7 @@ export default function EmployeeDetail() {
         <div className="flex items-center gap-4 min-w-0">
           <button
             type="button"
-            onClick={() => navigate('/dashboard/employees')}
+            onClick={() => navigate('/dashboard/hr/employees')}
             className="p-1.5 hover:bg-[#1a2540] rounded-lg transition-colors text-slate-400 hover:text-slate-200 flex-shrink-0"
             aria-label="Back"
           >
@@ -499,6 +514,15 @@ export default function EmployeeDetail() {
             )}
           </div>
         </div>
+        {!isNew && canStartCases && (
+          <button
+            type="button"
+            onClick={startCaseFromProfile}
+            className="px-4 py-2 rounded-lg text-sm font-medium bg-indigo-600 hover:bg-indigo-500 text-white shrink-0"
+          >
+            Start case
+          </button>
+        )}
       </div>
 
       {!isNew && (
@@ -606,7 +630,15 @@ export default function EmployeeDetail() {
               />
             </div>
 
-            {activeTab === TAB_IDS.performance && (
+            {activeTab === TAB_IDS.performance && SHOW_HR_RECORDS && (
+              <EmployeeDisciplinaryPanel
+                employeeUid={uid}
+                employeeName={profileMeta?.fullName}
+                embedded
+              />
+            )}
+
+            {activeTab === TAB_IDS.cases && canStartCases && (
               <EmployeeDisciplinaryPanel
                 employeeUid={uid}
                 employeeName={profileMeta?.fullName}

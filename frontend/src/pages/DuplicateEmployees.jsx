@@ -116,7 +116,7 @@ function PairCard({ pair, onMerge }) {
       <div className="flex justify-end gap-3">
         <button
           type="button"
-          onClick={() => window.open(`/dashboard/employees/${primary.uid}`, '_blank')}
+          onClick={() => window.open(`/dashboard/hr/employees/${primary.uid}`, '_blank')}
           className="px-4 py-2 rounded-lg text-sm border border-[#1a2540] text-slate-200 hover:bg-[#060e1a]"
         >
           Review keeper
@@ -187,7 +187,7 @@ export default function DuplicateEmployees() {
         </div>
         <button
           type="button"
-          onClick={() => navigate('/dashboard/employees')}
+          onClick={() => navigate('/dashboard/hr/employees')}
           className="px-4 py-2.5 rounded-lg border border-[#1a2540] text-slate-200 text-sm font-medium hover:bg-[#0b1220]"
         >
           Back to employees

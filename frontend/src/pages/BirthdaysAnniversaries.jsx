@@ -93,7 +93,7 @@ function EmployeeNameCell({ employee, navigate }) {
   return (
     <button
       type="button"
-      onClick={() => navigate(`/dashboard/employees/${employee.uid}`)}
+      onClick={() => navigate(`/dashboard/hr/employees/${employee.uid}`)}
       className="text-left hover:text-indigo-300 transition-colors"
     >
       <span className="font-medium text-white">{employee.fullName || '—'}</span>
@@ -318,7 +318,7 @@ export default function BirthdaysAnniversaries() {
         <div className="flex items-start gap-4 min-w-0">
           <button
             type="button"
-            onClick={() => (activeView ? setView('overview') : navigate('/dashboard/employees'))}
+            onClick={() => (activeView ? setView('overview') : navigate('/dashboard/hr/employees'))}
             className="p-1.5 hover:bg-[#1a2540] rounded-lg transition-colors text-slate-400 hover:text-slate-200 flex-shrink-0 mt-1"
             aria-label="Back"
           >

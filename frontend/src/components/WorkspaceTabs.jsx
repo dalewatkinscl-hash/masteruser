@@ -2,8 +2,6 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { canViewAllEmployeeProfiles } from '../utils/employeeProfile';
-import { canManagePeopleCases } from '../utils/peopleCasesAccess';
-import { SHOW_HR_RECORDS, SHOW_CASES_PORTAL } from '../utils/featureFlags';
 
 const BADGE_POLL_MS = 45000;
 const LAST_SEEN_KEY = 'cl_suggestion_latest_id';
@@ -65,7 +63,7 @@ function maybeNotifyNewSuggestion({ latestId, latestTitle, onSuggestionsTab }) {
 
 /**
  * Top workspace tabs for the Employee Portal (profile + admin tools).
- * External portals stay in the left sidebar.
+ * HR directory / People Cases live in the side-nav HR portal.
  */
 export default function WorkspaceTabs({ activeProfileTab = null, onProfileTabChange = null }) {
   const { user } = useAuth();
@@ -77,17 +75,15 @@ export default function WorkspaceTabs({ activeProfileTab = null, onProfileTabCha
 
   const isAdmin = user?.portalsAccess?.master_admin === 'admin';
   const canBrowseEmployees = canViewAllEmployeeProfiles(user);
-  const canManageCases = canManagePeopleCases(user);
   const canSeeSuggestionBadge = isAdmin || canBrowseEmployees;
 
   const path = location.pathname;
-  const onEmployees = path.includes('/dashboard/employees') || path.includes('/dashboard/roll-calls');
-  const onCases = path.includes('/dashboard/cases') || path.includes('/dashboard/disciplinary') || path.includes('/dashboard/bump');
   const onPortalMatrix = path.includes('/dashboard/portal-access');
   const onFunAdmin = path.includes('/dashboard/fun-admin') || path.includes('/dashboard/nonograms');
   const onEmergencyPhone = path.includes('/dashboard/emergency-phone');
+  const onHr = path.includes('/dashboard/hr');
   const onProfile = path.includes('/dashboard/profile')
-    || (!onEmployees && !onCases && !onPortalMatrix && !onFunAdmin && !onEmergencyPhone && path.includes('/dashboard'));
+    || (!onPortalMatrix && !onFunAdmin && !onEmergencyPhone && !onHr && path.includes('/dashboard'));
   const onSuggestionsTab = onProfile && (activeProfileTab || 'profile') === 'suggestions';
 
   useEffect(() => {
@@ -178,24 +174,6 @@ export default function WorkspaceTabs({ activeProfileTab = null, onProfileTabCha
       kind: 'route',
       to: '/dashboard/emergency-phone',
     },
-    canBrowseEmployees && {
-      id: 'employees',
-      label: isAdmin ? 'Employees' : 'Employee directory',
-      kind: 'route',
-      to: '/dashboard/employees',
-    },
-    SHOW_CASES_PORTAL && canManageCases && {
-      id: 'cases',
-      label: 'People Cases',
-      kind: 'route',
-      to: '/dashboard/cases',
-    },
-    SHOW_HR_RECORDS && canBrowseEmployees && {
-      id: 'disciplinary',
-      label: 'Disciplinary',
-      kind: 'route',
-      to: '/dashboard/disciplinary',
-    },
     isAdmin && {
       id: 'portal-matrix',
       label: 'Portal matrix',
@@ -206,8 +184,6 @@ export default function WorkspaceTabs({ activeProfileTab = null, onProfileTabCha
 
   const isActive = (tab) => {
     if (tab.kind === 'route') {
-      if (tab.id === 'employees') return onEmployees;
-      if (tab.id === 'cases' || tab.id === 'disciplinary') return onCases;
       if (tab.id === 'portal-matrix') return onPortalMatrix;
       if (tab.id === 'emergency-phone') return onEmergencyPhone;
       return false;
@@ -215,7 +191,7 @@ export default function WorkspaceTabs({ activeProfileTab = null, onProfileTabCha
     // Fun admin lives under Fun — keep Fun highlighted while there.
     if (onFunAdmin) return tab.profileTab === 'fun';
     // Profile sub-tabs are only active on the profile page.
-    if (!onProfile || onEmployees || onCases || onPortalMatrix || onEmergencyPhone) return false;
+    if (!onProfile || onPortalMatrix || onEmergencyPhone || onHr) return false;
     return (activeProfileTab || 'profile') === tab.profileTab;
   };
 

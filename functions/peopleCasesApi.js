@@ -54,6 +54,7 @@ const {
   resolveAndDownloadCaseTemplate,
   TEMPLATES_FOLDER_NAME,
   downloadDriveItemContent,
+  deleteCaseSharePointFolder,
 } = require('./sharepoint');
 
 function createPeopleCasesApi({
@@ -405,14 +406,50 @@ function createPeopleCasesApi({
     await Promise.allSettled(updates);
   }
 
+  async function deleteCaseSharePointArtifacts(caseId, caseData = {}, related = {}) {
+    const sharePointConfig = getSharePointConfig();
+    if (!isSharePointConfigured(sharePointConfig)) {
+      return { skipped: true, reason: 'SharePoint is not configured.' };
+    }
+
+    const employeeUid = toTrimmedString(caseData.employeeUid);
+    const employee = employeeUid ? await getUserProfile(employeeUid) : null;
+    if (!employee) {
+      return { skipped: true, reason: 'Employee profile not found for SharePoint cleanup.' };
+    }
+
+    const caseFolderName = toTrimmedString(caseData.sharePointCaseFolderName)
+      || buildCaseSharePointFolderName(caseData, caseId);
+    const documentItemIds = (related.documents || [])
+      .map((doc) => toTrimmedString(doc.sharePointItemId))
+      .filter(Boolean);
+
+    try {
+      return await deleteCaseSharePointFolder(sharePointConfig, {
+        employee,
+        caseFolderName,
+        documentItemIds,
+      });
+    } catch (error) {
+      if (error.status === 404) {
+        return { folderDeleted: false, skippedMissing: true, caseFolderName };
+      }
+      throw error;
+    }
+  }
+
   async function deleteCaseAndRelated(caseId, caseData = {}) {
     const related = await listRelated(caseId);
+    const sharePointCleanup = await deleteCaseSharePointArtifacts(caseId, caseData, related);
     await clearCaseLinks(caseId, caseData);
+
+    const bumpSnap = await db.collection('bump_cards').where('caseId', '==', caseId).get();
     const refs = [
       ...related.eventRefs,
       ...related.documentRefs,
       ...related.minuteRefs,
       ...related.reviewRefs,
+      ...bumpSnap.docs.map((doc) => doc.ref),
       db.collection('disciplinary_cases').doc(caseId),
     ];
     for (let index = 0; index < refs.length; index += 400) {
@@ -420,6 +457,8 @@ function createPeopleCasesApi({
       refs.slice(index, index + 400).forEach((ref) => batch.delete(ref));
       await batch.commit();
     }
+
+    return { sharePointCleanup };
   }
 
   const getPeopleCaseMeta = onRequest(
@@ -3688,15 +3727,31 @@ function createPeopleCasesApi({
         const caseSnap = await loadCaseOrFail(caseId, res);
         if (!caseSnap) return;
         const caseData = caseSnap.data();
-        await deleteCaseAndRelated(caseId, caseData);
+        const { sharePointCleanup } = await deleteCaseAndRelated(caseId, caseData);
+        const sharePointDeleted = Boolean(
+          sharePointCleanup?.folderDeleted
+          || (sharePointCleanup?.deletedItemIds || []).length,
+        );
+        const sharePointSkipped = Boolean(sharePointCleanup?.skipped);
+        let message = 'Case and all portal records deleted.';
+        if (sharePointDeleted) {
+          message = 'Case, portal records, and SharePoint case folder/files deleted.';
+        } else if (sharePointSkipped) {
+          message = `Case and portal records deleted. SharePoint cleanup skipped: ${sharePointCleanup.reason || 'not configured.'}`;
+        } else {
+          message = 'Case and portal records deleted. No matching SharePoint case folder/files were found.';
+        }
         res.status(200).json({
           deleted: true,
           caseId,
-          message: 'Case and all portal records deleted. SharePoint files were not removed.',
+          sharePointCleanup: sharePointCleanup || null,
+          message,
         });
       } catch (error) {
         console.error('deletePeopleCase failed', error);
-        res.status(500).json({ error: 'Failed to delete case.' });
+        res.status(500).json({
+          error: error.message || 'Failed to delete case.',
+        });
       }
     }),
   );

@@ -477,6 +477,11 @@
         "region": "europe-west2"
       },
       {
+        "source": "/api/startToolboxKickRound",
+        "function": "startToolboxKickRound",
+        "region": "europe-west2"
+      },
+      {
         "source": "/api/submitToolboxKickResult",
         "function": "submitToolboxKickResult",
         "region": "europe-west2"
@@ -539,6 +544,16 @@
       {
         "source": "/api/adminSetWordleSuspect",
         "function": "adminSetWordleSuspect",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/adminListToolboxPunishments",
+        "function": "adminListToolboxPunishments",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/adminSetToolboxPunishment",
+        "function": "adminSetToolboxPunishment",
         "region": "europe-west2"
       },
       {

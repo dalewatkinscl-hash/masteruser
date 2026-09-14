@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { readJsonResponse } from '../utils/employeeProfile';
-import WorkspaceTabs from '../components/WorkspaceTabs';
 import { PROCESS_FAMILIES, caseProgressToneClass, formatCaseTimeToResolution, getCaseProgressStatus, stageLabel } from '../utils/peopleCasesAccess';
 import { ALLOW_DELETE_CASES } from '../utils/featureFlags';
 
@@ -125,7 +124,6 @@ export default function DisciplinaryDashboard() {
 
   return (
     <div className="flex flex-col h-full">
-      <WorkspaceTabs />
       <div className="flex items-center justify-between px-8 py-6 border-b border-[#1a2540] gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold text-white">People Cases</h1>
@@ -136,14 +134,14 @@ export default function DisciplinaryDashboard() {
         <div className="flex gap-2 flex-wrap">
           <button
             type="button"
-            onClick={() => navigate('/dashboard/cases/bump-prompt')}
+            onClick={() => navigate('/dashboard/hr/cases/bump-prompt')}
             className="px-4 py-2.5 rounded-lg border border-[#1a2540] text-slate-200 text-sm hover:bg-[#0b1220]"
           >
             Prompt bump card
           </button>
           <button
             type="button"
-            onClick={() => navigate('/dashboard/cases/new')}
+            onClick={() => navigate('/dashboard/hr/cases/new')}
             className="px-4 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold"
           >
             New case
@@ -258,7 +256,7 @@ export default function DisciplinaryDashboard() {
                       <div className="inline-flex items-center gap-3">
                         <button
                           type="button"
-                          onClick={() => navigate(`/dashboard/cases/${item.id}`)}
+                          onClick={() => navigate(`/dashboard/hr/cases/${item.id}`)}
                           className="text-indigo-300 hover:text-indigo-200 text-sm"
                         >
                           Open

@@ -94,7 +94,7 @@ export default function MergeEmployeeCard({
     if (!primaryEmployee?.uid || !selectedEmployee?.uid) return;
 
     if (mergeBlockedBecausePortalOnDuplicate) {
-      navigate(`/dashboard/employees/${selectedEmployee.uid}`);
+      navigate(`/dashboard/hr/employees/${selectedEmployee.uid}`);
       return;
     }
 
@@ -129,7 +129,7 @@ export default function MergeEmployeeCard({
       if (onMerged) {
         await onMerged(data);
       } else if (data.uid && data.uid !== primaryEmployee.uid) {
-        navigate(`/dashboard/employees/${data.uid}`, { replace: true });
+        navigate(`/dashboard/hr/employees/${data.uid}`, { replace: true });
       } else {
         window.location.reload();
       }
@@ -263,7 +263,7 @@ export default function MergeEmployeeCard({
           {mergeBlockedBecausePortalOnDuplicate ? (
             <button
               type="button"
-              onClick={() => navigate(`/dashboard/employees/${selectedEmployee.uid}`)}
+              onClick={() => navigate(`/dashboard/hr/employees/${selectedEmployee.uid}`)}
               className="px-5 py-2.5 rounded-lg text-sm font-medium bg-amber-500 hover:bg-amber-400 text-[#1a1200] font-semibold"
             >
               Open portal account

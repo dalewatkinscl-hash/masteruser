@@ -12,6 +12,11 @@ export function canManagePortalAccess(user) {
   return user?.portalsAccess?.master_admin === 'admin';
 }
 
+/** Employee directory / milestones / roll calls inside the in-app HR portal. */
+export function canAccessHrDirectory(user) {
+  return canViewAllEmployeeProfiles(user);
+}
+
 export function formatDisplayDate(value) {
   if (!value) return '—';
   const date = new Date(`${value}T00:00:00`);

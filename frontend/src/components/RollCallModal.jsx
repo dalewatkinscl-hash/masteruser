@@ -41,7 +41,7 @@ export default function RollCallModal({ employees, groupBy = '', onClose }) {
         memberUids: employees.map((employee) => employee.uid).filter(Boolean),
       });
       onClose();
-      navigate(`/dashboard/roll-calls/${payload.list.id}`);
+      navigate(`/dashboard/hr/roll-calls/${payload.list.id}`);
     } catch (err) {
       setError(err.message || 'Failed to save roll call.');
     } finally {

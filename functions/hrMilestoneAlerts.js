@@ -53,7 +53,7 @@ function buildAlertEmail(alert) {
   const summary = employeeSummary(alert.employee);
   const whenLabel = formatDaysUntilLabel(alert.milestone.daysUntil);
   const dateLabel = formatMilestoneDate(alert.milestone.date);
-  const profileUrl = `${EMPLOYEE_PORTAL_URL}/dashboard/employees/${alert.employee.uid}`;
+  const profileUrl = `${EMPLOYEE_PORTAL_URL}/dashboard/hr/employees/${alert.employee.uid}`;
 
   if (alert.type === 'special_birthday') {
     const milestoneAge = alert.milestone.milestoneAge;

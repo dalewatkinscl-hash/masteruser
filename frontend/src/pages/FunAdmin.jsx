@@ -364,6 +364,7 @@ const TABS = [
   { id: 'test', label: 'Test / preview' },
   { id: 'wanted', label: 'Dev · Wanted' },
   { id: 'wordle-suspects', label: 'Wordle suspects' },
+  { id: 'toolbox-punishments', label: 'Toolbox punishments' },
   { id: 'enclose', label: 'Dev · Enclose (cow)' },
   { id: 'letterbox', label: 'Dev · Letter Box' },
   { id: 'pipes', label: 'Dev · Pipes' },
@@ -951,6 +952,154 @@ function WordleSuspectsPanel() {
   );
 }
 
+function ToolboxPunishmentsPanel() {
+  const [employees, setEmployees] = useState([]);
+  const [employeesLoading, setEmployeesLoading] = useState(true);
+  const [punishments, setPunishments] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [pickUid, setPickUid] = useState('');
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+
+  const loadPunishments = async () => {
+    const response = await fetch('/api/adminListToolboxPunishments', { credentials: 'include' });
+    const payload = (await readJsonResponse(response)) || {};
+    if (!response.ok) throw new Error(payload.error || 'Failed to load punishments.');
+    setPunishments(payload.punishments || []);
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        setLoading(true);
+        setError('');
+        const [empRes] = await Promise.all([
+          fetch('/api/getEmployeeProfiles', { credentials: 'include' }),
+          loadPunishments(),
+        ]);
+        const empPayload = (await readJsonResponse(empRes)) || {};
+        if (!empRes.ok) throw new Error(empPayload.error || 'Failed to load employees.');
+        if (!cancelled) {
+          setEmployees(empPayload.employees || empPayload.profiles || empPayload.items || []);
+        }
+      } catch (err) {
+        if (!cancelled) setError(err.message || 'Failed to load Toolbox punishments.');
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+          setEmployeesLoading(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const setPunishment = async (uid, punished) => {
+    if (!uid) return;
+    try {
+      setSaving(true);
+      setError('');
+      setMessage('');
+      const response = await fetch('/api/adminSetToolboxPunishment', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uid, punished }),
+      });
+      const payload = (await readJsonResponse(response)) || {};
+      if (!response.ok) throw new Error(payload.error || 'Failed to update punishment.');
+      setPunishments(payload.punishments || []);
+      if (punished) setPickUid('');
+      setMessage(punished ? 'Added to Toolbox punishment list.' : 'Removed from punishment list.');
+    } catch (err) {
+      setError(err.message || 'Failed to update punishment.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const punishedUids = new Set(punishments.map((row) => row.uid));
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-xl border border-[#1a2540] p-4 space-y-2">
+        <p className="text-sm text-slate-300">
+          Mark accounts for a <span className="text-white font-medium">Little Dicks Toolbox punishment</span>.
+          They play at 10% power, get coaches flooding the path on kick, a HA-HA taunt on every landing,
+          and each attempt is logged to the leaderboard immediately (so quitting early still counts).
+        </p>
+        <p className="text-xs text-slate-500">
+          Same attempt-logging also applies to anyone caught reloading mid-round (F5).
+        </p>
+      </div>
+
+      <div className="rounded-xl border border-[#1a2540] p-4 space-y-3">
+        <p className="text-sm font-semibold text-indigo-200">Add punishment</p>
+        <div className="flex flex-wrap gap-3 items-end">
+          <div className="min-w-[16rem] flex-1">
+            <EmployeeSelect
+              value={pickUid}
+              onChange={setPickUid}
+              employees={employees}
+              loading={employeesLoading}
+              emptyLabel="Search employee…"
+              disabled={saving}
+            />
+          </div>
+          <button
+            type="button"
+            disabled={!pickUid || saving || punishedUids.has(pickUid)}
+            onClick={() => setPunishment(pickUid, true)}
+            className="px-3 py-2 rounded-lg text-sm border border-rose-500/40 text-rose-100 hover:bg-rose-500/10 disabled:opacity-40"
+          >
+            Punish
+          </button>
+        </div>
+      </div>
+
+      {error ? <p className="text-sm text-rose-300">{error}</p> : null}
+      {message ? <p className="text-sm text-emerald-300">{message}</p> : null}
+
+      <div className="rounded-xl border border-[#1a2540] overflow-hidden">
+        <div className="px-4 py-3 border-b border-[#1a2540] text-sm font-semibold text-indigo-200">
+          Current punishments ({punishments.length})
+        </div>
+        {loading ? (
+          <p className="px-4 py-6 text-sm text-slate-500">Loading…</p>
+        ) : !punishments.length ? (
+          <p className="px-4 py-6 text-sm text-slate-500">Nobody marked yet.</p>
+        ) : (
+          <ul className="divide-y divide-[#1a2540]">
+            {punishments.map((row) => (
+              <li key={row.uid} className="px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm text-slate-100 font-medium">{row.fullName}</p>
+                  <p className="text-xs text-slate-500">
+                    {row.email || row.uid}
+                    {row.markedByName ? ` · marked by ${row.markedByName}` : ''}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={() => setPunishment(row.uid, false)}
+                  className="px-3 py-1.5 rounded-lg text-xs border border-[#1a2540] text-slate-300 hover:bg-white/[0.04] disabled:opacity-40"
+                >
+                  Clear
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function FunAdmin() {
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -1123,6 +1272,7 @@ export default function FunAdmin() {
         )}
 
         {tab === 'wordle-suspects' && <WordleSuspectsPanel />}
+        {tab === 'toolbox-punishments' && <ToolboxPunishmentsPanel />}
         {tab === 'nonograms' && <NonogramManagerPanel />}
         {tab === 'connections' && <ConnectionsBuilder onSaved={loadLibrary} />}
         {tab === 'trivia' && <TriviaBuilder onSaved={loadLibrary} />}

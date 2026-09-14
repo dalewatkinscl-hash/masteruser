@@ -80,12 +80,15 @@ export default function FunLeaderboardRow({
 }) {
   const isMe = row.uid === currentUserUid;
   const failed = row?.failed || row?.status === 'lost' || row?.correct === false;
+  const gif = typeof row?.leaderboardGif === 'string' && row.leaderboardGif.trim()
+    ? row.leaderboardGif.trim()
+    : null;
 
   return (
     <li
-      className={`px-5 py-3 flex items-center justify-between gap-3 text-sm ${isMe ? 'bg-indigo-500/10' : ''}`}
+      className={`px-5 py-3 flex items-start justify-between gap-3 text-sm ${isMe ? 'bg-indigo-500/10' : ''}`}
     >
-      <div className="flex items-center gap-2 min-w-0">
+      <div className="flex items-start gap-2 min-w-0">
         <FunRankBadge row={row} />
         <div className="min-w-0">
           <div className="flex items-center gap-2 min-w-0 flex-wrap">
@@ -96,9 +99,16 @@ export default function FunLeaderboardRow({
             <FunRankLabel row={row} />
             <RecordBadges row={row} />
           </div>
+          {gif ? (
+            <img
+              src={gif}
+              alt=""
+              className="mt-2 max-w-[220px] w-full rounded-md border border-[#1a2540] shadow-sm"
+            />
+          ) : null}
         </div>
       </div>
-      <span className={`text-xs flex-shrink-0 ${failed ? 'text-rose-300' : 'text-slate-500'}`}>
+      <span className={`text-xs flex-shrink-0 pt-0.5 ${failed ? 'text-rose-300' : 'text-slate-500'}`}>
         {resultText}
         {metaText ? ` · ${metaText}` : ''}
       </span>

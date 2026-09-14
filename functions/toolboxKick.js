@@ -6,7 +6,8 @@
  */
 
 const TOOLBOX_KICK_LIVE_FROM = '2026-08-26';
-const MAX_DISTANCE_M = 2_000_000;
+/** Cap high enough for solar-system milestones; stay within Number.MAX_SAFE_INTEGER. */
+const MAX_DISTANCE_M = 9_000_000_000_000_000;
 const SUPER_RAGE_BOOST_PCT = 40;
 const SUPER_RAGE_COLLECTION = 'toolbox_kick_powerups';
 
@@ -50,17 +51,39 @@ function normalizeMode(mode) {
 }
 
 function serializeToolboxKickGame(data = {}) {
+  const status = data.status || 'in_progress';
+  const roundComplete = data.roundComplete === false
+    ? false
+    : (status === 'won' ? data.roundComplete !== false : Boolean(data.roundComplete));
   return {
     dayKey: data.dayKey || '',
-    status: data.status || 'in_progress',
+    status,
     mode: normalizeMode(data.mode),
     distanceM: clampDistance(data.distanceM),
     attempts: Array.isArray(data.attempts)
       ? data.attempts.map((n) => clampDistance(n))
       : [],
     energyDrinkUsed: Boolean(data.energyDrinkUsed),
+    caughtCheating: Boolean(data.caughtCheating),
+    punished: Boolean(data.punished),
+    roundComplete,
+    reloadCount: Math.max(0, Math.floor(Number(data.reloadCount) || 0)),
+    forfeited: Boolean(data.forfeited),
+    forfeitReason: data.forfeitReason || null,
+    startedAt: data.startedAt?.toDate?.()?.toISOString?.() || data.startedAt || null,
     completedAt: data.completedAt?.toDate?.()?.toISOString?.() || data.completedAt || null,
   };
+}
+
+/** Tracked players (F5-caught or admin punishment) log each attempt as a live score. */
+function isToolboxKickTrackedGame(data = {}) {
+  return Boolean(data.caughtCheating || data.punished);
+}
+
+function isToolboxKickRoundFullyDone(data = {}) {
+  if (!data || data.status !== 'won') return false;
+  if (data.roundComplete === false) return false;
+  return true;
 }
 
 function compareToolboxKickRows(a, b) {
@@ -76,11 +99,64 @@ function formatDistanceLabel(metres) {
   const m = Math.abs(raw);
   const sign = raw < 0 ? '−' : '';
   if (m < 1000) return `${sign}${m.toLocaleString('en-GB')} m`;
-  return `${sign}${(m / 1000).toFixed(1)} km`;
+  const km = m / 1000;
+  if (km >= 149_597_870) {
+    const au = km / 149_597_870;
+    return `${sign}${au >= 10 ? au.toFixed(1) : au.toFixed(2)} AU`;
+  }
+  if (km >= 1_000_000_000) return `${sign}${(km / 1_000_000_000).toFixed(2)} billion km`;
+  if (km >= 1_000_000) return `${sign}${(km / 1_000_000).toFixed(1)} million km`;
+  if (km >= 10_000) return `${sign}${Math.round(km).toLocaleString('en-GB')} km`;
+  return `${sign}${km.toFixed(1)} km`;
 }
 
 function toolboxKickResultLabel(row) {
+  if (row?.resultLabelOverride) return String(row.resultLabelOverride);
+  if (row?.forfeited) return 'Forfeit · quit/reload';
   return formatDistanceLabel(row.distanceM);
+}
+
+/** Mark a mid-round reload as caught cheating (keep the round open, nerf speed on client). */
+function markToolboxKickCaughtCheating(existing = {}, { FieldValue, reason = 'reload' } = {}) {
+  const prev = Math.max(0, Math.floor(Number(existing.reloadCount) || 0));
+  return {
+    caughtCheating: true,
+    reloadCount: prev + 1,
+    cheatReason: reason,
+    updatedAt: FieldValue ? FieldValue.serverTimestamp() : new Date().toISOString(),
+  };
+}
+
+/** Shame score when a competitive round is abandoned (legacy). */
+const TOOLBOX_KICK_FORFEIT_DISTANCE_M = 0;
+
+function buildToolboxKickForfeitPayload({
+  existing = {},
+  uid,
+  fullName,
+  email,
+  dayKey,
+  reason = 'abandoned',
+  FieldValue,
+}) {
+  return {
+    uid: uid || existing.uid || '',
+    fullName: fullName || existing.fullName || 'Colleague',
+    email: email || existing.email || '',
+    dayKey: dayKey || existing.dayKey || '',
+    status: 'won',
+    mode: normalizeMode(existing.mode),
+    distanceM: TOOLBOX_KICK_FORFEIT_DISTANCE_M,
+    attempts: Array.isArray(existing.attempts) && existing.attempts.length
+      ? existing.attempts
+      : [TOOLBOX_KICK_FORFEIT_DISTANCE_M],
+    energyDrinkUsed: Boolean(existing.energyDrinkUsed),
+    caughtCheating: true,
+    forfeited: true,
+    forfeitReason: reason,
+    completedAt: FieldValue ? FieldValue.serverTimestamp() : new Date().toISOString(),
+    updatedAt: FieldValue ? FieldValue.serverTimestamp() : new Date().toISOString(),
+  };
 }
 
 function serializeToolboxKickAllTimeRecord(row) {
@@ -107,6 +183,8 @@ function collectToolboxKickRecords(docs = []) {
   docs.forEach((doc) => {
     const data = typeof doc.data === 'function' ? (doc.data() || {}) : (doc || {});
     if ((data.status || '') !== 'won') return;
+    if (data.forfeited) return;
+    if (data.shameScore) return;
     const distanceM = clampDistance(data.distanceM);
     const uid = data.uid || doc.id || '';
     if (!uid) return;
@@ -191,17 +269,22 @@ module.exports = {
   TOOLBOX_KICK_LIVE_FROM,
   SUPER_RAGE_BOOST_PCT,
   SUPER_RAGE_COLLECTION,
+  TOOLBOX_KICK_FORFEIT_DISTANCE_M,
   getLondonDayKey,
   addDaysToDayKey,
   getLondonWeekStartDayKey,
   getNextMondayDayKey,
   normalizeMode,
   serializeToolboxKickGame,
+  isToolboxKickTrackedGame,
+  isToolboxKickRoundFullyDone,
   compareToolboxKickRows,
   formatDistanceLabel,
   toolboxKickResultLabel,
   serializeToolboxKickAllTimeRecord,
   collectToolboxKickRecords,
+  markToolboxKickCaughtCheating,
+  buildToolboxKickForfeitPayload,
   clampDistance,
   getSuperRageStatus,
 };

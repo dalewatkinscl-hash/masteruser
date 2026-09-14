@@ -565,6 +565,158 @@ async function deleteDriveItem(config, itemId) {
   await graphRequest(config, 'DELETE', `/drives/${driveId}/items/${itemId}`);
 }
 
+/**
+ * Delete a drive item by library-relative path. Returns false if the path is missing.
+ */
+async function deleteDriveItemByPath(config, itemPath) {
+  const driveId = await getDocumentLibraryDriveId(config);
+  const item = await getDriveItemByPath(config, driveId, itemPath);
+  if (!item?.id) return false;
+  await deleteDriveItem(config, item.id);
+  return true;
+}
+
+/**
+ * Delete the SharePoint case folder (and all files inside it) for a people case.
+ * Falls back to deleting known document item IDs if the folder path is unknown/missing.
+ */
+async function deleteCaseSharePointFolder(config, {
+  employee = {},
+  caseFolderName = '',
+  documentItemIds = [],
+} = {}) {
+  const paths = resolveEmployeeSharePointPaths(employee);
+  const driveId = await getDocumentLibraryDriveId(config);
+  const resolved = await resolveDisciplinaryFolder(config, driveId, paths);
+
+  let folderDeleted = false;
+  const folderName = String(caseFolderName || '')
+    .replace(INVALID_FILE_CHARS, '-')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (folderName && resolved.disciplinaryFolderExists) {
+    const caseFolderPath = `${resolved.disciplinaryFolderPath}/${folderName}`;
+    folderDeleted = await deleteDriveItemByPath(config, caseFolderPath);
+  }
+
+  const deletedItemIds = [];
+  const uniqueItemIds = [...new Set(
+    (documentItemIds || []).map((id) => String(id || '').trim()).filter(Boolean),
+  )];
+
+  if (!folderDeleted && uniqueItemIds.length > 0) {
+    for (const itemId of uniqueItemIds) {
+      try {
+        await deleteDriveItem(config, itemId);
+        deletedItemIds.push(itemId);
+      } catch (error) {
+        if (error.status === 404) continue;
+        throw error;
+      }
+    }
+  }
+
+  return {
+    folderDeleted,
+    caseFolderName: folderName,
+    disciplinaryFolderPath: resolved.disciplinaryFolderPath || paths.disciplinaryFolderPath,
+    deletedItemIds,
+  };
+}
+
+/**
+ * List files and folders under an employee's SharePoint folder.
+ * relativePath must stay under the employee folder (no .. / absolute escapes).
+ */
+async function listEmployeeFolderContents(config, employee, { relativePath = '' } = {}) {
+  const paths = resolveEmployeeSharePointPaths(employee);
+  const driveId = await getDocumentLibraryDriveId(config);
+  const employeeFolderItem = await getDriveItemByPath(config, driveId, paths.employeeFolderPath);
+
+  if (!employeeFolderItem?.folder) {
+    return {
+      ...paths,
+      employeeFolderExists: false,
+      currentPath: paths.employeeFolderPath,
+      relativePath: '',
+      breadcrumbs: [],
+      items: [],
+      folders: [],
+      documents: [],
+    };
+  }
+
+  const cleanedRelative = String(relativePath || '')
+    .replace(/\\/g, '/')
+    .split('/')
+    .map((segment) => segment.trim())
+    .filter((segment) => segment && segment !== '.' && segment !== '..')
+    .join('/');
+
+  const currentPath = cleanedRelative
+    ? `${paths.employeeFolderPath}/${cleanedRelative}`
+    : paths.employeeFolderPath;
+
+  // Ensure the target is still under the employee folder.
+  if (
+    currentPath !== paths.employeeFolderPath
+    && !currentPath.startsWith(`${paths.employeeFolderPath}/`)
+  ) {
+    throw Object.assign(new Error('Invalid SharePoint folder path.'), { status: 400 });
+  }
+
+  const currentItem = await getDriveItemByPath(config, driveId, currentPath);
+  if (!currentItem?.folder) {
+    throw Object.assign(new Error(`SharePoint folder "${currentPath}" was not found.`), { status: 404 });
+  }
+
+  const children = await listFolderChildren(config, driveId, currentPath);
+  const folders = children
+    .filter((item) => item.folder)
+    .map((item) => ({
+      id: item.id,
+      name: item.name,
+      webUrl: item.webUrl || '',
+      kind: 'folder',
+      childCount: item.folder?.childCount,
+      lastModifiedAt: item.lastModifiedDateTime || item.createdDateTime || '',
+      relativePath: cleanedRelative ? `${cleanedRelative}/${item.name}` : item.name,
+    }))
+    .sort((left, right) => String(left.name).localeCompare(String(right.name), undefined, { sensitivity: 'base' }));
+
+  const documents = children
+    .filter((item) => item.file)
+    .map((item) => ({
+      id: item.id,
+      fileName: item.name,
+      name: item.name,
+      webUrl: item.webUrl || '',
+      kind: 'file',
+      size: item.size || 0,
+      lastModifiedAt: item.lastModifiedDateTime || item.createdDateTime || '',
+    }))
+    .sort((left, right) => String(right.lastModifiedAt).localeCompare(String(left.lastModifiedAt)));
+
+  const breadcrumbs = cleanedRelative
+    ? cleanedRelative.split('/').map((name, index, parts) => ({
+      name,
+      relativePath: parts.slice(0, index + 1).join('/'),
+    }))
+    : [];
+
+  return {
+    ...paths,
+    employeeFolderExists: true,
+    currentPath,
+    relativePath: cleanedRelative,
+    breadcrumbs,
+    items: [...folders, ...documents],
+    folders,
+    documents,
+  };
+}
+
 function masterTemplateFileName(name) {
   return String(name || 'template.docx').trim().replace(/\.doc$/i, '.docx') || 'template.docx';
 }
@@ -672,9 +824,12 @@ module.exports = {
   isSharePointConfigured,
   clearSharePointCaches,
   listDisciplinaryDocuments,
+  listEmployeeFolderContents,
   listTemplateLibraryFiles,
   findTemplateFile,
   deleteDriveItem,
+  deleteDriveItemByPath,
+  deleteCaseSharePointFolder,
   resolveAndDownloadCaseTemplate,
   uploadCaseTemplateMaster,
   resolveEmployeeSharePointPaths,

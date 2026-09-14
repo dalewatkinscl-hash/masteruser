@@ -38,11 +38,12 @@ export default function EmployeeSharePointDocuments({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [documents, setDocuments] = useState([]);
-  const [folderExists, setFolderExists] = useState(false);
-  const [disciplinaryFolderPath, setDisciplinaryFolderPath] = useState('');
+  const [folders, setFolders] = useState([]);
   const [employeeFolderExists, setEmployeeFolderExists] = useState(false);
-  const [disciplinaryFolderExists, setDisciplinaryFolderExists] = useState(false);
-  const [subfolders, setSubfolders] = useState([]);
+  const [employeeFolderPath, setEmployeeFolderPath] = useState('');
+  const [currentPath, setCurrentPath] = useState('');
+  const [relativePath, setRelativePath] = useState('');
+  const [breadcrumbs, setBreadcrumbs] = useState([]);
   const [configured, setConfigured] = useState(false);
   const [mappingOpen, setMappingOpen] = useState(false);
   const [suggestionsLoading, setSuggestionsLoading] = useState(false);
@@ -51,14 +52,27 @@ export default function EmployeeSharePointDocuments({
   const [manualFolderName, setManualFolderName] = useState('');
   const [manualEmployeeRoot, setManualEmployeeRoot] = useState('Current Employees');
 
-  const loadDocuments = useCallback(async () => {
+  const applyListing = (data = {}) => {
+    setConfigured(true);
+    setDocuments(data.documents || []);
+    setFolders(data.folders || []);
+    setEmployeeFolderExists(Boolean(data.employeeFolderExists ?? data.folderExists));
+    setEmployeeFolderPath(data.employeeFolderPath || '');
+    setCurrentPath(data.currentPath || data.employeeFolderPath || '');
+    setRelativePath(data.relativePath || '');
+    setBreadcrumbs(data.breadcrumbs || []);
+  };
+
+  const loadDocuments = useCallback(async (path = '') => {
     if (!canView || !employeeUid) return;
 
     try {
       setLoading(true);
       setError('');
+      const params = new URLSearchParams({ employeeUid });
+      if (path) params.set('path', path);
       const response = await fetch(
-        `/api/getEmployeeSharePointDocuments?employeeUid=${encodeURIComponent(employeeUid)}`,
+        `/api/getEmployeeSharePointDocuments?${params.toString()}`,
         { credentials: 'include' },
       );
       const data = (await readJsonResponse(response)) || {};
@@ -67,13 +81,7 @@ export default function EmployeeSharePointDocuments({
         throw new Error(data.error || 'Failed to load SharePoint documents.');
       }
 
-      setConfigured(true);
-      setDocuments(data.documents || []);
-      setFolderExists(Boolean(data.disciplinaryFolderExists));
-      setEmployeeFolderExists(Boolean(data.employeeFolderExists));
-      setDisciplinaryFolderExists(Boolean(data.disciplinaryFolderExists));
-      setSubfolders(data.subfolders || []);
-      setDisciplinaryFolderPath(data.disciplinaryFolderPath || '');
+      applyListing(data);
     } catch (err) {
       setError(err.message || 'Failed to load SharePoint documents.');
     } finally {
@@ -82,7 +90,7 @@ export default function EmployeeSharePointDocuments({
   }, [canView, employeeUid]);
 
   useEffect(() => {
-    loadDocuments();
+    loadDocuments('');
   }, [loadDocuments]);
 
   const openMapping = async () => {
@@ -126,11 +134,7 @@ export default function EmployeeSharePointDocuments({
       const data = (await readJsonResponse(response)) || {};
       if (!response.ok) throw new Error(data.error || 'Failed to save folder mapping.');
 
-      setDocuments(data.documents || []);
-      setFolderExists(Boolean(data.folderExists));
-      setEmployeeFolderExists(true);
-      setDisciplinaryFolderExists(Boolean(data.folderExists));
-      setDisciplinaryFolderPath(data.disciplinaryFolderPath || '');
+      applyListing(data);
       setMappingOpen(false);
       onMappingSaved?.({
         sharePointFolderName: folderName,
@@ -149,6 +153,7 @@ export default function EmployeeSharePointDocuments({
   const linkedFolderLabel = sharePointFolderName
     ? `${sharePointEmployeeRoot || 'Current Employees'} / ${sharePointFolderName}`
     : employeeName;
+  const hasEntries = folders.length > 0 || documents.length > 0;
 
   return (
     <div className={embedded ? 'w-full' : 'w-full px-8 pb-4'}>
@@ -157,7 +162,7 @@ export default function EmployeeSharePointDocuments({
           <div>
             <h3 className="text-sm font-semibold text-white">SharePoint documents</h3>
             <p className="text-sm text-slate-400 mt-1">
-              Historical files from Disciplinaries & Grievances
+              Browse files and folders in this employee&apos;s SharePoint folder
             </p>
           </div>
           {configured && (
@@ -179,7 +184,7 @@ export default function EmployeeSharePointDocuments({
           )}
 
           {configured && !loading && !error && (
-            <div className="text-sm text-slate-400">
+            <div className="text-sm text-slate-400 space-y-2">
               <p>
                 Linked folder:
                 {' '}
@@ -190,8 +195,31 @@ export default function EmployeeSharePointDocuments({
                   <span className="ml-2 text-amber-300">(auto-matched by name)</span>
                 )}
               </p>
-              {disciplinaryFolderPath && (
-                <p className="mt-1 text-xs text-slate-500">{disciplinaryFolderPath}</p>
+              {employeeFolderExists && (
+                <div className="flex flex-wrap items-center gap-1 text-xs text-slate-400">
+                  <button
+                    type="button"
+                    onClick={() => loadDocuments('')}
+                    className={`hover:text-indigo-300 ${relativePath ? 'text-indigo-300' : 'text-slate-300'}`}
+                  >
+                    {employeeFolderPath || 'Employee folder'}
+                  </button>
+                  {breadcrumbs.map((crumb) => (
+                    <span key={crumb.relativePath} className="inline-flex items-center gap-1">
+                      <span className="text-slate-600">/</span>
+                      <button
+                        type="button"
+                        onClick={() => loadDocuments(crumb.relativePath)}
+                        className="hover:text-indigo-300 text-slate-300"
+                      >
+                        {crumb.name}
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              {currentPath && (
+                <p className="text-xs text-slate-500">{currentPath}</p>
               )}
             </div>
           )}
@@ -210,38 +238,67 @@ export default function EmployeeSharePointDocuments({
               {' '}
               Click <strong>Link SharePoint folder</strong> to choose the correct employee folder.
             </div>
-          ) : !error && configured && employeeFolderExists && !disciplinaryFolderExists ? (
-            <div className="bg-amber-500/10 border border-amber-500/25 rounded-lg p-4 text-sm text-amber-100 space-y-2">
-              <p>
-                Employee folder found, but no <strong>Disciplinaries & Grievances</strong> subfolder was found inside it.
-              </p>
-              {subfolders.length > 0 ? (
-                <p className="text-amber-200/80">
-                  Subfolders in this employee folder:
-                  {' '}
-                  {subfolders.join(', ')}
-                </p>
-              ) : (
-                <p className="text-amber-200/80">This employee folder appears to be empty.</p>
-              )}
-            </div>
-          ) : !error && configured && documents.length === 0 ? (
-            <p className="text-sm text-slate-500">No documents found in the linked SharePoint folder.</p>
+          ) : !error && configured && !hasEntries ? (
+            <p className="text-sm text-slate-500">No files or folders found here.</p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
                   <tr className="border-b border-[#1a2540]">
-                    <th className="px-3 py-2 text-left text-xs text-slate-500 uppercase">File</th>
+                    <th className="px-3 py-2 text-left text-xs text-slate-500 uppercase">Name</th>
+                    <th className="px-3 py-2 text-left text-xs text-slate-500 uppercase">Type</th>
                     <th className="px-3 py-2 text-left text-xs text-slate-500 uppercase">Modified</th>
                     <th className="px-3 py-2 text-left text-xs text-slate-500 uppercase">Size</th>
                     <th className="px-3 py-2 text-right text-xs text-slate-500 uppercase">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#1a2540]">
+                  {relativePath && (
+                    <tr className="hover:bg-[#060e1a]">
+                      <td className="px-3 py-3 text-sm text-indigo-300" colSpan={4}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const parent = relativePath.split('/').slice(0, -1).join('/');
+                            loadDocuments(parent);
+                          }}
+                          className="hover:text-indigo-200"
+                        >
+                          ← Up one folder
+                        </button>
+                      </td>
+                      <td className="px-3 py-3" />
+                    </tr>
+                  )}
+                  {folders.map((folder) => (
+                    <tr key={folder.id} className="hover:bg-[#060e1a]">
+                      <td className="px-3 py-3 text-sm text-white">
+                        <button
+                          type="button"
+                          onClick={() => loadDocuments(folder.relativePath)}
+                          className="text-left hover:text-indigo-300"
+                        >
+                          {folder.name}
+                        </button>
+                      </td>
+                      <td className="px-3 py-3 text-sm text-slate-400">Folder</td>
+                      <td className="px-3 py-3 text-sm text-slate-300">{formatDate(folder.lastModifiedAt)}</td>
+                      <td className="px-3 py-3 text-sm text-slate-500">—</td>
+                      <td className="px-3 py-3 text-right">
+                        <button
+                          type="button"
+                          onClick={() => loadDocuments(folder.relativePath)}
+                          className="text-indigo-300 hover:text-indigo-200 text-sm"
+                        >
+                          Open
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
                   {documents.map((document) => (
                     <tr key={document.id} className="hover:bg-[#060e1a]">
-                      <td className="px-3 py-3 text-sm text-white">{document.fileName}</td>
+                      <td className="px-3 py-3 text-sm text-white">{document.fileName || document.name}</td>
+                      <td className="px-3 py-3 text-sm text-slate-400">File</td>
                       <td className="px-3 py-3 text-sm text-slate-300">{formatDate(document.lastModifiedAt)}</td>
                       <td className="px-3 py-3 text-sm text-slate-300">{formatFileSize(document.size)}</td>
                       <td className="px-3 py-3 text-right">

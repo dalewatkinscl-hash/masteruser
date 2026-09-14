@@ -21,7 +21,6 @@ import {
 import { canManagePortalAccess } from '../utils/portalAccess';
 import { canManagePeopleCases } from '../utils/peopleCasesAccess';
 import { useAuth } from '../context/AuthContext';
-import WorkspaceTabs from '../components/WorkspaceTabs';
 
 function PlusIcon({ className }) {
   return (
@@ -550,7 +549,6 @@ export default function EmployeesDirectory() {
 
   return (
     <div className="flex flex-col h-full">
-      <WorkspaceTabs />
       <div className="flex items-center justify-between px-4 sm:px-8 py-6 border-b border-[#1a2540] gap-4 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold text-white">Employees</h1>
@@ -568,7 +566,7 @@ export default function EmployeesDirectory() {
           />
           <button
             type="button"
-            onClick={() => navigate('/dashboard/employees/milestones')}
+            onClick={() => navigate('/dashboard/hr/employees/milestones')}
             className="px-4 py-2.5 rounded-lg border border-[#1a2540] text-slate-200 text-sm font-medium hover:bg-[#0b1220] transition-colors"
           >
             Birthdays and anniversaries
@@ -577,14 +575,14 @@ export default function EmployeesDirectory() {
             <>
               <button
                 type="button"
-                onClick={() => navigate('/dashboard/employees/active-disciplinary-measures')}
+                onClick={() => navigate('/dashboard/hr/active-disciplinary-measures')}
                 className="px-4 py-2.5 rounded-lg border border-[#1a2540] text-slate-200 text-sm font-medium hover:bg-[#0b1220] transition-colors"
               >
                 Active disciplinary measures
               </button>
               <button
                 type="button"
-                onClick={() => navigate('/dashboard/employees/bonus-deductions')}
+                onClick={() => navigate('/dashboard/hr/bonus-deductions')}
                 className="px-4 py-2.5 rounded-lg border border-[#1a2540] text-slate-200 text-sm font-medium hover:bg-[#0b1220] transition-colors"
               >
                 Bonus deductions
@@ -593,7 +591,7 @@ export default function EmployeesDirectory() {
           )}
           <button
             type="button"
-            onClick={() => navigate('/dashboard/roll-calls')}
+            onClick={() => navigate('/dashboard/hr/roll-calls')}
             className="px-4 py-2.5 rounded-lg border border-[#1a2540] text-slate-200 text-sm font-medium hover:bg-[#0b1220] transition-colors"
           >
             Roll calls
@@ -602,7 +600,7 @@ export default function EmployeesDirectory() {
             <>
               <button
                 type="button"
-                onClick={() => navigate('/dashboard/employees/duplicates')}
+                onClick={() => navigate('/dashboard/hr/employees/duplicates')}
                 className="px-4 py-2.5 rounded-lg border border-[#1a2540] text-slate-200 text-sm font-medium hover:bg-[#0b1220] transition-colors"
               >
                 Find duplicates
@@ -616,7 +614,7 @@ export default function EmployeesDirectory() {
               </button>
               <button
                 type="button"
-                onClick={() => navigate('/dashboard/employees/new')}
+                onClick={() => navigate('/dashboard/hr/employees/new')}
                 className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-gradient-to-r from-indigo-500 to-violet-600 text-white text-sm font-semibold hover:from-indigo-600 hover:to-violet-700 transition-all shadow-lg shadow-indigo-500/20"
               >
                 <PlusIcon className="w-5 h-5" />
@@ -760,7 +758,7 @@ export default function EmployeesDirectory() {
                         group={group}
                         selectedUids={selectedUids}
                         onToggleSelect={toggleSelect}
-                        onManage={(uid) => navigate(`/dashboard/employees/${uid}`)}
+                        onManage={(uid) => navigate(`/dashboard/hr/employees/${uid}`)}
                         visibleColumns={visibleColumns}
                         colSpan={colSpan}
                       />
@@ -772,7 +770,7 @@ export default function EmployeesDirectory() {
                         employee={employee}
                         selected={selectedUids.has(employee.uid)}
                         onToggleSelect={toggleSelect}
-                        onManage={(uid) => navigate(`/dashboard/employees/${uid}`)}
+                        onManage={(uid) => navigate(`/dashboard/hr/employees/${uid}`)}
                         visibleColumns={visibleColumns}
                       />
                     ))

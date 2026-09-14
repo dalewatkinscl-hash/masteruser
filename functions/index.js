@@ -7,7 +7,7 @@ const { onSchedule } = require('firebase-functions/v2/scheduler');
 const { runHrMilestoneAlerts } = require('./hrMilestoneAlerts');
 const {
   isSharePointConfigured,
-  listDisciplinaryDocuments,
+  listEmployeeFolderContents,
   resolveEmployeeSharePointPaths,
   suggestEmployeeFolders,
   uploadDisciplinaryDocument,
@@ -152,9 +152,13 @@ const {
 const {
   getLondonDayKey: getToolboxKickDayKey,
   serializeToolboxKickGame,
+  isToolboxKickTrackedGame,
+  isToolboxKickRoundFullyDone,
   compareToolboxKickRows,
   toolboxKickResultLabel,
   collectToolboxKickRecords,
+  markToolboxKickCaughtCheating,
+  buildToolboxKickForfeitPayload,
   clampDistance: clampToolboxKickDistance,
   normalizeMode: normalizeToolboxKickMode,
   getSuperRageStatus,
@@ -3913,7 +3917,7 @@ exports.getSharePointDisciplinaryPath = onRequest(
   }),
 );
 
-// GET → list historical disciplinary documents from SharePoint for an employee.
+// GET → browse SharePoint files/folders under an employee's mapped folder.
 exports.getEmployeeSharePointDocuments = onRequest(
   { region: 'europe-west2' },
   withCors(async (req, res) => {
@@ -3948,6 +3952,8 @@ exports.getEmployeeSharePointDocuments = onRequest(
       return;
     }
 
+    const relativePath = toTrimmedString(req.query?.path || req.query?.relativePath);
+
     try {
       const employee = await getUserProfile(employeeUid);
       if (!employee) {
@@ -3955,7 +3961,7 @@ exports.getEmployeeSharePointDocuments = onRequest(
         return;
       }
 
-      const result = await listDisciplinaryDocuments(sharePointConfig, employee);
+      const result = await listEmployeeFolderContents(sharePointConfig, employee, { relativePath });
 
       res.status(200).json({
         configured: true,
@@ -3964,18 +3970,21 @@ exports.getEmployeeSharePointDocuments = onRequest(
         employeeRoot: result.employeeRoot,
         employeeFolderPath: result.employeeFolderPath,
         disciplinaryFolderPath: result.disciplinaryFolderPath,
-        disciplinaryFolderName: result.disciplinaryFolderName || '',
         employeeFolderExists: Boolean(result.employeeFolderExists),
-        disciplinaryFolderExists: Boolean(result.disciplinaryFolderExists),
-        subfolders: result.subfolders || [],
-        folderExists: result.folderExists,
+        currentPath: result.currentPath || result.employeeFolderPath,
+        relativePath: result.relativePath || '',
+        breadcrumbs: result.breadcrumbs || [],
+        folders: result.folders || [],
+        documents: result.documents || [],
+        items: result.items || [],
+        folderExists: Boolean(result.employeeFolderExists),
         isConfirmed: result.isConfirmed,
         usesMappedFolder: result.usesMappedFolder,
-        documents: result.documents,
       });
     } catch (error) {
       console.error('getEmployeeSharePointDocuments failed', error);
-      res.status(500).json({ error: error.message || 'Failed to load SharePoint documents.' });
+      const status = error.status === 400 || error.status === 404 ? error.status : 500;
+      res.status(status).json({ error: error.message || 'Failed to load SharePoint documents.' });
     }
   }),
 );
@@ -4104,7 +4113,7 @@ exports.confirmSharePointFolderMapping = onRequest(
         updatedAt: now,
       }, { merge: true });
 
-      const documents = await listDisciplinaryDocuments(sharePointConfig, {
+      const documents = await listEmployeeFolderContents(sharePointConfig, {
         ...employee,
         sharePointFolderName: validated.folderName,
         sharePointEmployeeRoot: validated.employeeRoot,
@@ -4115,9 +4124,15 @@ exports.confirmSharePointFolderMapping = onRequest(
         message: 'SharePoint folder mapping saved.',
         folderName: validated.folderName,
         employeeRoot: validated.employeeRoot,
+        employeeFolderPath: validated.employeeFolderPath,
         disciplinaryFolderPath: validated.disciplinaryFolderPath,
-        folderExists: documents.folderExists,
-        documents: documents.documents,
+        folderExists: Boolean(documents.employeeFolderExists),
+        documents: documents.documents || [],
+        folders: documents.folders || [],
+        items: documents.items || [],
+        currentPath: documents.currentPath || validated.employeeFolderPath,
+        relativePath: documents.relativePath || '',
+        breadcrumbs: documents.breadcrumbs || [],
       });
     } catch (error) {
       console.error('confirmSharePointFolderMapping failed', error);
@@ -5142,8 +5157,27 @@ function isWordleSuspectProfile(profile = {}) {
   return profile?.funFlags?.wordleSuspect === true;
 }
 
+function isToolboxPunishedProfile(profile = {}) {
+  return profile?.funFlags?.toolboxPunished === true;
+}
+
 async function listWordleSuspectRecords() {
   const snap = await db.collection('fun_wordle_suspects').limit(200).get().catch(() => ({ docs: [] }));
+  return snap.docs.map((doc) => {
+    const data = doc.data() || {};
+    return {
+      uid: data.uid || doc.id,
+      fullName: data.fullName || 'Colleague',
+      email: data.email || '',
+      markedAt: data.markedAt?.toDate?.()?.toISOString?.() || data.markedAt || null,
+      markedByUid: data.markedByUid || '',
+      markedByName: data.markedByName || '',
+    };
+  }).sort((a, b) => String(a.fullName).localeCompare(String(b.fullName)));
+}
+
+async function listToolboxPunishmentRecords() {
+  const snap = await db.collection('fun_toolbox_punishments').limit(200).get().catch(() => ({ docs: [] }));
   return snap.docs.map((doc) => {
     const data = doc.data() || {};
     return {
@@ -7845,12 +7879,31 @@ exports.getDailyToolboxKick = onRequest(
         : await buildToolboxKickLeaderboardBundle(dayKey);
       let gameData = {
         dayKey,
-        status: 'in_progress',
+        status: 'ready',
         distanceM: 0,
       };
+      const punished = isToolboxPunishedProfile(session.profile);
       if (!practice) {
-        const snap = await db.collection('toolbox_kick_games').doc(`${dayKey}_${session.profile.uid}`).get();
-        if (snap.exists) gameData = snap.data() || gameData;
+        const ref = db.collection('toolbox_kick_games').doc(`${dayKey}_${session.profile.uid}`);
+        const snap = await ref.get();
+        if (snap.exists) {
+          gameData = snap.data() || gameData;
+          // Mid-round reload (F5) — quietly mark caught; round stays open with speed nerf.
+          const midRound = gameData.status === 'in_progress'
+            || (gameData.status === 'won' && gameData.roundComplete === false);
+          if (midRound) {
+            const cheatPatch = markToolboxKickCaughtCheating(gameData, {
+              FieldValue: admin.firestore.FieldValue,
+              reason: 'reload',
+            });
+            const punishPatch = punished || gameData.punished ? { punished: true } : {};
+            await ref.set({ ...cheatPatch, ...punishPatch }, { merge: true });
+            gameData = { ...gameData, ...cheatPatch, ...punishPatch };
+          } else if (punished && !gameData.punished) {
+            await ref.set({ punished: true }, { merge: true });
+            gameData = { ...gameData, punished: true };
+          }
+        }
       }
 
       const powerSnap = await db.collection(SUPER_RAGE_COLLECTION).doc(session.profile.uid).get();
@@ -7864,7 +7917,11 @@ exports.getDailyToolboxKick = onRequest(
         weekend: false,
         rotation: access.rotation,
         toolboxKickLiveFrom: TOOLBOX_KICK_LIVE_FROM,
-        game: serializeToolboxKickGame(gameData),
+        game: serializeToolboxKickGame({
+          ...gameData,
+          punished: Boolean(gameData.punished) || punished,
+        }),
+        punished,
         leaderboard,
         allTimeRecord: practice ? null : allTimeRecord,
         totalSolved: leaderboard.length,
@@ -7941,11 +7998,25 @@ exports.submitToolboxKickResult = onRequest(
       const gameId = `${dayKey}_${session.profile.uid}`;
       const ref = db.collection('toolbox_kick_games').doc(gameId);
       const existing = await ref.get();
-      if (existing.exists && existing.data()?.status === 'won') {
+      const existingData = existing.exists ? existing.data() || {} : {};
+      const punished = Boolean(existingData.punished) || isToolboxPunishedProfile(session.profile);
+      const tracked = isToolboxKickTrackedGame({
+        ...existingData,
+        punished,
+        caughtCheating: Boolean(existingData.caughtCheating),
+      });
+      const maxAttempts = mode === 'allOrNothing' ? 1 : 3;
+      const finalize = req.body?.finalize === true
+        || req.body?.finalize === 'true'
+        || attempts.length >= maxAttempts
+        || !tracked;
+      const fullyDone = isToolboxKickRoundFullyDone(existingData);
+
+      if (existing.exists && fullyDone) {
         const { leaderboard, allTimeRecord } = await buildToolboxKickLeaderboardBundle(dayKey);
         res.status(200).json({
           practice: false,
-          game: serializeToolboxKickGame(existing.data() || {}),
+          game: serializeToolboxKickGame(existingData),
           leaderboard,
           allTimeRecord,
           totalSolved: leaderboard.length,
@@ -7954,6 +8025,22 @@ exports.submitToolboxKickResult = onRequest(
         return;
       }
 
+      const midRoundOpen = existingData.status === 'in_progress'
+        || (existingData.status === 'won' && existingData.roundComplete === false);
+      if (!existing.exists || !midRoundOpen) {
+        res.status(409).json({
+          error: 'Start your round first by picking a mode.',
+          needStart: true,
+        });
+        return;
+      }
+
+      const prevBest = clampToolboxKickDistance(existingData.distanceM);
+      const bestDistance = Math.max(prevBest, distanceM);
+      const mergedAttempts = attempts.length
+        ? attempts
+        : (Array.isArray(existingData.attempts) ? existingData.attempts : []);
+
       const payload = {
         uid: session.profile.uid,
         fullName: session.profile.fullName || session.profile.email || 'Colleague',
@@ -7961,29 +8048,38 @@ exports.submitToolboxKickResult = onRequest(
         dayKey,
         status: 'won',
         mode,
-        distanceM,
-        attempts,
-        energyDrinkUsed,
+        distanceM: bestDistance,
+        attempts: mergedAttempts,
+        energyDrinkUsed: Boolean(energyDrinkUsed || existingData.energyDrinkUsed),
+        caughtCheating: Boolean(existingData.caughtCheating),
+        punished,
+        roundComplete: finalize,
+        reloadCount: Math.max(0, Math.floor(Number(existingData.reloadCount) || 0)),
+        forfeited: false,
+        forfeitReason: null,
         completedAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       };
       await ref.set(payload, { merge: true });
 
-      const streaks = await recordFunStreakWin(db, {
-        uid: session.profile.uid,
-        fullName: payload.fullName,
-        email: payload.email,
-        gameKey: 'toolboxkick',
-        dayKey,
-        FieldValue: admin.firestore.FieldValue,
-      });
-      const all = await loadFunStreaks(db, session.profile.uid, {
-        todayKey: dayKey,
-        fullName: payload.fullName,
-        email: payload.email,
-        FieldValue: admin.firestore.FieldValue,
-      });
-      const achievements = serializeAchievements({ ...all, toolboxkick: streaks }, dayKey);
+      let achievements = undefined;
+      if (finalize) {
+        const streaks = await recordFunStreakWin(db, {
+          uid: session.profile.uid,
+          fullName: payload.fullName,
+          email: payload.email,
+          gameKey: 'toolboxkick',
+          dayKey,
+          FieldValue: admin.firestore.FieldValue,
+        });
+        const all = await loadFunStreaks(db, session.profile.uid, {
+          todayKey: dayKey,
+          fullName: payload.fullName,
+          email: payload.email,
+          FieldValue: admin.firestore.FieldValue,
+        });
+        achievements = serializeAchievements({ ...all, toolboxkick: streaks }, dayKey);
+      }
 
       const snap = await ref.get();
       const { leaderboard, allTimeRecord } = await buildToolboxKickLeaderboardBundle(dayKey);
@@ -8000,7 +8096,8 @@ exports.submitToolboxKickResult = onRequest(
         leaderboard,
         allTimeRecord,
         totalSolved: leaderboard.length,
-        achievements,
+        partial: !finalize,
+        ...(achievements ? { achievements } : {}),
         superRage: getSuperRageStatus(
           (await db.collection(SUPER_RAGE_COLLECTION).doc(session.profile.uid).get()).data() || {},
           dayKey,
@@ -8009,6 +8106,133 @@ exports.submitToolboxKickResult = onRequest(
     } catch (error) {
       console.error('submitToolboxKickResult failed', error);
       res.status(error.status || 500).json({ error: error.message || 'Failed to submit Little Dicks Toolbox.' });
+    }
+  }),
+);
+
+// POST { mode, dayKey? } → lock today's competitive round (reload mid-round = caught cheating).
+exports.startToolboxKickRound = onRequest(
+  { region: 'europe-west2' },
+  withCors(async (req, res) => {
+    if (req.method !== 'POST') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
+
+    const session = await getVerifiedSessionUser(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+
+    try {
+      const todayKey = getToolboxKickDayKey();
+      const sandbox = parseSandboxFlag(req) && canManagePortalAccess(session.profile);
+      if (todayKey < TOOLBOX_KICK_LIVE_FROM && !sandbox) {
+        res.status(403).json({
+          error: `Little Dicks Toolbox goes live ${TOOLBOX_KICK_LIVE_FROM}.`,
+          toolboxKickLiveFrom: TOOLBOX_KICK_LIVE_FROM,
+        });
+        return;
+      }
+      const { dayKey, practice } = resolvePlayableDayKey(req.body?.dayKey, todayKey, {
+        sandbox,
+        allowFuturePreview: sandbox,
+      });
+      await enforceFunGameAccess('toolboxkick', { dayKey, practice, sandbox });
+
+      const mode = normalizeToolboxKickMode(req.body?.mode);
+
+      if (practice || sandbox) {
+        res.status(200).json({
+          practice: true,
+          sandbox: Boolean(sandbox),
+          game: serializeToolboxKickGame({
+            dayKey,
+            status: 'in_progress',
+            mode,
+            distanceM: 0,
+            startedAt: new Date().toISOString(),
+          }),
+        });
+        return;
+      }
+
+      const gameId = `${dayKey}_${session.profile.uid}`;
+      const ref = db.collection('toolbox_kick_games').doc(gameId);
+      const existing = await ref.get();
+      const existingData = existing.exists ? existing.data() || {} : null;
+      const punished = isToolboxPunishedProfile(session.profile)
+        || Boolean(existingData?.punished);
+
+      if (existingData && isToolboxKickRoundFullyDone(existingData)) {
+        const { leaderboard, allTimeRecord } = await buildToolboxKickLeaderboardBundle(dayKey);
+        res.status(200).json({
+          practice: false,
+          game: serializeToolboxKickGame({ ...existingData, punished }),
+          leaderboard,
+          allTimeRecord,
+          totalSolved: leaderboard.length,
+          alreadySubmitted: true,
+          punished,
+        });
+        return;
+      }
+
+      // Already locked / mid tracked round (usually after F5) → caught, resume with nerf.
+      const midRound = existingData?.status === 'in_progress'
+        || (existingData?.status === 'won' && existingData?.roundComplete === false);
+      if (midRound) {
+        const cheatPatch = markToolboxKickCaughtCheating(existingData, {
+          FieldValue: admin.firestore.FieldValue,
+          reason: 'restart',
+        });
+        await ref.set({
+          ...cheatPatch,
+          punished: Boolean(punished || existingData.punished),
+          mode: normalizeToolboxKickMode(existingData.mode || mode),
+        }, { merge: true });
+        const snap = await ref.get();
+        res.status(200).json({
+          practice: false,
+          game: serializeToolboxKickGame(snap.data() || { ...existingData, ...cheatPatch, punished }),
+          locked: true,
+          caughtCheating: true,
+          punished,
+        });
+        return;
+      }
+
+      const payload = {
+        uid: session.profile.uid,
+        fullName: session.profile.fullName || session.profile.email || 'Colleague',
+        email: session.profile.email || '',
+        dayKey,
+        status: 'in_progress',
+        mode,
+        distanceM: 0,
+        attempts: [],
+        energyDrinkUsed: false,
+        caughtCheating: false,
+        punished: Boolean(punished),
+        roundComplete: false,
+        reloadCount: 0,
+        forfeited: false,
+        startedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+      await ref.set(payload, { merge: true });
+      const snap = await ref.get();
+
+      res.status(200).json({
+        practice: false,
+        game: serializeToolboxKickGame(snap.data() || payload),
+        locked: true,
+        punished,
+      });
+    } catch (error) {
+      console.error('startToolboxKickRound failed', error);
+      res.status(error.status || 500).json({ error: error.message || 'Failed to start Little Dicks Toolbox.' });
     }
   }),
 );
@@ -8493,20 +8717,44 @@ async function buildToolboxKickLeaderboardBundle(dayKey) {
       mode: normalizeToolboxKickMode(data.mode),
       distanceM: clampToolboxKickDistance(data.distanceM),
       energyDrinkUsed: Boolean(data.energyDrinkUsed),
+      forfeited: Boolean(data.forfeited),
+      caughtCheating: Boolean(data.caughtCheating),
+      punished: Boolean(data.punished),
+      shameScore: Boolean(data.shameScore),
+      resultLabelOverride: data.resultLabelOverride ? String(data.resultLabelOverride) : null,
+      leaderboardGif: data.leaderboardGif ? String(data.leaderboardGif) : null,
       dayKey: data.dayKey || '',
       completedAt: data.completedAt?.toDate?.()?.toISOString?.() || null,
     };
   }).filter((row) => row.status === 'won' && row.dayKey === dayKey);
 
-  rows.sort(compareToolboxKickRows);
-  assignJointRanks(rows, (a, b) => a.distanceM === b.distanceM);
+  // Shame scores always sink to the bottom; everyone else by distance.
+  rows.sort((a, b) => {
+    if (Boolean(a.shameScore) !== Boolean(b.shameScore)) {
+      return a.shameScore ? 1 : -1;
+    }
+    return compareToolboxKickRows(a, b);
+  });
+  assignJointRanks(rows, (a, b) => (
+    a.distanceM === b.distanceM
+    && Boolean(a.forfeited) === Boolean(b.forfeited)
+    && Boolean(a.shameScore) === Boolean(b.shameScore)
+  ));
 
   const leaderboard = rows.map((row) => {
     const personalBest = personalBests.get(row.uid);
     const isPersonalBest = Boolean(
-      personalBest && personalBest.distanceM === row.distanceM,
+      !row.forfeited
+      && !row.shameScore
+      && personalBest
+      && personalBest.distanceM === row.distanceM,
     );
-    const isWorldRecord = wrDistance != null && row.distanceM === wrDistance;
+    const isWorldRecord = Boolean(
+      !row.forfeited
+      && !row.shameScore
+      && wrDistance != null
+      && row.distanceM === wrDistance,
+    );
     return {
       uid: row.uid,
       fullName: row.fullName,
@@ -8514,9 +8762,15 @@ async function buildToolboxKickLeaderboardBundle(dayKey) {
       mode: row.mode,
       distanceM: row.distanceM,
       energyDrinkUsed: row.energyDrinkUsed,
+      forfeited: row.forfeited,
+      caughtCheating: row.caughtCheating,
+      punished: row.punished,
+      shameScore: row.shameScore,
+      leaderboardGif: row.leaderboardGif,
+      failed: row.forfeited || row.shameScore,
       rank: row.rank,
       joint: row.joint,
-      medal: row.medal,
+      medal: (row.forfeited || row.shameScore) ? null : row.medal,
       completedAt: row.completedAt,
       resultLabel: toolboxKickResultLabel(row),
       isPersonalBest,
@@ -8901,6 +9155,113 @@ exports.adminSetWordleSuspect = onRequest(
     } catch (error) {
       console.error('adminSetWordleSuspect failed', error);
       res.status(error.status || 500).json({ error: error.message || 'Failed to update Wordle suspect.' });
+    }
+  }),
+);
+
+// GET → list Little Dicks Toolbox punishments (Fun Admin).
+exports.adminListToolboxPunishments = onRequest(
+  { region: 'europe-west2' },
+  withCors(async (req, res) => {
+    if (req.method !== 'GET') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
+    const session = await getVerifiedSessionUser(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+    if (!canManagePortalAccess(session.profile)) {
+      res.status(403).json({ error: 'Admin access is required.' });
+      return;
+    }
+    try {
+      const punishments = await listToolboxPunishmentRecords();
+      res.status(200).json({ punishments });
+    } catch (error) {
+      console.error('adminListToolboxPunishments failed', error);
+      res.status(error.status || 500).json({ error: error.message || 'Failed to list Toolbox punishments.' });
+    }
+  }),
+);
+
+// POST { uid, punished } → mark / unmark a Little Dicks Toolbox punishment.
+exports.adminSetToolboxPunishment = onRequest(
+  { region: 'europe-west2' },
+  withCors(async (req, res) => {
+    if (req.method !== 'POST') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
+    const session = await getVerifiedSessionUser(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+    if (!canManagePortalAccess(session.profile)) {
+      res.status(403).json({ error: 'Admin access is required.' });
+      return;
+    }
+
+    const uid = String(req.body?.uid || '').trim();
+    const punished = Boolean(req.body?.punished);
+    if (!uid) {
+      res.status(400).json({ error: 'uid is required.' });
+      return;
+    }
+
+    try {
+      const userRef = db.collection('users').doc(uid);
+      const userSnap = await userRef.get();
+      if (!userSnap.exists) {
+        res.status(404).json({ error: 'User not found.' });
+        return;
+      }
+      const userData = userSnap.data() || {};
+      const fullName = userData.fullName || userData.email || 'Colleague';
+      const email = userData.email || '';
+      const punishRef = db.collection('fun_toolbox_punishments').doc(uid);
+
+      if (punished) {
+        await userRef.set({
+          funFlags: {
+            ...(userData.funFlags || {}),
+            toolboxPunished: true,
+            toolboxPunishedMarkedAt: admin.firestore.FieldValue.serverTimestamp(),
+            toolboxPunishedMarkedByUid: session.profile.uid,
+          },
+        }, { merge: true });
+        await punishRef.set({
+          uid,
+          fullName,
+          email,
+          markedAt: admin.firestore.FieldValue.serverTimestamp(),
+          markedByUid: session.profile.uid,
+          markedByName: session.profile.fullName || session.profile.email || '',
+        }, { merge: true });
+      } else {
+        await userRef.set({
+          funFlags: {
+            ...(userData.funFlags || {}),
+            toolboxPunished: false,
+            toolboxPunishedClearedAt: admin.firestore.FieldValue.serverTimestamp(),
+            toolboxPunishedClearedByUid: session.profile.uid,
+          },
+        }, { merge: true });
+        await punishRef.delete().catch(() => null);
+      }
+
+      const punishments = await listToolboxPunishmentRecords();
+      res.status(200).json({
+        ok: true,
+        uid,
+        punished,
+        punishments,
+      });
+    } catch (error) {
+      console.error('adminSetToolboxPunishment failed', error);
+      res.status(error.status || 500).json({ error: error.message || 'Failed to update Toolbox punishment.' });
     }
   }),
 );

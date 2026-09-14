@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import WorkspaceTabs from '../components/WorkspaceTabs';
 import RollCallMemberPicker from '../components/RollCallMemberPicker';
 import { readJsonResponse } from '../utils/employeeProfile';
 import { printRollCall } from '../utils/rollCallPrint';
@@ -137,13 +136,12 @@ export default function RollCallListDetail() {
 
   return (
     <div className="flex-1 flex flex-col min-h-0">
-      <WorkspaceTabs />
       <div className="flex-1 overflow-auto">
         <div className="max-w-3xl mx-auto px-4 sm:px-8 py-8 space-y-6">
           <div>
             <button
               type="button"
-              onClick={() => navigate('/dashboard/roll-calls')}
+              onClick={() => navigate('/dashboard/hr/roll-calls')}
               className="text-sm text-slate-400 hover:text-slate-200"
             >
               ← All roll calls

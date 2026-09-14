@@ -39,6 +39,8 @@ const SMOKER_FROM_X = BOX_REST_X + 12 * 1000 * PX_PER_METRE;
 const MACAN_FROM_X = BOX_REST_X + 18 * 1000 * PX_PER_METRE;
 /** Ultra-rare Little Dick cameo — further still. */
 const LITTLE_DICK_FROM_X = BOX_REST_X + 25 * 1000 * PX_PER_METRE;
+/** Ultra-rare Chelle (bold lady with a book) — between Macan and Little Dick range. */
+const CHELLE_FROM_X = BOX_REST_X + 22 * 1000 * PX_PER_METRE;
 /** Sea-level-ish: mph ÷ this ≈ Mach. */
 const MPH_PER_MACH = 767.269;
 const MACH_DISPLAY_FROM_MPH = 250;
@@ -46,10 +48,21 @@ const MACH_DISPLAY_FROM_MPH = 250;
 const MIN_ZOOM = 0.42;
 /** Oil spill coating, birds, Julies Car and the Little Dick cameo — live everywhere. */
 export const TOOLBOX_NEW_PROPS_LIVE = true;
+/**
+ * Chelle natural world spawns — bold lady with a book (softkey C still works in Fun Admin).
+ */
+export const CHELLE_NATURAL_SPAWN = true;
+/** Caught mid-round reload → keep only 10% of toolbox speed. */
+const CAUGHT_CHEAT_SPEED_FACTOR = 0.1;
+/** Punishment: wait this long after landing (Nelson GIF) before Little Dick walks in. */
+const PUNISH_HAHA_WAIT_FRAMES = 180; // ~3s at 60fps
+/** Mach 2 in game px/frame (matches speedMphFromBox: mph ≈ px * 2.1). */
+const MACH2_SPEED_PX = (2 * MPH_PER_MACH) / 2.1;
 
 /**
- * Real-ish road distances south from Northampton (game km = real km).
- * Corridor: A508 / M1 south toward London & the coast.
+ * Real-ish road distances south from Northampton (game km = real km),
+ * then polar / orbital / solar-system fantasy after the South Pole.
+ * Corridor: A508 / M1 south → Europe → Africa → Antarctica → space.
  */
 const DISTANCE_MILESTONES = [
   { km: 5, label: 'Wootton!', sub: '5 km south of Northampton' },
@@ -64,6 +77,34 @@ const DISTANCE_MILESTONES = [
   { km: 210, label: 'Newhaven!', sub: '210 km south — Channel ferry' },
   { km: 350, label: 'Calais!', sub: '350 km south — made it to France' },
   { km: 480, label: 'Paris!', sub: '480 km south of Northampton' },
+  { km: 700, label: 'Lyon!', sub: '700 km south — deep into France' },
+  { km: 1000, label: 'Marseille!', sub: '1,000 km — Mediterranean shore' },
+  { km: 1600, label: 'Algiers!', sub: '1,600 km — crossed into Africa' },
+  { km: 2500, label: 'Sahara!', sub: '2,500 km — endless sand' },
+  { km: 4000, label: 'Sahel!', sub: '4,000 km south of Northampton' },
+  { km: 5800, label: 'Equator!', sub: '5,800 km — halfway round the planet' },
+  { km: 7500, label: 'Congo!', sub: '7,500 km — rainforest belt' },
+  { km: 9200, label: 'Namibia!', sub: '9,200 km — southern Africa' },
+  { km: 10500, label: 'Cape Town!', sub: '10,500 km — tip of Africa' },
+  { km: 12500, label: 'Southern Ocean!', sub: '12,500 km — nothing but swell' },
+  { km: 14500, label: 'Antarctica!', sub: '14,500 km — ice shelf ahead' },
+  { km: 15800, label: 'South Pole!', sub: '15,800 km — end of the Earth… almost' },
+  // Space
+  { km: 20000, label: 'Leaving Earth!', sub: '20,000 km — atmosphere thinning fast' },
+  { km: 42000, label: 'Orbit!', sub: '42,000 km — geostationary height' },
+  { km: 384400, label: 'The Moon!', sub: '384,400 km — one small kick for Dick-kind' },
+  { km: 58_000_000, label: 'Mercury!', sub: '~58 million km — scorched inner planet' },
+  { km: 108_000_000, label: 'Venus!', sub: '~108 million km — cloudy and furious' },
+  { km: 150_000_000, label: '1 AU!', sub: '~150 million km — Earth–Sun distance' },
+  { km: 228_000_000, label: 'Mars!', sub: '~228 million km — the red planet' },
+  { km: 400_000_000, label: 'Asteroid Belt!', sub: '~400 million km — watch the rocks' },
+  { km: 778_000_000, label: 'Jupiter!', sub: '~778 million km — king of the giants' },
+  { km: 1_430_000_000, label: 'Saturn!', sub: '~1.43 billion km — rings and all' },
+  { km: 2_870_000_000, label: 'Uranus!', sub: '~2.87 billion km — ice giant' },
+  { km: 4_500_000_000, label: 'Neptune!', sub: '~4.5 billion km — deep blue' },
+  { km: 5_900_000_000, label: 'Pluto!', sub: '~5.9 billion km — still counts' },
+  { km: 18_000_000_000, label: 'Heliosphere!', sub: '~18 billion km — edge of the solar wind' },
+  { km: 23_000_000_000, label: 'Voyager!', sub: '~23 billion km — interstellar space' },
 ];
 
 /**
@@ -126,6 +167,7 @@ function markIntroSeen() {
  * Metres under 1000; kilometres from 1000+.
  * Extra ! per full km after the first (capped at 5). From 10 km the UI pulses.
  * Negative distances (Little Dick boot-back) keep the minus sign.
+ * Epic scales: millions / billions of km, then AU.
  */
 function formatDistanceParts(metres) {
   const raw = Math.floor(Number(metres) || 0);
@@ -143,8 +185,20 @@ function formatDistanceParts(metres) {
   }
   const km = m / 1000;
   const kmWhole = Math.floor(km);
-  const label = `${sign}${km.toFixed(1)} km`;
-  const bangs = neg ? '' : '!'.repeat(Math.min(5, Math.max(0, kmWhole - 1)));
+  let label;
+  if (km >= 149_597_870) {
+    const au = km / 149_597_870;
+    label = `${sign}${au >= 10 ? au.toFixed(1) : au.toFixed(2)} AU`;
+  } else if (km >= 1_000_000_000) {
+    label = `${sign}${(km / 1_000_000_000).toFixed(2)} billion km`;
+  } else if (km >= 1_000_000) {
+    label = `${sign}${(km / 1_000_000).toFixed(1)} million km`;
+  } else if (km >= 10_000) {
+    label = `${sign}${Math.round(km).toLocaleString('en-GB')} km`;
+  } else {
+    label = `${sign}${km.toFixed(1)} km`;
+  }
+  const bangs = neg || kmWhole >= 1000 ? '' : '!'.repeat(Math.min(5, Math.max(0, kmWhole - 1)));
   return {
     label,
     bangs,
@@ -167,6 +221,7 @@ const HIT_TALLY_ORDER = [
   'bird',
   'smoker',
   'macan',
+  'chelle',
   'littleDick',
   'oilSpill',
 ];
@@ -179,6 +234,7 @@ const HIT_TALLY_LABELS = {
   bird: 'Bird',
   smoker: 'Smoker',
   macan: 'Julies Car',
+  chelle: 'Chelle',
   littleDick: 'Little Dick',
   oilSpill: 'Oil',
 };
@@ -453,6 +509,22 @@ function appendProps(items, fromX, toX, next, features = {}) {
       x += 600 + next() * 1000;
       continue;
     }
+    // Ultra-rare Chelle — bold lady with a book (gated while softkey-testing)
+    if (
+      !skipRare
+      && newProps
+      && CHELLE_NATURAL_SPAWN
+      && x >= CHELLE_FROM_X
+      && next() < 0.0012
+    ) {
+      items.push({
+        type: 'chelle',
+        x,
+        id: `chelle-${items.length}-${x | 0}`,
+      });
+      x += 560 + next() * 960;
+      continue;
+    }
     // Ultra-rare black Macan — rarer than smoker, from 18 km
     if (!skipRare && newProps && x >= MACAN_FROM_X && next() < 0.004) {
       items.push({
@@ -588,9 +660,42 @@ function spawnDevPropAhead(st, type) {
     x: spawnX,
     id: `dev-${type}-${spawnX | 0}-${Date.now()}`,
   });
-  st.message = type === 'macan'
-    ? 'CHEAT · Julies Car spawned ahead'
-    : 'CHEAT · Little Dick spawned ahead';
+  if (type === 'macan') st.message = 'CHEAT · Julies Car spawned ahead';
+  else if (type === 'chelle') st.message = 'CHEAT · Chelle spawned ahead';
+  else if (type === 'littleDick') st.message = 'CHEAT · Little Dick spawned ahead';
+  else st.message = `CHEAT · ${type} spawned ahead`;
+}
+
+/** Punishment: flood the flight path with coaches so the toolbox keeps getting slowed. */
+function spawnPunishmentCoachSwarm(st) {
+  if (!st) return;
+  // Clear any previous punishment swarm so re-kicks don't stack forever.
+  st.items = (st.items || []).filter((it) => !String(it.id || '').startsWith('punish-coach-'));
+  const startX = BOX_REST_X + 70;
+  // Tight pack right after the boot, then a long corridor of more buses.
+  const nearCount = 22;
+  const farCount = 36;
+  for (let i = 0; i < nearCount; i += 1) {
+    const x = startX + i * 52 + (i % 2) * 10;
+    st.items.push({
+      type: 'coach',
+      x,
+      w: 92 + (i % 4) * 14,
+      h: 46 + (i % 3) * 8,
+      id: `punish-coach-near-${i}-${x | 0}`,
+    });
+  }
+  const farStart = startX + nearCount * 52 + 40;
+  for (let i = 0; i < farCount; i += 1) {
+    const x = farStart + i * 78 + (i % 3) * 12;
+    st.items.push({
+      type: 'coach',
+      x,
+      w: 100 + (i % 5) * 12,
+      h: 48 + (i % 3) * 6,
+      id: `punish-coach-far-${i}-${x | 0}`,
+    });
+  }
 }
 
 function meterValue(t) {
@@ -1208,18 +1313,229 @@ function drawMacan(ctx, x, y, frame = 0) {
   ctx.restore();
 }
 
-function applySmokerBoost(box) {
-  box.vy = -48 * (0.95 + Math.random() * 0.15);
-  box.vx = Math.max(Math.abs(box.vx) * 3.1, 42);
+/**
+ * Chelle — bold lady in a business suit.
+ * pose: 'reading' (default sit) | 'startled' | 'launch'
+ */
+function drawChelle(ctx, x, y, frame = 0, pose = 'reading') {
+  ctx.save();
+  ctx.translate(x, y);
+
+  // soft rare shimmer
+  ctx.fillStyle = `rgba(196, 181, 253, ${0.1 + 0.05 * Math.sin(frame * 0.18)})`;
+  ctx.beginPath();
+  ctx.ellipse(0, -40, 36, 48, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.28)';
+  ctx.beginPath();
+  ctx.ellipse(0, 2, pose === 'reading' ? 26 : 18, 5, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  const skin = '#e8b4a0';
+  const suit = '#1e293b';
+  const blouse = '#f8fafc';
+  const hair = '#f5d76e';
+
+  if (pose === 'reading') {
+    // bench
+    ctx.fillStyle = '#78716c';
+    ctx.fillRect(-22, -14, 44, 6);
+    ctx.fillRect(-20, -8, 5, 10);
+    ctx.fillRect(15, -8, 5, 10);
+
+    // seated legs (skirt)
+    ctx.fillStyle = suit;
+    ctx.beginPath();
+    ctx.moveTo(-12, -16);
+    ctx.lineTo(14, -16);
+    ctx.lineTo(18, -4);
+    ctx.lineTo(-14, -4);
+    ctx.closePath();
+    ctx.fill();
+    // shoes
+    ctx.fillStyle = '#0f172a';
+    ctx.fillRect(-16, -4, 10, 4);
+    ctx.fillRect(8, -4, 10, 4);
+
+    // torso / blazer
+    ctx.fillStyle = suit;
+    ctx.beginPath();
+    ctx.roundRect(-12, -48, 24, 34, 4);
+    ctx.fill();
+    ctx.fillStyle = blouse;
+    ctx.fillRect(-3, -46, 6, 28);
+    // lapels
+    ctx.strokeStyle = '#334155';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(-4, -46);
+    ctx.lineTo(-10, -28);
+    ctx.moveTo(4, -46);
+    ctx.lineTo(10, -28);
+    ctx.stroke();
+
+    // arms holding book
+    ctx.strokeStyle = skin;
+    ctx.lineWidth = 4.5;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(-10, -36);
+    ctx.lineTo(-4, -26);
+    ctx.moveTo(10, -36);
+    ctx.lineTo(4, -26);
+    ctx.stroke();
+
+    // book
+    ctx.fillStyle = '#7c3aed';
+    ctx.fillRect(-10, -30, 20, 14);
+    ctx.fillStyle = '#ede9fe';
+    ctx.fillRect(-1, -30, 2, 14);
+    ctx.fillStyle = '#c4b5fd';
+    ctx.font = 'bold 6px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('HR', 0, -21);
+
+    // head looking down at book
+    ctx.fillStyle = skin;
+    ctx.beginPath();
+    ctx.arc(0, -56, 9, 0, Math.PI * 2);
+    ctx.fill();
+    // bold bob
+    ctx.fillStyle = hair;
+    ctx.beginPath();
+    ctx.ellipse(0, -60, 11, 8, 0, Math.PI, 0);
+    ctx.fill();
+    ctx.fillRect(-11, -60, 22, 8);
+    ctx.beginPath();
+    ctx.ellipse(-10, -52, 4, 7, 0.2, 0, Math.PI * 2);
+    ctx.ellipse(10, -52, 4, 7, -0.2, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    // standing startled / launch
+    const armsUp = pose === 'startled';
+    const launching = pose === 'launch';
+
+    // legs
+    ctx.strokeStyle = suit;
+    ctx.lineWidth = 6;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(-5, -18);
+    ctx.lineTo(-8, 0);
+    ctx.moveTo(5, -18);
+    ctx.lineTo(launching ? 14 : 9, launching ? -4 : 0);
+    ctx.stroke();
+    ctx.fillStyle = '#0f172a';
+    ctx.fillRect(-12, -2, 9, 4);
+    ctx.fillRect(launching ? 10 : 5, launching ? -6 : -2, 9, 4);
+
+    // skirt / hips
+    ctx.fillStyle = suit;
+    ctx.beginPath();
+    ctx.moveTo(-11, -22);
+    ctx.lineTo(11, -22);
+    ctx.lineTo(13, -12);
+    ctx.lineTo(-13, -12);
+    ctx.closePath();
+    ctx.fill();
+
+    // torso
+    ctx.fillStyle = suit;
+    ctx.beginPath();
+    ctx.roundRect(-11, -52, 22, 32, 4);
+    ctx.fill();
+    ctx.fillStyle = blouse;
+    ctx.fillRect(-3, -50, 6, 26);
+
+    // arms
+    ctx.strokeStyle = skin;
+    ctx.lineWidth = 4.5;
+    ctx.beginPath();
+    if (armsUp) {
+      ctx.moveTo(-9, -40);
+      ctx.lineTo(-22, -62);
+      ctx.moveTo(9, -40);
+      ctx.lineTo(20, -64);
+    } else {
+      // wind-up / shove
+      ctx.moveTo(-9, -40);
+      ctx.lineTo(-18, -28);
+      ctx.moveTo(9, -40);
+      ctx.lineTo(28, -46);
+    }
+    ctx.stroke();
+
+    // flying book when startled
+    if (armsUp || launching) {
+      const bx = armsUp ? 26 + Math.sin(frame * 0.4) * 2 : 34;
+      const by = armsUp ? -70 : -58;
+      const rot = armsUp ? 0.55 : 1.1;
+      ctx.save();
+      ctx.translate(bx, by);
+      ctx.rotate(rot);
+      ctx.fillStyle = '#7c3aed';
+      ctx.fillRect(-8, -5, 16, 11);
+      ctx.fillStyle = '#ede9fe';
+      ctx.fillRect(-1, -5, 2, 11);
+      ctx.restore();
+    }
+
+    // head
+    ctx.fillStyle = skin;
+    ctx.beginPath();
+    ctx.arc(0, -60, 9, 0, Math.PI * 2);
+    ctx.fill();
+    // wide eyes / mouth for startled
+    if (armsUp) {
+      ctx.fillStyle = '#0f172a';
+      ctx.beginPath();
+      ctx.arc(-3.5, -60, 1.6, 0, Math.PI * 2);
+      ctx.arc(3.5, -60, 1.6, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(0, -56, 2.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    // hair
+    ctx.fillStyle = hair;
+    ctx.beginPath();
+    ctx.ellipse(0, -64, 11, 8, 0, Math.PI, 0);
+    ctx.fill();
+    ctx.fillRect(-11, -64, 22, 9);
+    ctx.beginPath();
+    ctx.ellipse(-10, -56, 4, 7, 0.2, 0, Math.PI * 2);
+    ctx.ellipse(10, -56, 4, 7, -0.2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  ctx.restore();
+}
+
+function applySmokerBoost(box, speedFactor = 1) {
+  const f = Number.isFinite(speedFactor) ? speedFactor : 1;
+  box.vy = -48 * (0.95 + Math.random() * 0.15) * f;
+  box.vx = Math.max(Math.abs(box.vx) * 3.1, 42) * f;
   box.spin = (Math.random() > 0.5 ? 1 : -1) * 1.15;
   box.onGround = false;
 }
 
 /** Roughly 2× smoker launch — ultra rare Macan hit. */
-function applyMacanBoost(box) {
-  box.vy = -96 * (0.95 + Math.random() * 0.15);
-  box.vx = Math.max(Math.abs(box.vx) * 6.2, 84);
+function applyMacanBoost(box, speedFactor = 1) {
+  const f = Number.isFinite(speedFactor) ? speedFactor : 1;
+  box.vy = -96 * (0.95 + Math.random() * 0.15) * f;
+  box.vx = Math.max(Math.abs(box.vx) * 6.2, 84) * f;
   box.spin = (Math.random() > 0.5 ? 1 : -1) * 1.45;
+  box.onGround = false;
+}
+
+/** 3× Julies Car — Chelle yeets the toolbox after the startled stand-up. */
+function applyChelleBoost(box, speedFactor = 1) {
+  const f = Number.isFinite(speedFactor) ? speedFactor : 1;
+  box.vy = -288 * (0.95 + Math.random() * 0.15) * f;
+  box.vx = Math.max(Math.abs(box.vx) * 18.6, 252) * f;
+  box.spin = (Math.random() > 0.5 ? 1 : -1) * 1.85;
   box.onGround = false;
 }
 
@@ -1244,6 +1560,28 @@ function macanBoostGrade() {
   };
 }
 
+function chelleStartledGrade() {
+  return {
+    label: "I'm trying to read!",
+    sub: 'Chelle stands up startled…',
+    gold: true,
+    epic: true,
+    color: '#ddd6fe',
+    glow: '#8b5cf6',
+  };
+}
+
+function chelleBoostGrade() {
+  return {
+    label: 'CHELLE!',
+    sub: '3× Julies Car — startled launch!',
+    gold: true,
+    epic: true,
+    color: '#ddd6fe',
+    glow: '#8b5cf6',
+  };
+}
+
 function littleDickRebootGrade() {
   return {
     label: 'LITTLE DICK!',
@@ -1252,6 +1590,17 @@ function littleDickRebootGrade() {
     epic: true,
     color: '#fdba74',
     glow: '#ea580c',
+  };
+}
+
+function littleDickMach2Grade() {
+  return {
+    label: 'HAVE THAT!',
+    sub: 'you dirty cheat',
+    gold: true,
+    epic: true,
+    color: '#fecaca',
+    glow: '#ef4444',
   };
 }
 
@@ -1276,13 +1625,15 @@ function birdHitGrade() {
 }
 
 function milestoneGrade(m) {
+  const space = m.km >= 20000;
   const big = m.km >= 110;
   return {
     label: m.label,
     sub: m.sub,
     gold: big,
-    color: big ? '#fbbf24' : '#fde68a',
-    glow: big ? '#f59e0b' : '#eab308',
+    epic: space || m.km >= 110,
+    color: space ? '#c4b5fd' : big ? '#fbbf24' : '#fde68a',
+    glow: space ? '#8b5cf6' : big ? '#f59e0b' : '#eab308',
   };
 }
 
@@ -1404,6 +1755,8 @@ function ToolboxKickGame({
   devCheats = false,
   superRageAvailable = false,
   onActivateSuperRage = null,
+  caughtCheating = false,
+  punished = false,
 }) {
   const canvasRef = useRef(null);
   const stageRef = useRef(null);
@@ -1412,6 +1765,8 @@ function ToolboxKickGame({
   const modeRef = useRef(mode);
   const competitiveRef = useRef(competitive);
   const devCheatsRef = useRef(devCheats);
+  const caughtCheatingRef = useRef(caughtCheating);
+  const punishedRef = useRef(punished);
   const onRoundCompleteRef = useRef(onRoundComplete);
   const rageUiRef = useRef({ onConsumed: null });
   const popupIdRef = useRef(0);
@@ -1428,6 +1783,8 @@ function ToolboxKickGame({
       : `Attempt 1/${MAX_ATTEMPTS} — tap to set POWER`,
   });
   const [popup, setPopup] = useState(null);
+  const [haHaFlash, setHaHaFlash] = useState(false);
+  const [cheatPunished, setCheatPunished] = useState(false);
   const [roundDone, setRoundDone] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [rageAvailable, setRageAvailable] = useState(Boolean(superRageAvailable));
@@ -1446,6 +1803,19 @@ function ToolboxKickGame({
   useEffect(() => {
     devCheatsRef.current = devCheats;
   }, [devCheats]);
+
+  useEffect(() => {
+    caughtCheatingRef.current = Boolean(caughtCheating);
+    const st = stateRef.current;
+    if (st) st.caughtCheating = Boolean(caughtCheating);
+  }, [caughtCheating]);
+
+  useEffect(() => {
+    const on = Boolean(punished || cheatPunished);
+    punishedRef.current = on;
+    const st = stateRef.current;
+    if (st) st.punished = on;
+  }, [punished, cheatPunished]);
 
   useEffect(() => {
     onRoundCompleteRef.current = onRoundComplete;
@@ -1565,6 +1935,10 @@ function ToolboxKickGame({
       launchSpeed: 0,
       launchAngleDeg: 45,
       dickCatch: null,
+      chelleReact: null,
+      punishRevenge: null,
+      caughtCheating: Boolean(caughtCheatingRef.current),
+      punished: Boolean(punishedRef.current),
       superRageArmed: opts.freshRound
         ? false
         : Boolean(opts.keepRageArmed || (stateRef.current && stateRef.current.superRageArmed)),
@@ -1617,6 +1991,7 @@ function ToolboxKickGame({
         : 'Here comes the boot…';
       setHud((h) => ({ ...h, phase: st.phase, message: st.message }));
     } else if (st.phase === PHASE.LANDED) {
+      if (st.punishRevenge && st.punishRevenge.stage !== 'done') return;
       if (st.attempt < attempts) {
         initShot({
           keepBest: true,
@@ -1657,7 +2032,8 @@ function ToolboxKickGame({
     }
 
     if (st.phase === PHASE.FLIGHT) {
-      applySmokerBoost(st.box);
+      if (st.dickCatch || st.chelleReact) return;
+      applySmokerBoost(st.box, (st.caughtCheating || st.punished) ? CAUGHT_CHEAT_SPEED_FACTOR : 1);
       st.message = 'CHEAT · smoke break boost!';
       showRpgPopup(smokerBoostGrade(true), 1600);
       setHud((h) => ({
@@ -1673,7 +2049,7 @@ function ToolboxKickGame({
   const doCheatU = useCallback(() => {
     if (!devCheatsRef.current || competitiveRef.current) return;
     const st = stateRef.current;
-    if (!st || st.phase !== PHASE.FLIGHT || st.dickCatch) return;
+    if (!st || st.phase !== PHASE.FLIGHT || st.dickCatch || st.chelleReact) return;
     st.box.vx += 4.5;
     st.message = 'CHEAT · little speed nudge';
     setHud((h) => ({
@@ -1691,7 +2067,7 @@ function ToolboxKickGame({
     if (!devCheatsRef.current || competitiveRef.current) return;
     const st = stateRef.current;
     if (!st) return;
-    if (st.phase === PHASE.FLIGHT && st.dickCatch) return;
+    if (st.phase === PHASE.FLIGHT && (st.dickCatch || st.chelleReact)) return;
     spawnDevPropAhead(st, type);
     setHud((h) => ({ ...h, message: st.message }));
   }, []);
@@ -1770,6 +2146,7 @@ function ToolboxKickGame({
         if (st.runup === KICK_FRAME) st.kickFlash = 10;
         if (st.runup >= LAUNCH_FRAME) {
           const rad = (st.angleDeg * Math.PI) / 180;
+          const speedFactor = (st.caughtCheating || st.punished) ? CAUGHT_CHEAT_SPEED_FACTOR : 1;
           let speed = launchSpeedForPower(st.power, tun);
           if (st.perfectLaunch) {
             speed *= PERFECT_LAUNCH_BOOST;
@@ -1784,6 +2161,7 @@ function ToolboxKickGame({
               rageUiRef.current.onConsumed();
             }
           }
+          speed *= speedFactor;
           st.launchSpeed = speed;
           st.launchAngleDeg = st.angleDeg;
           st.box.x = BOX_REST_X;
@@ -1793,10 +2171,16 @@ function ToolboxKickGame({
           st.box.spin = 0.2 + st.power * 0.3;
           st.box.onGround = false;
           st.dickCatch = null;
+          st.chelleReact = null;
+          if (st.punished) spawnPunishmentCoachSwarm(st);
           st.phase = PHASE.FLIGHT;
-          st.message = st.perfectLaunch
-            ? 'Perfect launch!!! Fly, toolbox, fly…'
-            : 'Fly, toolbox, fly…';
+          st.message = st.punished
+            ? 'Punishment — coaches everywhere!'
+            : st.caughtCheating
+              ? 'Caught cheating — toolbox is sluggish…'
+              : st.perfectLaunch
+                ? 'Perfect launch!!! Fly, toolbox, fly…'
+                : 'Fly, toolbox, fly…';
           syncHud(st);
         }
       } else if (st.phase === PHASE.FLIGHT && st.dickCatch) {
@@ -1828,7 +2212,8 @@ function ToolboxKickGame({
         }
         if (f >= 40) {
           const rad = ((st.launchAngleDeg || 45) * Math.PI) / 180;
-          const speed = st.launchSpeed || launchSpeedForPower(st.power, tun);
+          const speedFactor = (st.caughtCheating || st.punished) ? CAUGHT_CHEAT_SPEED_FACTOR : 1;
+          const speed = (st.launchSpeed || launchSpeedForPower(st.power, tun)) * speedFactor;
           box.x = catchSt.x - 12;
           box.y = GROUND_Y - 14;
           // Same launch force, opposite direction (back toward kick-off)
@@ -1840,6 +2225,47 @@ function ToolboxKickGame({
           st.hitIds = new Set(); // re-collide with obstacles on the way back
           ensureReturnPathProps(st, box.x);
           st.message = 'Little Dick sent it BACK — distance plunging!';
+          syncHud(st);
+        }
+        st.distance = (box.x - BOX_REST_X) / PX_PER_METRE;
+        st.camX = box.x - W * 0.35;
+        if (st.frame % 6 === 0) syncHud(st);
+      } else if (st.phase === PHASE.FLIGHT && st.chelleReact) {
+        const box = st.box;
+        const react = st.chelleReact;
+        react.frame += 1;
+        const f = react.frame;
+        // Hold on her lap / in front while she stands startled, then yeets
+        box.vx = 0;
+        box.vy = 0;
+        box.onGround = false;
+        box.x = react.x + (f < 18 ? 6 : 18);
+        box.y = GROUND_Y - (f < 18 ? 22 : 36);
+        box.rot = f < 18 ? -0.25 : 0.55;
+        box.spin = 0;
+
+        if (f === 1) {
+          st.message = "Chelle: I'm trying to read!";
+          popupFnRef.current?.(chelleStartledGrade(), 1800);
+          syncHud(st);
+        }
+        if (f === 18) {
+          st.message = 'Chelle recovers and launches the toolbox!';
+          popupFnRef.current?.(chelleBoostGrade(), 2200);
+          syncHud(st);
+        }
+        if (f === 28) {
+          st.kickFlash = 12;
+        }
+        if (f >= 34) {
+          const speedFactor = (st.caughtCheating || st.punished) ? CAUGHT_CHEAT_SPEED_FACTOR : 1;
+          applyChelleBoost(box, speedFactor);
+          box.x = react.x + 24;
+          box.y = GROUND_Y - 40;
+          st.chelleReact = null;
+          st.message = st.caughtCheating
+            ? 'CHELLE! (but you’re sluggish…)'
+            : 'CHELLE! 3× Julies Car!';
           syncHud(st);
         }
         st.distance = (box.x - BOX_REST_X) / PX_PER_METRE;
@@ -1927,7 +2353,7 @@ function ToolboxKickGame({
               if (!st.hitIds.has(id)) {
                 st.hitIds.add(id);
                 bumpHitTally(st, 'smoker');
-                applySmokerBoost(box);
+                applySmokerBoost(box, (st.caughtCheating || st.punished) ? CAUGHT_CHEAT_SPEED_FACTOR : 1);
                 st.message = 'Driver on a ciggy break — sent flying!';
                 popupFnRef.current?.(smokerBoostGrade(false), 1600);
                 syncHud(st);
@@ -1940,11 +2366,26 @@ function ToolboxKickGame({
               if (!st.hitIds.has(id)) {
                 st.hitIds.add(id);
                 bumpHitTally(st, 'macan');
-                applyMacanBoost(box);
+                applyMacanBoost(box, (st.caughtCheating || st.punished) ? CAUGHT_CHEAT_SPEED_FACTOR : 1);
                 st.message = 'JULIES CAR!';
                 popupFnRef.current?.(macanBoostGrade(), 2000);
                 syncHud(st);
               }
+            }
+          } else if (it.type === 'chelle') {
+            // Must land on her (descending) — she stands startled, then yeets 3× Macan
+            const dx = box.x - it.x;
+            const dy = box.y - (GROUND_Y - 24);
+            if (dx * dx + dy * dy < 38 ** 2 && box.vy > 0 && !st.hitIds.has(id)) {
+              st.hitIds.add(id);
+              bumpHitTally(st, 'chelle');
+              st.chelleReact = { x: it.x, frame: 0 };
+              box.vx = 0;
+              box.vy = 0;
+              box.x = it.x + 6;
+              box.y = GROUND_Y - 22;
+              st.message = "Chelle: I'm trying to read!";
+              syncHud(st);
             }
           } else if (it.type === 'littleDick') {
             // Must land on him (descending) to get the catch-and-reboot
@@ -2036,46 +2477,162 @@ function ToolboxKickGame({
             box.onGround = true;
             if (Math.abs(box.vx) < tun.stopSpeed) {
               box.vx = 0;
+              const afterMachBoot = Boolean(st.punishRevenge?.afterBoot);
               st.phase = PHASE.LANDED;
               const dist = Math.floor(st.distance);
-              if (!Array.isArray(st.attemptDistances)) st.attemptDistances = [];
-              // Highest distance wins — negatives are valid (and hilarious)
-              const prevBest = st.attemptDistances.length === 0 ? null : st.roundBest;
-              if (prevBest === null || dist > prevBest) {
-                st.roundBest = dist;
-                st.roundBestUsedEnergyDrink = Boolean(st.superRageUsed);
-              }
-              st.attemptDistances = [...st.attemptDistances, dist];
-              if (dist > st.best) {
-                st.best = dist;
-                localStorage.setItem('toolbox-kick-best', String(dist));
-              }
-              const maxAttempts = st.maxAttempts || MAX_ATTEMPTS;
-              if (st.attempt < maxAttempts) {
-                st.message = `Attempt ${st.attempt} · ${formatDistance(dist)}. Tap for attempt ${st.attempt + 1}/${maxAttempts}`;
-              } else if (competitiveRef.current) {
-                st.message = `Round locked · best ${formatDistance(st.roundBest)}. Leaderboard score submitted.`;
-                if (!st.roundReported) {
-                  st.roundReported = true;
-                  setRoundDone(true);
-                  onRoundCompleteRef.current?.({
-                    distanceM: st.roundBest,
-                    attempts: [...st.attemptDistances],
-                    energyDrinkUsed: Boolean(st.roundBestUsedEnergyDrink),
-                  });
+
+              if (afterMachBoot) {
+                st.punishRevenge = null;
+                const maxAttempts = st.maxAttempts || MAX_ATTEMPTS;
+                if (st.attempt < maxAttempts) {
+                  st.message = `Mach 2 boot done · scored ${formatDistance(st.roundBest)}. Tap for attempt ${st.attempt + 1}/${maxAttempts}`;
+                } else if (competitiveRef.current) {
+                  st.message = `Mach 2 boot done · scored ${formatDistance(st.roundBest)}. Round locked.`;
+                } else {
+                  st.message = `Mach 2 boot done · scored ${formatDistance(st.roundBest)}. Tap for a new round`;
                 }
+                syncHud(st);
               } else {
-                st.message = dist < 0
-                  ? `Round over · best ${formatDistance(st.roundBest)}. (Yes, negative is allowed.) Tap for a new round`
-                  : `Round over · best ${formatDistance(st.roundBest)}. Tap for a new round`;
+                if (!Array.isArray(st.attemptDistances)) st.attemptDistances = [];
+                // Highest distance wins — negatives are valid (and hilarious)
+                const prevBest = st.attemptDistances.length === 0 ? null : st.roundBest;
+                if (prevBest === null || dist > prevBest) {
+                  st.roundBest = dist;
+                  st.roundBestUsedEnergyDrink = Boolean(st.superRageUsed);
+                }
+                st.attemptDistances = [...st.attemptDistances, dist];
+                if (dist > st.best) {
+                  st.best = dist;
+                  localStorage.setItem('toolbox-kick-best', String(dist));
+                }
+                if (st.punished) {
+                  setHaHaFlash(true);
+                  st.punishRevenge = {
+                    stage: 'wait',
+                    frame: 0,
+                    x: 0,
+                    facing: -1,
+                  };
+                  st.message = `Attempt ${st.attempt} · ${formatDistance(dist)}. HA-HA…`;
+                } else {
+                  const maxAttempts = st.maxAttempts || MAX_ATTEMPTS;
+                  const tracked = Boolean(st.caughtCheating);
+                  const finalize = st.attempt >= maxAttempts;
+                  if (competitiveRef.current && (tracked || finalize) && (!st.roundReported || tracked)) {
+                    if (finalize) {
+                      st.roundReported = true;
+                      setRoundDone(true);
+                    }
+                    onRoundCompleteRef.current?.({
+                      distanceM: st.roundBest,
+                      attempts: [...st.attemptDistances],
+                      energyDrinkUsed: Boolean(st.roundBestUsedEnergyDrink),
+                      finalize: finalize || !tracked,
+                    });
+                  }
+                  if (st.attempt < maxAttempts) {
+                    st.message = `Attempt ${st.attempt} · ${formatDistance(dist)}. Tap for attempt ${st.attempt + 1}/${maxAttempts}`;
+                  } else if (competitiveRef.current) {
+                    st.message = `Round locked · best ${formatDistance(st.roundBest)}. Leaderboard score submitted.`;
+                  } else {
+                    st.message = dist < 0
+                      ? `Round over · best ${formatDistance(st.roundBest)}. (Yes, negative is allowed.) Tap for a new round`
+                      : `Round over · best ${formatDistance(st.roundBest)}. Tap for a new round`;
+                  }
+                }
+                // Punished: log score now (before Mach 2 humiliation), then wait for Little Dick.
+                if (st.punished) {
+                  const maxAttempts = st.maxAttempts || MAX_ATTEMPTS;
+                  const tracked = true;
+                  const finalize = st.attempt >= maxAttempts;
+                  if (competitiveRef.current && (!st.roundReported || tracked)) {
+                    if (finalize) {
+                      st.roundReported = true;
+                      setRoundDone(true);
+                    }
+                    onRoundCompleteRef.current?.({
+                      distanceM: st.roundBest,
+                      attempts: [...st.attemptDistances],
+                      energyDrinkUsed: Boolean(st.roundBestUsedEnergyDrink),
+                      finalize: finalize || !tracked,
+                    });
+                  }
+                }
+                syncHud(st);
               }
-              syncHud(st);
             }
           }
         }
 
         st.camX = box.x - W * 0.35;
         if (st.frame % 6 === 0) syncHud(st);
+      } else if (st.phase === PHASE.LANDED && st.punishRevenge && st.punishRevenge.stage !== 'done') {
+        const pr = st.punishRevenge;
+        const box = st.box;
+        pr.frame += 1;
+
+        if (pr.stage === 'wait') {
+          if (pr.frame >= PUNISH_HAHA_WAIT_FRAMES) {
+            setHaHaFlash(false);
+            pr.stage = 'walk';
+            pr.frame = 0;
+            pr.x = box.x + 440;
+            pr.facing = -1;
+            st.message = 'Little Dick walks in from the right…';
+            syncHud(st);
+          }
+        } else if (pr.stage === 'walk') {
+          pr.x -= 5.2;
+          st.camX += ((pr.x - W * 0.55) - st.camX) * 0.08;
+          if (pr.x <= box.x + 18) {
+            pr.stage = 'grab';
+            pr.frame = 0;
+            pr.x = box.x + 10;
+            st.message = 'Little Dick picks up the toolbox…';
+            popupFnRef.current?.(littleDickRebootGrade(), 1800);
+            syncHud(st);
+          }
+        } else if (pr.stage === 'grab') {
+          box.vx = 0;
+          box.vy = 0;
+          box.onGround = false;
+          box.x = pr.x - 8;
+          box.y = GROUND_Y - (pr.frame < 18 ? 28 : 18);
+          box.rot = pr.frame < 18 ? -0.35 : 0.2;
+          box.spin = 0;
+          if (pr.frame === 22) {
+            pr.facing = -1;
+            st.message = 'Little Dick winds up — MACH 2!';
+            syncHud(st);
+          }
+          if (pr.frame === 34) st.kickFlash = 14;
+          if (pr.frame >= 40) {
+            const rad = (38 * Math.PI) / 180;
+            const speed = MACH2_SPEED_PX;
+            box.x = pr.x - 14;
+            box.y = GROUND_Y - 16;
+            box.vx = -Math.cos(rad) * speed;
+            box.vy = -Math.sin(rad) * speed;
+            box.spin = -0.85;
+            box.onGround = false;
+            st.hitIds = new Set();
+            ensureReturnPathProps(st, box.x);
+            pr.stage = 'flight';
+            pr.afterBoot = true;
+            pr.shout = true;
+            pr.shoutFrame = 0;
+            st.phase = PHASE.FLIGHT;
+            st.message = 'Little Dick: “Have that you dirty cheat!”';
+            popupFnRef.current?.(littleDickMach2Grade(), 2800);
+            syncHud(st);
+          }
+        }
+      }
+
+      // Keep the scream bubble alive a beat after the Mach 2 boot.
+      if (st.punishRevenge?.shout && st.punishRevenge.stage === 'flight') {
+        st.punishRevenge.shoutFrame = (st.punishRevenge.shoutFrame || 0) + 1;
+        if (st.punishRevenge.shoutFrame > 90) st.punishRevenge.shout = false;
       }
 
       if (st.kickFlash > 0) st.kickFlash -= 1;
@@ -2124,6 +2681,49 @@ function ToolboxKickGame({
         else if (it.type === 'oilSpill') drawOilSpill(ctx, sx, GROUND_Y, st.frame);
         else if (it.type === 'smoker') drawSmoker(ctx, sx, GROUND_Y, st.frame);
         else if (it.type === 'macan') drawMacan(ctx, sx, GROUND_Y, st.frame);
+        else if (it.type === 'chelle') {
+          const reacting = st.chelleReact && st.chelleReact.x === it.x;
+          let pose = 'reading';
+          if (reacting) {
+            pose = st.chelleReact.frame < 18 ? 'startled' : 'launch';
+          }
+          drawChelle(ctx, sx, GROUND_Y, st.frame, pose);
+          if (reacting && st.chelleReact.frame < 22) {
+            ctx.save();
+            ctx.fillStyle = 'rgba(255,255,255,0.95)';
+            ctx.strokeStyle = 'rgba(139,92,246,0.7)';
+            ctx.lineWidth = 2;
+            const bw = 132;
+            const bh = 28;
+            const bx = sx - bw / 2;
+            const by = GROUND_Y - 118;
+            ctx.beginPath();
+            ctx.roundRect(bx, by, bw, bh, 8);
+            ctx.fill();
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(sx - 6, by + bh);
+            ctx.lineTo(sx, by + bh + 8);
+            ctx.lineTo(sx + 6, by + bh);
+            ctx.closePath();
+            ctx.fill();
+            ctx.fillStyle = '#5b21b6';
+            ctx.font = 'bold 11px system-ui, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText("I'm trying to read!", sx, by + bh / 2);
+            ctx.restore();
+          } else if (!reacting) {
+            ctx.fillStyle = 'rgba(15, 23, 42, 0.75)';
+            ctx.beginPath();
+            ctx.roundRect(sx - 28, GROUND_Y - 92, 56, 16, 4);
+            ctx.fill();
+            ctx.fillStyle = '#ddd6fe';
+            ctx.font = 'bold 10px system-ui, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('CHELLE', sx, GROUND_Y - 81);
+          }
+        }
         else if (it.type === 'littleDick') {
           const catching = st.dickCatch && st.dickCatch.x === it.x;
           const face = catching ? (st.dickCatch.facing || 1) : 1;
@@ -2155,6 +2755,70 @@ function ToolboxKickGame({
         drawMechanic(ctx, st.mechX - cam, GROUND_Y, st.frame, { kicking, running });
       }
 
+      // Punishment revenge: Little Dick walks in / grabs / boots Mach 2
+      if (
+        st.punishRevenge
+        && (
+          st.punishRevenge.stage === 'walk'
+          || st.punishRevenge.stage === 'grab'
+          || (st.punishRevenge.stage === 'flight' && st.punishRevenge.shout)
+        )
+      ) {
+        const pr = st.punishRevenge;
+        const sx = pr.x - cam;
+        if (sx > visMinSx && sx < visMaxSx) {
+          const kickingRevenge = pr.stage === 'grab' && pr.frame >= 30 && pr.frame < 42;
+          const runningRevenge = pr.stage === 'walk';
+          ctx.save();
+          ctx.translate(sx, GROUND_Y);
+          ctx.scale(pr.facing < 0 ? -1 : 1, 1);
+          drawMechanic(ctx, 0, 0, st.frame, {
+            kicking: kickingRevenge,
+            running: runningRevenge,
+          });
+          ctx.restore();
+
+          const shouting = Boolean(pr.shout) || (pr.stage === 'grab' && pr.frame >= 34);
+          if (shouting) {
+            ctx.save();
+            ctx.fillStyle = 'rgba(255,255,255,0.96)';
+            ctx.strokeStyle = 'rgba(234,88,12,0.75)';
+            ctx.lineWidth = 2;
+            const lines = ['Have that you', 'dirty cheat!'];
+            const bw = 168;
+            const bh = 40;
+            const bx = sx - bw / 2;
+            const by = GROUND_Y - 128;
+            ctx.beginPath();
+            ctx.roundRect(bx, by, bw, bh, 8);
+            ctx.fill();
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.moveTo(sx - 6, by + bh);
+            ctx.lineTo(sx, by + bh + 8);
+            ctx.lineTo(sx + 6, by + bh);
+            ctx.closePath();
+            ctx.fill();
+            ctx.fillStyle = '#9a3412';
+            ctx.font = 'bold 12px system-ui, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(lines[0], sx, by + 13);
+            ctx.fillText(lines[1], sx, by + 28);
+            ctx.restore();
+          } else {
+            ctx.fillStyle = 'rgba(15, 23, 42, 0.75)';
+            ctx.beginPath();
+            ctx.roundRect(sx - 40, GROUND_Y - 96, 80, 16, 4);
+            ctx.fill();
+            ctx.fillStyle = '#fdba74';
+            ctx.font = 'bold 10px system-ui, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText('LITTLE DICK', sx, GROUND_Y - 85);
+          }
+        }
+      }
+
       const oiled = Boolean(st.box.oiled);
       if (st.phase === PHASE.READY || st.phase === PHASE.POWER || st.phase === PHASE.ANGLE) {
         drawToolbox(ctx, st.box.x - cam, st.box.y, -0.15, false, oiled);
@@ -2165,9 +2829,13 @@ function ToolboxKickGame({
       }
 
       if (st.kickFlash > 0) {
-        const flashX = st.dickCatch
-          ? st.dickCatch.x - 18 - cam
-          : MECH_KICK_X + 18 - cam;
+        const flashX = st.punishRevenge && (st.punishRevenge.stage === 'grab' || st.punishRevenge.stage === 'flight')
+          ? st.punishRevenge.x - 18 - cam
+          : st.dickCatch
+            ? st.dickCatch.x - 18 - cam
+            : st.chelleReact
+              ? st.chelleReact.x + 22 - cam
+              : MECH_KICK_X + 18 - cam;
         ctx.fillStyle = `rgba(255,220,120,${st.kickFlash / 10})`;
         ctx.beginPath();
         ctx.arc(flashX, GROUND_Y - 16, 22, 0, Math.PI * 2);
@@ -2286,6 +2954,23 @@ function ToolboxKickGame({
     return () => cancelAnimationFrame(raf);
   }, []);
 
+  /** Dev cheat (sandbox only): P = toggle punishment (10% power + HA-HA on land). */
+  const doCheatPunish = useCallback(() => {
+    if (!devCheatsRef.current || competitiveRef.current) return;
+    setCheatPunished((prev) => {
+      const next = !prev;
+      const st = stateRef.current;
+      if (st) {
+        st.punished = next || Boolean(punished);
+        st.message = next
+          ? 'CHEAT · punishment ON — 10% power, coaches on kick, HA-HA on land'
+          : 'CHEAT · punishment OFF';
+        setHud((h) => ({ ...h, message: st.message }));
+      }
+      return next;
+    });
+  }, [punished]);
+
   useEffect(() => {
     const onKey = (e) => {
       if (e.code === 'Space' || e.key === ' ') {
@@ -2312,18 +2997,35 @@ function ToolboxKickGame({
         doCheatSpawn('macan');
         return;
       }
+      if (e.key === 'c' || e.key === 'C' || e.code === 'KeyC') {
+        if (e.repeat) return;
+        e.preventDefault();
+        doCheatSpawn('chelle');
+        return;
+      }
       if (e.key === 'l' || e.key === 'L' || e.code === 'KeyL') {
         if (e.repeat) return;
         e.preventDefault();
         doCheatSpawn('littleDick');
+        return;
+      }
+      if (e.key === 'p' || e.key === 'P' || e.code === 'KeyP') {
+        if (e.repeat) return;
+        e.preventDefault();
+        doCheatPunish();
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [doSpace, doCheatY, doCheatU, doCheatSpawn]);
+  }, [doSpace, doCheatY, doCheatU, doCheatSpawn, doCheatPunish]);
 
   return (
     <div className="space-y-3">
+      {devCheats && cheatPunished ? (
+        <div className="rounded-xl border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-xs text-rose-100">
+          Punishment cheat ON (P to toggle) — 10% · coaches · HA-HA · Little Dick Mach 2
+        </div>
+      ) : null}
       <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
         <p className="text-slate-300">{hud.message}</p>
         <div className="flex flex-wrap gap-3 text-xs text-slate-400">
@@ -2353,6 +3055,15 @@ function ToolboxKickGame({
         className="relative overflow-hidden rounded-xl border border-[#1a2540] bg-[#0b1220] [&:fullscreen]:flex [&:fullscreen]:items-center [&:fullscreen]:justify-center [&:fullscreen]:rounded-none [&:fullscreen]:border-0 [&:fullscreen]:min-h-screen [&:fullscreen]:w-screen"
       >
         <RpgPopup popup={popup} />
+        {haHaFlash ? (
+          <div className="absolute inset-0 z-30 flex items-center justify-center pointer-events-none bg-black/35">
+            <img
+              src="/toolbox-kick/nelson-ha-ha.gif"
+              alt="HA-HA!"
+              className="max-h-[85%] max-w-[90%] object-contain drop-shadow-2xl"
+            />
+          </div>
+        ) : null}
         <button
           type="button"
           onClick={(e) => {
@@ -2420,7 +3131,7 @@ function ToolboxKickGame({
             </button>
             {devCheats ? (
               <p className="w-full text-xs text-slate-500">
-                Dev keys: Y perfect/smoker boost · U nudge · M Julies Car · L Little Dick
+                Dev keys: Y perfect/smoker boost · U nudge · M Julies Car · C Chelle · L Little Dick
               </p>
             ) : null}
           </>
@@ -2507,7 +3218,7 @@ function IntroBubble({ open, onClose }) {
   );
 }
 
-function ModeSelect({ onPick, competitive = false }) {
+function ModeSelect({ onPick, competitive = false, busy = false }) {
   return (
     <div className="rounded-xl border border-[#1a2540] p-5 space-y-4">
       <p className="text-sm text-slate-300">
@@ -2519,8 +3230,9 @@ function ModeSelect({ onPick, competitive = false }) {
       <div className="grid sm:grid-cols-2 gap-3">
         <button
           type="button"
+          disabled={busy}
           onClick={() => onPick('allOrNothing')}
-          className="text-left rounded-xl border border-rose-500/40 bg-rose-500/10 hover:bg-rose-500/15 px-4 py-4 space-y-1 transition-colors"
+          className="text-left rounded-xl border border-rose-500/40 bg-rose-500/10 hover:bg-rose-500/15 px-4 py-4 space-y-1 transition-colors disabled:opacity-50"
         >
           <p className="text-base font-semibold text-rose-100">All or nothing</p>
           <p className="text-xs text-slate-400 leading-relaxed">
@@ -2529,8 +3241,9 @@ function ModeSelect({ onPick, competitive = false }) {
         </button>
         <button
           type="button"
+          disabled={busy}
           onClick={() => onPick('careful')}
-          className="text-left rounded-xl border border-sky-500/40 bg-sky-500/10 hover:bg-sky-500/15 px-4 py-4 space-y-1 transition-colors"
+          className="text-left rounded-xl border border-sky-500/40 bg-sky-500/10 hover:bg-sky-500/15 px-4 py-4 space-y-1 transition-colors disabled:opacity-50"
         >
           <p className="text-base font-semibold text-sky-100">3 goes</p>
           <p className="text-xs text-slate-400 leading-relaxed">
@@ -2538,6 +3251,7 @@ function ModeSelect({ onPick, competitive = false }) {
           </p>
         </button>
       </div>
+      {busy ? <p className="text-xs text-slate-500">Locking today’s round…</p> : null}
     </div>
   );
 }
@@ -2595,7 +3309,7 @@ export function ToolboxKickSandbox() {
           ) : null}
         </div>
         <p className="text-[11px] text-slate-500">
-          Dev keys: Y · U · M · L · Fullscreen on canvas. Cheats only in this sandbox.
+          Dev keys: Y · U · M · C · L · P (punish) · Fullscreen on canvas. Cheats only in this sandbox.
         </p>
       </div>
 
@@ -2626,6 +3340,7 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
   const [dayKey, setDayKey] = useState(todayKey);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [starting, setStarting] = useState(false);
   const [error, setError] = useState('');
   const [game, setGame] = useState(null);
   const [leaderboard, setLeaderboard] = useState([]);
@@ -2634,6 +3349,7 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
   const [mode, setMode] = useState(null);
   const [introOpen, setIntroOpen] = useState(() => !hasSeenIntro());
   const practice = dayKey !== todayKey;
+  const roundLockedRef = useRef(false);
 
   const load = useCallback(async (key) => {
     const params = new URLSearchParams();
@@ -2648,6 +3364,7 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
       setAllTimeRecord(null);
       setSuperRage(null);
       setMode(null);
+      roundLockedRef.current = false;
       setError(payload.message || 'Little Dicks Toolbox isn’t in today’s Fun rotation.');
       return;
     }
@@ -2656,12 +3373,21 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
     setLeaderboard(payload.leaderboard || []);
     setAllTimeRecord(payload.allTimeRecord || null);
     setSuperRage(payload.superRage || null);
-    if (payload.game?.status === 'won') {
+    if (payload.game?.status === 'won' && payload.game?.roundComplete !== false) {
       setMode(payload.game.mode || 'careful');
+      roundLockedRef.current = false;
+    } else if (
+      payload.game?.status === 'in_progress'
+      || (payload.game?.status === 'won' && payload.game?.roundComplete === false)
+    ) {
+      // Reload mid-round: server marks caughtCheating; resume with speed nerf.
+      setMode(payload.game.mode || 'careful');
+      roundLockedRef.current = !practice;
     } else {
       setMode(null);
+      roundLockedRef.current = false;
     }
-  }, [todayKey]);
+  }, [todayKey, practice]);
 
   useEffect(() => {
     let cancelled = false;
@@ -2683,7 +3409,52 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
     };
   }, [dayKey, load]);
 
-  const submitRound = useCallback(async ({ distanceM, attempts, energyDrinkUsed = false }) => {
+  const startRound = useCallback(async (pickedMode) => {
+    if (practice) {
+      setMode(pickedMode);
+      return;
+    }
+    try {
+      setStarting(true);
+      setError('');
+      const response = await fetch('/api/startToolboxKickRound', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode: pickedMode,
+          dayKey: dayKey !== todayKey ? dayKey : undefined,
+        }),
+      });
+      const payload = (await readJsonResponse(response)) || {};
+      if (!response.ok) throw new Error(payload.error || 'Failed to lock today’s round.');
+      if (Array.isArray(payload.leaderboard)) setLeaderboard(payload.leaderboard);
+      if (payload.allTimeRecord !== undefined) setAllTimeRecord(payload.allTimeRecord || null);
+      if (payload.game) setGame(payload.game);
+
+      if (payload.alreadySubmitted || (payload.game?.status === 'won' && payload.game?.roundComplete !== false)) {
+        roundLockedRef.current = false;
+        setMode(payload.game?.mode || pickedMode);
+        return;
+      }
+
+      roundLockedRef.current = true;
+      setMode(payload.game?.mode || pickedMode);
+    } catch (err) {
+      setError(err.message || 'Could not start your round.');
+      setMode(null);
+      roundLockedRef.current = false;
+    } finally {
+      setStarting(false);
+    }
+  }, [practice, dayKey, todayKey]);
+
+  const submitRound = useCallback(async ({
+    distanceM,
+    attempts,
+    energyDrinkUsed = false,
+    finalize = true,
+  }) => {
     if (practice || !mode) return;
     try {
       setSubmitting(true);
@@ -2696,28 +3467,35 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
           distanceM,
           attempts,
           energyDrinkUsed: Boolean(energyDrinkUsed),
+          finalize: Boolean(finalize),
           dayKey: dayKey !== todayKey ? dayKey : undefined,
         }),
       });
       const payload = (await readJsonResponse(response)) || {};
       if (!response.ok) throw new Error(payload.error || 'Failed to submit score.');
       setGame(payload.game || null);
+      if (finalize || payload.game?.roundComplete !== false) {
+        roundLockedRef.current = false;
+      }
       if (Array.isArray(payload.leaderboard)) setLeaderboard(payload.leaderboard);
       if (payload.allTimeRecord !== undefined) setAllTimeRecord(payload.allTimeRecord || null);
       if (payload.superRage) setSuperRage(payload.superRage);
-      if (Array.isArray(payload.achievements) && onAchievements) {
+      if (finalize && Array.isArray(payload.achievements) && onAchievements) {
         onAchievements(payload.achievements);
       }
     } catch (err) {
       setError(err.message || 'Could not submit your score.');
-      setMode(null);
+      if (finalize) {
+        setMode(null);
+        roundLockedRef.current = false;
+      }
     } finally {
       setSubmitting(false);
     }
   }, [practice, mode, dayKey, todayKey, onAchievements]);
 
   const activateSuperRage = useCallback(async () => {
-    if (practice) return; // practice: free client-side arm, no cooldown burn
+    if (practice) return;
     const response = await fetch('/api/activateToolboxSuperRage', {
       method: 'POST',
       credentials: 'include',
@@ -2732,8 +3510,12 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
   if (loading) return <p className="text-sm text-slate-400">Loading Little Dicks Toolbox…</p>;
   if (error && !game) return <p className="text-sm text-rose-300">{error}</p>;
 
-  const alreadyDone = game?.status === 'won';
-  const modeLabel = game?.mode === 'allOrNothing' ? 'All or nothing' : '3 goes';
+  const alreadyDone = game?.status === 'won' && game?.roundComplete !== false;
+  const forfeited = Boolean(game?.forfeited);
+  const caughtCheating = Boolean(game?.caughtCheating);
+  const punished = Boolean(game?.punished);
+  const speedNerfed = caughtCheating || punished;
+  const modeLabel = game?.mode === 'allOrNothing' || mode === 'allOrNothing' ? 'All or nothing' : '3 goes';
   const rageReady = practice || Boolean(superRage?.available);
 
   return (
@@ -2761,10 +3543,43 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
 
       <IntroBubble open={introOpen} onClose={() => setIntroOpen(false)} />
 
-      {alreadyDone ? (
+      {!alreadyDone && punished ? (
+        <div className="rounded-xl border border-rose-500/40 bg-rose-500/10 px-4 py-3 space-y-1">
+          <p className="text-sm text-rose-100 font-medium">Punishment active</p>
+          <p className="text-xs text-slate-400">
+            10% toolbox power. Coaches on kick. HA-HA on landing, then Little Dick boots it Mach 2
+            backwards. Each attempt is logged to today’s board as you go.
+          </p>
+        </div>
+      ) : null}
+
+      {!alreadyDone && caughtCheating && !punished ? (
+        <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 space-y-1">
+          <p className="text-sm text-amber-100 font-medium">Caught cheating</p>
+          <p className="text-xs text-slate-400">
+            Mid-round reload detected. Your toolbox is stuck at 10% speed for the rest of today’s go,
+            and each attempt is logged as you land.
+          </p>
+        </div>
+      ) : null}
+
+      {alreadyDone && forfeited ? (
+        <div className="rounded-xl border border-rose-500/40 bg-rose-500/10 px-4 py-3 space-y-1">
+          <p className="text-sm text-rose-100 font-medium">
+            Forfeit · quit/reload · 0 m
+          </p>
+          <p className="text-xs text-slate-400">
+            Today’s go was forfeited.
+          </p>
+        </div>
+      ) : null}
+
+      {alreadyDone && !forfeited ? (
         <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 space-y-1">
           <p className="text-sm text-emerald-100 font-medium">
             Today’s kick logged · {formatDistance(game.distanceM)}
+            {caughtCheating ? ' · caught cheating (10% speed)' : ''}
+            {punished ? ' · punished (10% speed)' : ''}
             {submitting ? ' · Saving…' : ''}
           </p>
           <p className="text-xs text-slate-400">
@@ -2778,17 +3593,19 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
       ) : null}
 
       {!alreadyDone && !mode ? (
-        <ModeSelect competitive={!practice} onPick={setMode} />
+        <ModeSelect competitive={!practice} onPick={startRound} busy={starting} />
       ) : null}
 
       {!alreadyDone && mode ? (
         <ToolboxKickGame
-          key={`${dayKey}-${mode}`}
+          key={`${dayKey}-${mode}-${speedNerfed ? 'nerf' : 'clean'}-${punished ? 'pun' : 'free'}`}
           mode={mode}
           competitive={!practice}
           onRoundComplete={practice ? null : submitRound}
           superRageAvailable={rageReady}
           onActivateSuperRage={practice ? null : activateSuperRage}
+          caughtCheating={caughtCheating}
+          punished={punished}
         />
       ) : null}
 
@@ -2822,6 +3639,9 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
                 currentUserUid={currentUserUid}
                 resultText={row.resultLabel || formatDistance(row.distanceM)}
                 metaText={[
+                  row.forfeited ? 'quit/reload' : null,
+                  row.caughtCheating ? 'caught cheating' : null,
+                  row.punished ? 'punished' : null,
                   row.mode === 'allOrNothing' ? 'All or nothing' : '3 goes',
                   row.energyDrinkUsed ? '⚡ energy drink' : null,
                 ].filter(Boolean).join(' · ')}

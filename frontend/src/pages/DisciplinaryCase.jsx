@@ -5,7 +5,6 @@ import CaseGuidePanel from '../components/CaseGuidePanel';
 import CaseDocumentationHub from '../components/CaseDocumentationHub';
 import CaseProgressRail from '../components/CaseProgressRail';
 import EmployeeSelect from '../components/EmployeeSelect';
-import WorkspaceTabs from '../components/WorkspaceTabs';
 import { useAuth } from '../context/AuthContext';
 import {
   INFORMAL_RESOLUTION_OPTIONS,
@@ -711,7 +710,7 @@ export default function DisciplinaryCase() {
       });
       const data = (await readJsonResponse(response)) || {};
       if (!response.ok) throw new Error(data.error || 'Failed to create case.');
-      navigate(`/dashboard/cases/${data.id}`);
+      navigate(`/dashboard/hr/cases/${data.id}`);
     } catch (err) {
       setError(err.message || 'Failed to create case.');
     } finally {
@@ -949,7 +948,7 @@ export default function DisciplinaryCase() {
 
   const deleteCase = async () => {
     const label = caseData?.title || caseId;
-    if (!window.confirm(`Permanently delete this case?\n\n"${label}"\n\nAll portal records (events, minutes, document metadata) will be removed. SharePoint files are not deleted.`)) {
+    if (!window.confirm(`Permanently delete this case?\n\n"${label}"\n\nThis removes all portal records (events, minutes, document metadata) and deletes the case folder and files in SharePoint.`)) {
       return;
     }
     if (!window.confirm('This cannot be undone. Delete the case now?')) {
@@ -966,7 +965,7 @@ export default function DisciplinaryCase() {
       });
       const data = (await readJsonResponse(response)) || {};
       if (!response.ok) throw new Error(data.error || 'Failed to delete case.');
-      navigate('/dashboard/cases', { replace: true, state: { message: data.message || 'Case deleted.' } });
+      navigate('/dashboard/hr/cases', { replace: true, state: { message: data.message || 'Case deleted.' } });
     } catch (err) {
       setError(err.message || 'Failed to delete case.');
     } finally {
@@ -996,7 +995,7 @@ export default function DisciplinaryCase() {
 
   const openActiveWarningCase = (item) => {
     if (!item?.id) return;
-    window.open(`/dashboard/cases/${item.id}`, '_blank', 'noopener,noreferrer');
+    window.open(`/dashboard/hr/cases/${item.id}`, '_blank', 'noopener,noreferrer');
   };
 
   const needsDuration = (presetId) => ['written_warning', 'final_written_warning', 'pip'].includes(presetId);
@@ -2547,7 +2546,7 @@ export default function DisciplinaryCase() {
             <ChoiceButton title="No further action — close" disabled={saving} onClick={() => apiUpdate({ trainingDecision: 'no_further_action' })} />
           </ChoiceRow>
           {caseData?.linkedDisciplinaryCaseId && (
-            <button type="button" className="text-indigo-300 text-sm" onClick={() => navigate(`/dashboard/cases/${caseData.linkedDisciplinaryCaseId}`)}>
+            <button type="button" className="text-indigo-300 text-sm" onClick={() => navigate(`/dashboard/hr/cases/${caseData.linkedDisciplinaryCaseId}`)}>
               Open linked disciplinary case
             </button>
           )}
@@ -2644,10 +2643,9 @@ export default function DisciplinaryCase() {
     if (error && !loading) {
       return (
         <div className="flex flex-col h-full">
-          <WorkspaceTabs />
           <div className="p-8 space-y-4 max-w-lg">
             <div className="bg-red-500/10 border border-red-500/25 rounded-lg p-4 text-sm text-red-300">{error}</div>
-            <button type="button" onClick={() => navigate('/dashboard/cases')} className={btnSecondary}>
+            <button type="button" onClick={() => navigate('/dashboard/hr/cases')} className={btnSecondary}>
               Back to cases
             </button>
           </div>
@@ -2656,7 +2654,6 @@ export default function DisciplinaryCase() {
     }
     return (
       <div className="flex flex-col h-full">
-        <WorkspaceTabs />
         <div className="p-8 text-sm text-slate-400">Loading case…</div>
       </div>
     );
@@ -2664,7 +2661,6 @@ export default function DisciplinaryCase() {
 
   return (
     <div className="flex flex-col h-full">
-      <WorkspaceTabs />
       <div className="flex items-center justify-between px-8 py-5 border-b border-[#1a2540] gap-3 flex-wrap">
         <div>
           <h1 className="text-xl font-bold text-white">
@@ -2708,7 +2704,7 @@ export default function DisciplinaryCase() {
               Export pack
             </button>
           )}
-          <button type="button" onClick={() => navigate('/dashboard/cases')} className={btnSecondary}>
+          <button type="button" onClick={() => navigate('/dashboard/hr/cases')} className={btnSecondary}>
             Back to cases
           </button>
         </div>
@@ -2851,7 +2847,7 @@ export default function DisciplinaryCase() {
                           return (
                             <li key={`${item.caseId}-${item.outcomePreset}-${item.reason}`}>
                               <a
-                                href={`/dashboard/cases/${item.caseId}`}
+                                href={`/dashboard/hr/cases/${item.caseId}`}
                                 target="_blank"
                                 rel="noreferrer"
                                 className="block text-xs border-l-2 border-amber-500/30 pl-2.5 space-y-0.5 hover:border-amber-400/70 hover:bg-amber-500/5 rounded-r-md pr-1 py-0.5 transition-colors"
