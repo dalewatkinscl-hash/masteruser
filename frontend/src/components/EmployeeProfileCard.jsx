@@ -607,9 +607,32 @@ export default function EmployeeProfileCard({
                       className={inputClassName(false)}
                       value={form.contractType}
                       onChange={(e) => updateField('contractType', e.target.value)}
+                      placeholder="Full Time / Part Time"
                     />
                   ) : (
                     <p className="text-sm text-white">{employee.contractType || '—'}</p>
+                  )}
+                </Field>
+                <Field label="Annual contracted hours">
+                  {editable.hr ? (
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      className={inputClassName(false)}
+                      value={form.annualContractedHours || ''}
+                      onChange={(e) => updateField(
+                        'annualContractedHours',
+                        e.target.value === '' ? 0 : Number(e.target.value),
+                      )}
+                      placeholder="e.g. 1000 (FT = 2210)"
+                    />
+                  ) : (
+                    <p className="text-sm text-white">
+                      {employee.annualContractedHours
+                        ? `${employee.annualContractedHours} hrs / year`
+                        : '—'}
+                    </p>
                   )}
                 </Field>
                 <Field label="Start date" value={formatDisplayDate(employee.startDate)}>

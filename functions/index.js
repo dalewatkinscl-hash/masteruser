@@ -40,6 +40,8 @@ const {
   getQuestionForDay,
   resolveBankQuestion,
   publicQuestion,
+  hiddenQuestion,
+  formatTriviaElapsed,
 } = require('./trivia');
 const {
   listBadgeTypes,
@@ -157,6 +159,7 @@ const {
   compareToolboxKickRows,
   toolboxKickResultLabel,
   collectToolboxKickRecords,
+  collectToolboxKickAllTimeTop,
   markToolboxKickCaughtCheating,
   buildToolboxKickForfeitPayload,
   clampDistance: clampToolboxKickDistance,
@@ -4258,6 +4261,22 @@ async function resolveSokobanPuzzle(dayKey) {
   return getSokobanPuzzleForDay(dayKey);
 }
 
+function triviaAnswerIsSubmitted(data) {
+  if (!data || typeof data !== 'object') return false;
+  return Number.isInteger(data.selectedIndex) && data.selectedIndex >= 0 && data.selectedIndex <= 3;
+}
+
+function serializeTriviaMyAnswer(data) {
+  if (!data || !triviaAnswerIsSubmitted(data)) return null;
+  return {
+    selectedIndex: data.selectedIndex,
+    correct: Boolean(data.correct),
+    answeredAt: data.answeredAt?.toDate?.()?.toISOString?.() || data.answeredAt || null,
+    revealedAt: data.revealedAt?.toDate?.()?.toISOString?.() || data.revealedAt || null,
+    elapsedMs: Number.isFinite(Number(data.elapsedMs)) ? Math.max(0, Math.floor(Number(data.elapsedMs))) : null,
+  };
+}
+
 async function buildTriviaLeaderboard(dayKey) {
   const snap = await db
     .collection('trivia_answers')
@@ -4267,30 +4286,39 @@ async function buildTriviaLeaderboard(dayKey) {
 
   const rows = snap.docs.map((doc) => {
     const data = doc.data() || {};
+    const submitted = triviaAnswerIsSubmitted(data);
     return {
-      uid: data.uid || doc.id,
+      uid: data.uid || doc.id.split('_').slice(1).join('_') || doc.id,
       fullName: data.fullName || 'Colleague',
-      correct: Boolean(data.correct),
+      correct: submitted ? Boolean(data.correct) : false,
       answeredAt: data.answeredAt?.toDate?.()?.toISOString?.() || null,
+      elapsedMs: submitted && Number.isFinite(Number(data.elapsedMs))
+        ? Math.max(0, Math.floor(Number(data.elapsedMs)))
+        : null,
     };
-  });
+  }).filter((row) => row.answeredAt);
 
   const wins = rows.filter((row) => row.correct);
   const fails = rows.filter((row) => !row.correct);
 
-  wins.sort((a, b) => {
+  const sortByElapsed = (a, b) => {
+    const aElapsed = typeof a.elapsedMs === 'number' ? a.elapsedMs : null;
+    const bElapsed = typeof b.elapsedMs === 'number' ? b.elapsedMs : null;
+    if (aElapsed != null && bElapsed != null) return aElapsed - bElapsed;
+    if (aElapsed != null) return -1;
+    if (bElapsed != null) return 1;
     const aTime = a.answeredAt ? new Date(a.answeredAt).getTime() : Number.MAX_SAFE_INTEGER;
     const bTime = b.answeredAt ? new Date(b.answeredAt).getTime() : Number.MAX_SAFE_INTEGER;
     return aTime - bTime;
-  });
-  fails.sort((a, b) => {
-    const aTime = a.answeredAt ? new Date(a.answeredAt).getTime() : Number.MAX_SAFE_INTEGER;
-    const bTime = b.answeredAt ? new Date(b.answeredAt).getTime() : Number.MAX_SAFE_INTEGER;
-    return aTime - bTime;
-  });
+  };
 
-  // Joint when answered in the same second.
+  wins.sort(sortByElapsed);
+  fails.sort(sortByElapsed);
+
   assignJointRanks(wins, (a, b) => {
+    if (typeof a.elapsedMs === 'number' && typeof b.elapsedMs === 'number') {
+      return a.elapsedMs === b.elapsedMs;
+    }
     const aSec = a.answeredAt ? Math.floor(new Date(a.answeredAt).getTime() / 1000) : -1;
     const bSec = b.answeredAt ? Math.floor(new Date(b.answeredAt).getTime() / 1000) : -2;
     return aSec === bSec;
@@ -4313,7 +4341,10 @@ async function buildTriviaLeaderboard(dayKey) {
     fullName: row.fullName,
     correct: row.correct,
     answeredAt: row.answeredAt,
-    resultLabel: row.correct ? 'Correct' : '💩 Wrong',
+    elapsedMs: row.elapsedMs,
+    resultLabel: row.correct
+      ? (typeof row.elapsedMs === 'number' ? formatTriviaElapsed(row.elapsedMs) : 'Correct')
+      : '💩 Wrong',
   }));
 }
 
@@ -4368,12 +4399,17 @@ exports.getDailyTrivia = onRequest(
       const leaderboard = practice ? [] : await buildTriviaLeaderboard(dayKey);
 
       let answered = false;
+      let revealed = false;
+      let revealedAt = null;
       let myAnswer = null;
       if (!practice) {
         const answerId = `${dayKey}_${session.profile.uid}`;
         const answerSnap = await db.collection('trivia_answers').doc(answerId).get();
-        myAnswer = answerSnap.exists ? answerSnap.data() : null;
-        answered = Boolean(myAnswer);
+        const answerData = answerSnap.exists ? answerSnap.data() || {} : null;
+        answered = triviaAnswerIsSubmitted(answerData);
+        revealed = answered || Boolean(answerData?.revealedAt);
+        revealedAt = answerData?.revealedAt?.toDate?.()?.toISOString?.() || null;
+        myAnswer = serializeTriviaMyAnswer(answerData);
       }
 
       const streaks = await loadFunStreaks(db, session.profile.uid, {
@@ -4387,15 +4423,11 @@ exports.getDailyTrivia = onRequest(
         practice,
         weekend: false,
         rotation: access.rotation,
-        question: publicQuestion(question),
+        question: (practice || revealed || answered) ? publicQuestion(question) : hiddenQuestion(question),
+        revealed: practice ? false : revealed,
+        revealedAt: practice ? null : revealedAt,
         answered,
-        myAnswer: answered
-          ? {
-              selectedIndex: myAnswer.selectedIndex,
-              correct: Boolean(myAnswer.correct),
-              answeredAt: myAnswer.answeredAt?.toDate?.()?.toISOString?.() || null,
-            }
-          : null,
+        myAnswer,
         correctIndex: answered ? question.correctIndex : null,
         leaderboard: practice ? [] : leaderboard,
         totalCorrect: practice ? 0 : leaderboard.filter((r) => r.correct).length,
@@ -4465,26 +4497,37 @@ exports.submitTriviaAnswer = onRequest(
       const answerRef = db.collection('trivia_answers').doc(answerId);
       const existing = await answerRef.get();
 
-      if (existing.exists) {
+      if (existing.exists && triviaAnswerIsSubmitted(existing.data() || {})) {
         const data = existing.data() || {};
         const leaderboard = await buildTriviaLeaderboard(dayKey);
         res.status(200).json({
           alreadyAnswered: true,
           dayKey,
           practice: false,
+          revealed: true,
           question: publicQuestion(question),
           correctIndex: question.correctIndex,
-          myAnswer: {
-            selectedIndex: data.selectedIndex,
-            correct: Boolean(data.correct),
-            answeredAt: data.answeredAt?.toDate?.()?.toISOString?.() || null,
-          },
+          myAnswer: serializeTriviaMyAnswer(data),
           leaderboard,
           totalCorrect: leaderboard.filter((r) => r.correct).length,
           totalFailed: leaderboard.filter((r) => !r.correct).length,
         });
         return;
       }
+
+      const existingData = existing.exists ? existing.data() || {} : {};
+      const revealedAtRaw = existingData.revealedAt;
+      if (!revealedAtRaw) {
+        res.status(409).json({
+          error: 'Reveal the question and start the timer first.',
+          needReveal: true,
+        });
+        return;
+      }
+
+      const revealedAtDate = revealedAtRaw.toDate ? revealedAtRaw.toDate() : new Date(revealedAtRaw);
+      const answeredNow = new Date();
+      const elapsedMs = Math.max(0, answeredNow.getTime() - revealedAtDate.getTime());
 
       const correct = selectedIndex === question.correctIndex;
       const answeredAt = admin.firestore.FieldValue.serverTimestamp();
@@ -4496,9 +4539,10 @@ exports.submitTriviaAnswer = onRequest(
         email: session.profile.email || '',
         selectedIndex,
         correct,
+        elapsedMs,
         answeredAt,
-        createdAt: answeredAt,
-      });
+        createdAt: existingData.createdAt || answeredAt,
+      }, { merge: true });
 
       let achievements = null;
       if (correct) {
@@ -4535,12 +4579,15 @@ exports.submitTriviaAnswer = onRequest(
         alreadyAnswered: false,
         dayKey,
         practice: false,
+        revealed: true,
         question: publicQuestion(question),
         correctIndex: question.correctIndex,
         myAnswer: {
           selectedIndex,
           correct,
-          answeredAt: new Date().toISOString(),
+          answeredAt: answeredNow.toISOString(),
+          revealedAt: revealedAtDate.toISOString(),
+          elapsedMs,
         },
         leaderboard,
         totalCorrect: leaderboard.filter((r) => r.correct).length,
@@ -4550,6 +4597,93 @@ exports.submitTriviaAnswer = onRequest(
     } catch (error) {
       console.error('submitTriviaAnswer failed', error);
       res.status(error.status || 500).json({ error: error.message || 'Failed to submit trivia answer.' });
+    }
+  }),
+);
+
+// POST { dayKey? } → reveal today's trivia question and start the answer timer.
+exports.startTriviaRound = onRequest(
+  { region: 'europe-west2' },
+  withCors(async (req, res) => {
+    if (req.method !== 'POST') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
+
+    const session = await getVerifiedSessionUser(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+
+    try {
+      const todayKey = getLondonDayKey();
+      const sandbox = parseSandboxFlag(req) && canManagePortalAccess(session.profile);
+      const { dayKey, practice } = resolvePlayableDayKey(req.body?.dayKey, todayKey, {
+        sandbox,
+        allowFuturePreview: sandbox,
+      });
+      await enforceFunGameAccess('trivia', { dayKey, practice, sandbox });
+
+      if (practice) {
+        res.status(200).json({
+          practice: true,
+          dayKey,
+          revealed: true,
+          revealedAt: new Date().toISOString(),
+        });
+        return;
+      }
+
+      const question = await resolveTriviaQuestion(dayKey);
+      const answerId = `${dayKey}_${session.profile.uid}`;
+      const answerRef = db.collection('trivia_answers').doc(answerId);
+      const existing = await answerRef.get();
+      const existingData = existing.exists ? existing.data() || {} : null;
+
+      if (existingData && triviaAnswerIsSubmitted(existingData)) {
+        res.status(200).json({
+          alreadyAnswered: true,
+          dayKey,
+          revealed: true,
+          revealedAt: existingData.revealedAt?.toDate?.()?.toISOString?.() || null,
+          question: publicQuestion(question),
+        });
+        return;
+      }
+
+      if (existingData?.revealedAt) {
+        res.status(200).json({
+          dayKey,
+          revealed: true,
+          revealedAt: existingData.revealedAt?.toDate?.()?.toISOString?.() || null,
+          question: publicQuestion(question),
+        });
+        return;
+      }
+
+      const revealedAt = admin.firestore.FieldValue.serverTimestamp();
+      await answerRef.set({
+        dayKey,
+        questionId: question.questionId,
+        uid: session.profile.uid,
+        fullName: session.profile.fullName || session.profile.email || 'Colleague',
+        email: session.profile.email || '',
+        revealedAt,
+        createdAt: revealedAt,
+      }, { merge: true });
+
+      const snap = await answerRef.get();
+      const data = snap.data() || {};
+      res.status(201).json({
+        dayKey,
+        revealed: true,
+        revealedAt: data.revealedAt?.toDate?.()?.toISOString?.() || new Date().toISOString(),
+        question: publicQuestion(question),
+      });
+    } catch (error) {
+      console.error('startTriviaRound failed', error);
+      res.status(error.status || 500).json({ error: error.message || 'Failed to start trivia round.' });
     }
   }),
 );
@@ -7874,8 +8008,8 @@ exports.getDailyToolboxKick = onRequest(
         return;
       }
 
-      const { leaderboard, allTimeRecord } = practice
-        ? { leaderboard: [], allTimeRecord: null }
+      const { leaderboard, allTimeRecord, allTimeTop10 } = practice
+        ? { leaderboard: [], allTimeRecord: null, allTimeTop10: [] }
         : await buildToolboxKickLeaderboardBundle(dayKey);
       let gameData = {
         dayKey,
@@ -7924,6 +8058,7 @@ exports.getDailyToolboxKick = onRequest(
         punished,
         leaderboard,
         allTimeRecord: practice ? null : allTimeRecord,
+        allTimeTop10: practice ? [] : allTimeTop10,
         totalSolved: leaderboard.length,
         superRage,
       });
@@ -8013,12 +8148,13 @@ exports.submitToolboxKickResult = onRequest(
       const fullyDone = isToolboxKickRoundFullyDone(existingData);
 
       if (existing.exists && fullyDone) {
-        const { leaderboard, allTimeRecord } = await buildToolboxKickLeaderboardBundle(dayKey);
+        const { leaderboard, allTimeRecord, allTimeTop10 } = await buildToolboxKickLeaderboardBundle(dayKey);
         res.status(200).json({
           practice: false,
           game: serializeToolboxKickGame(existingData),
           leaderboard,
           allTimeRecord,
+          allTimeTop10,
           totalSolved: leaderboard.length,
           alreadySubmitted: true,
         });
@@ -8082,7 +8218,7 @@ exports.submitToolboxKickResult = onRequest(
       }
 
       const snap = await ref.get();
-      const { leaderboard, allTimeRecord } = await buildToolboxKickLeaderboardBundle(dayKey);
+      const { leaderboard, allTimeRecord, allTimeTop10 } = await buildToolboxKickLeaderboardBundle(dayKey);
       await syncDayMedals(db, {
         gameKey: 'toolboxkick',
         dayKey,
@@ -8095,6 +8231,7 @@ exports.submitToolboxKickResult = onRequest(
         game: serializeToolboxKickGame(snap.data() || {}),
         leaderboard,
         allTimeRecord,
+        allTimeTop10,
         totalSolved: leaderboard.length,
         partial: !finalize,
         ...(achievements ? { achievements } : {}),
@@ -8166,12 +8303,13 @@ exports.startToolboxKickRound = onRequest(
         || Boolean(existingData?.punished);
 
       if (existingData && isToolboxKickRoundFullyDone(existingData)) {
-        const { leaderboard, allTimeRecord } = await buildToolboxKickLeaderboardBundle(dayKey);
+        const { leaderboard, allTimeRecord, allTimeTop10 } = await buildToolboxKickLeaderboardBundle(dayKey);
         res.status(200).json({
           practice: false,
           game: serializeToolboxKickGame({ ...existingData, punished }),
           leaderboard,
           allTimeRecord,
+          allTimeTop10,
           totalSolved: leaderboard.length,
           alreadySubmitted: true,
           punished,
@@ -8706,6 +8844,7 @@ async function buildToolboxKickLeaderboardBundle(dayKey) {
     .limit(FUN_LEADERBOARD_LIMIT)
     .get();
   const { worldRecord, personalBests } = collectToolboxKickRecords(snap.docs);
+  const allTimeTop10 = collectToolboxKickAllTimeTop(snap.docs, 10);
   const wrDistance = worldRecord ? worldRecord.distanceM : null;
 
   const rows = snap.docs.map((doc) => {
@@ -8778,7 +8917,7 @@ async function buildToolboxKickLeaderboardBundle(dayKey) {
     };
   });
 
-  return { leaderboard, allTimeRecord: worldRecord };
+  return { leaderboard, allTimeRecord: worldRecord, allTimeTop10 };
 }
 
 async function buildToolboxKickLeaderboard(dayKey) {

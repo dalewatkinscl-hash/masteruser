@@ -13,6 +13,16 @@ export function canManagePeopleCases(user) {
   return role === 'manager' || role === 'admin' || role === 'hr';
 }
 
+/** Informal / early-closed disciplinaries that can be retagged as Samsara coaching. */
+export function canConvertCaseToSamsaraCoaching(caseItem = {}) {
+  if ((caseItem.processFamily || '') === 'samsara_coaching') return false;
+  const preset = caseItem.outcomePreset || '';
+  if (preset === 'informal_action' || preset === 'file_note_for_improvement') return true;
+  const path = caseItem.informalResolutionPath || '';
+  if (path === 'informal_action_taken' || path === 'resolve_informally') return true;
+  return false;
+}
+
 /** People Cases / active measures / bonus deductions inside the in-app HR portal. */
 export function canAccessHrCases(user) {
   return canManagePeopleCases(user);
@@ -71,6 +81,7 @@ export const PROCESS_FAMILIES = [
   { id: 'disciplinary', label: 'Disciplinary' },
   { id: 'grievance', label: 'Grievance' },
   { id: 'vehicle_accident', label: 'Vehicle accident' },
+  { id: 'samsara_coaching', label: 'Samsara Coaching' },
 ];
 
 export const DISCIPLINARY_STAGES = [
@@ -98,22 +109,48 @@ export const ACCIDENT_STAGES = [
   'closed',
 ];
 
+export const SAMSARA_STAGES = [
+  'closed',
+];
+
+/** Common Samsara coaching event types — plus Other for free text. */
+export const SAMSARA_EVENT_TYPES = [
+  'Harsh braking',
+  'Harsh acceleration',
+  'Harsh cornering',
+  'Speeding',
+  'Distracted driving',
+  'Following distance',
+  'Seatbelt',
+  'Mobile phone use',
+  'Stop sign / traffic signal',
+  'Other',
+];
+
 export function stagesForFamily(processFamily) {
   if (processFamily === 'grievance') return GRIEVANCE_STAGES;
   if (processFamily === 'vehicle_accident') return ACCIDENT_STAGES;
+  if (processFamily === 'samsara_coaching') return SAMSARA_STAGES;
   return DISCIPLINARY_STAGES;
 }
 
 /** Informal / file-note closures skip hearing + outcome stages — don't show them as completed. */
 export function isEarlyInformalStyleClose(caseItem = {}) {
   const preset = caseItem.outcomePreset || '';
-  if (preset === 'informal_action' || preset === 'file_note_for_improvement') return true;
+  if (
+    preset === 'informal_action'
+    || preset === 'file_note_for_improvement'
+    || preset === 'samsara_coaching'
+  ) {
+    return true;
+  }
+  if ((caseItem.processFamily || '') === 'samsara_coaching') return true;
   const closed = caseItem.stage === 'closed' || caseItem.status === 'closed';
   if (!closed) return false;
   const wentFormal = Boolean(
     caseItem.hearingInviteIssuedAt
     || caseItem.hearingScheduledAt
-    || (preset && !['informal_action', 'file_note_for_improvement', 'no_further_action'].includes(preset)),
+    || (preset && !['informal_action', 'file_note_for_improvement', 'no_further_action', 'samsara_coaching'].includes(preset)),
   );
   return !wentFormal;
 }
@@ -141,6 +178,9 @@ export function normalizeStage(processFamily, stage) {
     if (raw === 'minutes_signoff') return 'investigation';
     return ACCIDENT_STAGES.includes(raw) ? raw : 'triage';
   }
+  if (processFamily === 'samsara_coaching') {
+    return 'closed';
+  }
   if (raw === 'intake' || raw === 'investigation' || raw === 'minutes_signoff') return 'fact_finding';
   return DISCIPLINARY_STAGES.includes(raw) ? raw : 'fact_finding';
 }
@@ -156,6 +196,7 @@ export function stageLabel(stage) {
 /** Stages where interviews / uploads are not part of the workflow (admin steps only). */
 export function stageAllowsDocumentation(processFamily, stage) {
   const normalized = normalizeStage(processFamily, stage);
+  if (processFamily === 'samsara_coaching') return false;
   if (processFamily === 'grievance') return normalized !== 'acknowledged';
   if (processFamily === 'vehicle_accident') return normalized !== 'triage';
   return true;
@@ -311,6 +352,21 @@ export function getCaseProgressStatus(caseItem = {}) {
     }
   }
 
+  if (family === 'samsara_coaching') {
+    const eventType = caseItem.issue || 'coaching';
+    const eventDate = caseItem.eventDate
+      ? String(caseItem.eventDate).slice(0, 10).split('-').reverse().join('/')
+      : '';
+    return {
+      label: eventDate
+        ? `Closed — Samsara coaching (${eventType}, ${eventDate})`
+        : `Closed — Samsara coaching (${eventType})`,
+      hint: 'Processed on Samsara — no portal interview',
+      tone: 'slate',
+      stage: 'closed',
+    };
+  }
+
   // disciplinary (default)
   if (stage === 'fact_finding') {
     if (caseItem.interviewNotesIssuedAt) {
@@ -460,6 +516,7 @@ export const OUTCOME_PRESETS = [
   { id: 'informal_action', label: 'Informal action (recorded)', suggestedExpiryMonths: 6 },
   { id: 'file_note_for_improvement', label: 'File note for improvement', suggestedExpiryMonths: 6 },
   { id: 'no_further_action', label: 'No further action', suggestedExpiryMonths: null },
+  { id: 'samsara_coaching', label: 'Samsara coaching (logged)', suggestedExpiryMonths: null },
 
   { id: 'written_warning', label: 'Written warning', suggestedExpiryMonths: 6 },
   { id: 'final_written_warning', label: 'Final written warning', suggestedExpiryMonths: 12 },

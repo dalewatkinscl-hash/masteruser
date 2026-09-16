@@ -130,6 +130,19 @@ function sanitizeEmployeeProfile(input = {}, { partial = false } = {}) {
   assignDate('lastAtFaultAccidentDate');
   assignDate('lastAppraisalDate');
 
+  if (input.hoursPerWeek !== undefined) {
+    const hours = Number(input.hoursPerWeek);
+    profile.hoursPerWeek = Number.isFinite(hours) && hours > 0 ? hours : 0;
+  }
+  if (input.annualContractedHours !== undefined) {
+    const annual = Number(input.annualContractedHours);
+    profile.annualContractedHours = Number.isFinite(annual) && annual > 0 ? annual : 0;
+  }
+  if (input.fte !== undefined) {
+    const fte = Number(input.fte);
+    profile.fte = Number.isFinite(fte) && fte > 0 ? fte : 0;
+  }
+
   if (input.address !== undefined) {
     profile.address = sanitizeAddress(input.address);
   }
@@ -158,6 +171,9 @@ function createEmptyEmployeeProfile() {
     phoneNumber: '',
     personalEmail: '',
     computerAsset: '',
+    hoursPerWeek: 0,
+    annualContractedHours: 0,
+    fte: 0,
     dateOfBirth: '',
     startDate: '',
     lastAtFaultAccidentDate: '',

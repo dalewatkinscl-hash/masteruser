@@ -41,6 +41,16 @@ function formatTime(value) {
   });
 }
 
+function formatElapsedMs(ms) {
+  const n = Math.max(0, Math.floor(Number(ms) || 0));
+  if (n < 1000) return `${(n / 1000).toFixed(2)}s`;
+  const totalSec = n / 1000;
+  if (totalSec < 60) return `${totalSec.toFixed(1)}s`;
+  const min = Math.floor(totalSec / 60);
+  const sec = Math.round(totalSec % 60);
+  return `${min}:${String(sec).padStart(2, '0')}`;
+}
+
 function TrophyIcon({ className }) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -80,9 +90,12 @@ function TriviaContent({ currentUserUid, onAchievements }) {
   const [dayKey, setDayKey] = useState(todayKey);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [revealing, setRevealing] = useState(false);
   const [error, setError] = useState('');
   const [data, setData] = useState(null);
   const [selectedIndex, setSelectedIndex] = useState(null);
+  const [practiceRevealedAt, setPracticeRevealedAt] = useState(null);
+  const [timerMs, setTimerMs] = useState(0);
 
   const practice = dayKey !== todayKey;
 
@@ -97,6 +110,8 @@ function TriviaContent({ currentUserUid, onAchievements }) {
     } else {
       setSelectedIndex(null);
     }
+    setPracticeRevealedAt(null);
+    setTimerMs(0);
     if (!payload.practice && Array.isArray(payload.achievements) && onAchievements) {
       onAchievements(payload.achievements);
     }
@@ -123,6 +138,63 @@ function TriviaContent({ currentUserUid, onAchievements }) {
     };
   }, [dayKey]);
 
+  const answered = Boolean(data?.answered || data?.myAnswer);
+  const revealed = practice
+    ? Boolean(practiceRevealedAt)
+    : Boolean(data?.revealed || answered);
+  const revealedAtIso = practice
+    ? practiceRevealedAt
+    : (data?.revealedAt || data?.myAnswer?.revealedAt || null);
+
+  useEffect(() => {
+    if (!revealed || answered || !revealedAtIso) {
+      setTimerMs(0);
+      return undefined;
+    }
+    const start = new Date(revealedAtIso).getTime();
+    if (Number.isNaN(start)) return undefined;
+    const tick = () => setTimerMs(Math.max(0, Date.now() - start));
+    tick();
+    const id = window.setInterval(tick, 50);
+    return () => window.clearInterval(id);
+  }, [revealed, answered, revealedAtIso]);
+
+  const revealQuestion = async () => {
+    if (revealed || answered) return;
+    setRevealing(true);
+    setError('');
+    try {
+      if (practice) {
+        const now = new Date().toISOString();
+        setPracticeRevealedAt(now);
+        setData((prev) => ({
+          ...prev,
+          revealed: true,
+          revealedAt: now,
+        }));
+        return;
+      }
+      const response = await fetch('/api/startTriviaRound', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const payload = (await readJsonResponse(response)) || {};
+      if (!response.ok) throw new Error(payload.error || 'Failed to reveal question.');
+      setData((prev) => ({
+        ...prev,
+        revealed: true,
+        revealedAt: payload.revealedAt,
+        question: payload.question || prev?.question,
+      }));
+    } catch (err) {
+      setError(err.message || 'Failed to reveal question.');
+    } finally {
+      setRevealing(false);
+    }
+  };
+
   const submit = async () => {
     if (selectedIndex == null || data?.answered || data?.myAnswer) return;
     setSubmitting(true);
@@ -142,6 +214,13 @@ function TriviaContent({ currentUserUid, onAchievements }) {
       setData({
         ...payload,
         answered: true,
+        myAnswer: payload.myAnswer
+          ? {
+              ...payload.myAnswer,
+              elapsedMs: practice ? timerMs : payload.myAnswer.elapsedMs,
+              revealedAt: practice ? practiceRevealedAt : payload.myAnswer.revealedAt,
+            }
+          : payload.myAnswer,
       });
       if (Array.isArray(payload.achievements) && onAchievements) {
         onAchievements(payload.achievements);
@@ -162,9 +241,9 @@ function TriviaContent({ currentUserUid, onAchievements }) {
   }
 
   const question = data?.question;
-  const answered = Boolean(data?.answered || data?.myAnswer);
   const correctIndex = data?.correctIndex;
   const leaderboard = data?.leaderboard || [];
+  const showQuestion = revealed || answered;
 
   return (
     <div className="space-y-4">
@@ -172,7 +251,7 @@ function TriviaContent({ currentUserUid, onAchievements }) {
         <p className="text-xs text-indigo-300/80">
           {practice
             ? 'Practice mode · Europe/London'
-            : 'One go per day · Europe/London'}
+            : 'One go per day · fastest correct answer wins'}
           {' · '}
           {data?.dayKey || dayKey}
         </p>
@@ -180,10 +259,40 @@ function TriviaContent({ currentUserUid, onAchievements }) {
       </div>
 
       <div className="space-y-4">
-          <p className="text-base text-slate-100 font-medium leading-relaxed">
-            {question?.prompt}
-          </p>
+          {!showQuestion && !answered ? (
+            <div className="rounded-xl border border-indigo-500/30 bg-indigo-500/10 px-5 py-8 text-center space-y-4">
+              <p className="text-sm text-slate-300">
+                Today&apos;s quiz is ready. Reveal the question to start the timer — quickest correct answer tops the board.
+              </p>
+              <button
+                type="button"
+                onClick={revealQuestion}
+                disabled={revealing}
+                className="px-5 py-2.5 rounded-lg text-sm font-medium bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white"
+              >
+                {revealing ? 'Starting…' : 'Reveal question & start timer'}
+              </button>
+            </div>
+          ) : null}
 
+          {showQuestion && !answered ? (
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-2">
+              <p className="text-xs font-semibold uppercase tracking-wider text-amber-200/90">
+                Timer running
+              </p>
+              <p className="text-lg font-mono font-semibold tabular-nums text-amber-50">
+                {formatElapsedMs(timerMs)}
+              </p>
+            </div>
+          ) : null}
+
+          {showQuestion ? (
+            <p className="text-base text-slate-100 font-medium leading-relaxed">
+              {question?.prompt}
+            </p>
+          ) : null}
+
+          {showQuestion ? (
           <div className="space-y-2">
             {(question?.options || []).map((option, index) => {
               const isSelected = selectedIndex === index;
@@ -214,8 +323,9 @@ function TriviaContent({ currentUserUid, onAchievements }) {
               );
             })}
           </div>
+          ) : null}
 
-          {!answered && (
+          {showQuestion && !answered && (
             <button
               type="button"
               onClick={submit}
@@ -236,8 +346,8 @@ function TriviaContent({ currentUserUid, onAchievements }) {
             >
               {data?.myAnswer?.correct
                 ? practice
-                  ? 'Nice one — correct. Practice only, so it doesn’t count.'
-                  : 'Nice one — that’s correct. You’re on today’s leaderboard.'
+                  ? `Nice one — correct in ${formatElapsedMs(data?.myAnswer?.elapsedMs ?? timerMs)}. Practice only, so it doesn’t count.`
+                  : `Nice one — correct in ${formatElapsedMs(data?.myAnswer?.elapsedMs ?? timerMs)}. You’re on today’s leaderboard.`
                 : `Not this time. The correct answer was ${String.fromCharCode(65 + (correctIndex ?? 0))}.`}
             </div>
           )}
@@ -252,7 +362,7 @@ function TriviaContent({ currentUserUid, onAchievements }) {
               <TrophyIcon className="w-4 h-4 text-amber-300" />
               <h4 className="text-sm font-semibold text-indigo-200">Today’s leaderboard</h4>
             </div>
-            <span className="text-xs text-slate-500">{data?.totalCorrect ?? 0} correct · {data?.totalFailed ?? 0} wrong</span>
+            <span className="text-xs text-slate-500">{data?.totalCorrect ?? 0} correct · {data?.totalFailed ?? 0} wrong · fastest wins</span>
           </div>
 
           {!leaderboard.length ? (
@@ -267,7 +377,9 @@ function TriviaContent({ currentUserUid, onAchievements }) {
                   row={row}
                   currentUserUid={currentUserUid}
                   resultText={row.resultLabel || (row.correct ? 'Correct' : '💩 Wrong')}
-                  metaText={formatTime(row.answeredAt)}
+                  metaText={row.correct && typeof row.elapsedMs === 'number'
+                    ? formatElapsedMs(row.elapsedMs)
+                    : formatTime(row.answeredAt)}
                 />
               ))}
             </ol>

@@ -5,6 +5,7 @@
 const {
   DOCUMENT_TYPES,
   OUTCOME_PRESETS,
+  PROCESS_FAMILIES,
   RESTRICTION_OPTIONS,
   restrictionLabel,
   toTrimmedString,
@@ -90,6 +91,43 @@ function createPeopleCasesApi({
       return false;
     }
     return true;
+  }
+
+  /** Retag an existing case as closed Samsara coaching (keeps issue/employee). */
+  function buildSamsaraConversionFields(existing = {}) {
+    const employeeName = toTrimmedString(existing.employeeNameSnapshot) || 'Employee';
+    const issue = toTrimmedString(existing.issue) || 'Coaching';
+    const fromOpened = serializeTimestamp(existing.openedAt) || existing.openedAt || '';
+    const fromClosed = serializeTimestamp(existing.closedAt) || existing.closedAt || '';
+    const rawEventDate = toTrimmedString(existing.eventDate).slice(0, 10)
+      || String(fromOpened || fromClosed || new Date().toISOString()).slice(0, 10);
+    const eventDate = /^\d{4}-\d{2}-\d{2}$/.test(rawEventDate)
+      ? rawEventDate
+      : new Date().toISOString().slice(0, 10);
+    const dateLabel = eventDate.split('-').reverse().join('/');
+    const closeNotes = toTrimmedString(existing.closeNotes)
+      || toTrimmedString(existing.informalActionDetails)
+      || 'Processed on the Samsara system. Converted from an informal disciplinary case.';
+
+    return {
+      processFamily: 'samsara_coaching',
+      caseType: 'samsara_coaching',
+      stage: 'closed',
+      status: 'closed',
+      outcomePreset: 'samsara_coaching',
+      outcomePackSteps: [],
+      processedOnSamsara: true,
+      eventDate,
+      title: `${employeeName} - ${issue} Samsara Coaching ${dateLabel}`,
+      closeNotes,
+      informalResolutionPath: '',
+      warningEffectiveAt: '',
+      warningExpiresAt: '',
+      warningDurationMonths: null,
+      warningClearedAt: null,
+      slaDueAt: '',
+      closedAt: existing.closedAt || admin.firestore.FieldValue.serverTimestamp(),
+    };
   }
 
   function sanitizeRestrictionInput(body, processFamily) {
@@ -562,13 +600,18 @@ function createPeopleCasesApi({
         const related = await listRelated(caseId);
 
         let history = [];
+        let coachingHistory = [];
         if (canManageCases(session.profile, getEffectivePortalRole) && caseData.employeeUid) {
           const historySnap = await db.collection('disciplinary_cases')
             .where('employeeUid', '==', caseData.employeeUid)
             .get();
           const today = new Date().toISOString().slice(0, 10);
-          history = historySnap.docs
-            .map((doc) => serializeCase(doc))
+          const cutoff = new Date();
+          cutoff.setFullYear(cutoff.getFullYear() - 1);
+          const cutoffIso = cutoff.toISOString();
+          const allCases = historySnap.docs.map((doc) => serializeCase(doc));
+
+          history = allCases
             .filter((item) => {
               if (item.id === caseId) return false;
               if ((item.processFamily || 'disciplinary') === 'grievance') return false;
@@ -588,6 +631,29 @@ function createPeopleCasesApi({
               warningEffectiveAt: item.warningEffectiveAt || '',
               warningExpiresAt: item.warningExpiresAt || '',
               closedAt: item.closedAt || '',
+              kind: 'warning',
+            }));
+
+          coachingHistory = allCases
+            .filter((item) => {
+              if (item.id === caseId) return false;
+              if ((item.processFamily || '') !== 'samsara_coaching' && item.outcomePreset !== 'samsara_coaching') {
+                return false;
+              }
+              const closedAt = item.closedAt || item.updatedAt || item.createdAt || '';
+              return String(closedAt) >= cutoffIso;
+            })
+            .sort((a, b) => String(b.eventDate || b.closedAt || b.createdAt || '')
+              .localeCompare(String(a.eventDate || a.closedAt || a.createdAt || '')))
+            .map((item) => ({
+              id: item.id,
+              title: item.title || '',
+              issue: item.issue || '',
+              eventDate: item.eventDate || '',
+              outcomePreset: item.outcomePreset || 'samsara_coaching',
+              processFamily: 'samsara_coaching',
+              closedAt: item.closedAt || '',
+              kind: 'samsara_coaching',
             }));
         }
 
@@ -693,6 +759,7 @@ function createPeopleCasesApi({
           case: serialized,
           ...relatedForClient(related),
           history,
+          coachingHistory,
           outcomes: OUTCOME_PRESETS,
           documentTemplates,
           missingDocuments,
@@ -726,8 +793,15 @@ function createPeopleCasesApi({
         return;
       }
       if (!input.issue) {
-        res.status(400).json({ error: 'Issue is required.' });
+        res.status(400).json({
+          error: input.processFamily === 'samsara_coaching'
+            ? 'Event type is required.'
+            : 'Issue is required.',
+        });
         return;
+      }
+      if (input.processFamily === 'samsara_coaching' && !input.eventDate) {
+        input.eventDate = new Date().toISOString().slice(0, 10);
       }
       if (input.processFamily === 'disciplinary' || input.processFamily === 'grievance') {
         const path = input.informalResolutionPath;
@@ -767,9 +841,15 @@ function createPeopleCasesApi({
         const now = admin.firestore.FieldValue.serverTimestamp();
         const slaDueAt = addWorkingDays(new Date(), 5);
         const employeeName = employee.fullName || employee.email || 'Employee';
-        const openedDateLabel = new Date().toLocaleDateString('en-GB');
+        const isSamsara = input.processFamily === 'samsara_coaching';
+        const openedDateLabel = isSamsara && input.eventDate
+          ? input.eventDate.split('-').reverse().join('/')
+          : new Date().toLocaleDateString('en-GB');
         const issue = input.issue;
-        const title = `${employeeName} - ${issue} - ${openedDateLabel}`;
+        const title = input.title || `${employeeName} - ${issue} - ${openedDateLabel}`;
+        const closeNotes = isSamsara
+          ? 'Processed on the Samsara system. No portal interview required.'
+          : '';
 
         const caseDoc = await db.collection('disciplinary_cases').add({
           employeeUid: input.employeeUid,
@@ -782,13 +862,13 @@ function createPeopleCasesApi({
           caseType: input.caseType,
           issue,
           title,
-          summary: input.summary,
-          status: 'open',
-          stage: input.stage,
-          origin: input.sourceIncidentId ? 'attendance_auto' : 'manual',
+          summary: input.summary || (isSamsara ? closeNotes : ''),
+          status: isSamsara ? 'closed' : 'open',
+          stage: isSamsara ? 'closed' : input.stage,
+          origin: input.sourceIncidentId ? 'attendance_auto' : (isSamsara ? 'samsara' : 'manual'),
           sourceIncidentId: input.sourceIncidentId || '',
           dueAt: input.dueAt || '',
-          slaDueAt,
+          slaDueAt: isSamsara ? '' : slaDueAt,
           informalResolutionPath: input.informalResolutionPath || '',
           informalTried: input.informalResolutionPath === 'proceed_formal' || input.informalTried,
           informalNotes: input.informalNotes,
@@ -797,8 +877,10 @@ function createPeopleCasesApi({
           informalActionTakenAt: null,
           offPortalRaiseDate: input.offPortalRaiseDate,
           offPortalRaiseNotes: input.offPortalRaiseNotes,
-          historyReviewedAt: null,
-          historyReviewedByUid: '',
+          eventDate: input.eventDate || '',
+          processedOnSamsara: isSamsara,
+          historyReviewedAt: isSamsara ? now : null,
+          historyReviewedByUid: isSamsara ? session.profile.uid : '',
           investigatorUid: session.profile.uid,
           hearingManagerUid: '',
           decisionMakerUid: '',
@@ -822,7 +904,7 @@ function createPeopleCasesApi({
           suspensionFrom: '',
           suspensionTo: '',
           suspensionReason: '',
-          outcomePreset: '',
+          outcomePreset: isSamsara ? 'samsara_coaching' : '',
           outcomePackSteps: [],
           warningEffectiveAt: '',
           warningExpiresAt: '',
@@ -831,8 +913,11 @@ function createPeopleCasesApi({
           linkedAccidentCaseId: '',
           trainingDecision: '',
           trainingOutline: '',
+          closeNotes,
+          closedByUid: isSamsara ? session.profile.uid : '',
+          closedByName: isSamsara ? (session.profile.fullName || session.profile.email || '') : '',
           openedAt: now,
-          closedAt: null,
+          closedAt: isSamsara ? now : null,
           appealedAt: null,
           createdByUid: session.profile.uid,
           createdByName: session.profile.fullName || session.profile.email || '',
@@ -841,26 +926,40 @@ function createPeopleCasesApi({
           updatedAt: now,
         });
 
-        await stampSharePointCaseFolderName(caseDoc, {
-          title,
-          openedAt: new Date(),
-          offPortalRaiseDate: input.offPortalRaiseDate,
-        });
+        if (!isSamsara) {
+          await stampSharePointCaseFolderName(caseDoc, {
+            title,
+            openedAt: new Date(),
+            offPortalRaiseDate: input.offPortalRaiseDate,
+          });
+        }
 
         await appendEvent(caseDoc.id, 'case_created', {
           processFamily: input.processFamily,
           caseType: input.caseType,
-          stage: input.stage,
+          stage: isSamsara ? 'closed' : input.stage,
           ownerManagerUid,
           issue,
           title,
+          eventDate: input.eventDate || '',
+          processedOnSamsara: isSamsara,
           informalResolutionPath: input.informalResolutionPath || '',
           createdByName: session.profile.fullName || session.profile.email || '',
         }, session.profile);
 
+        if (isSamsara) {
+          await appendEvent(caseDoc.id, 'samsara_coaching_logged', {
+            eventDate: input.eventDate,
+            eventType: issue,
+            processedOnSamsara: true,
+          }, session.profile);
+        }
+
         res.status(200).json({
           id: caseDoc.id,
-          message: 'Case created.',
+          message: isSamsara
+            ? 'Samsara coaching logged and closed.'
+            : 'Case created.',
         });
       } catch (error) {
         console.error('createPeopleCase failed', error);
@@ -917,7 +1016,7 @@ function createPeopleCasesApi({
 
         if (body.processFamily !== undefined) {
           const nextFamily = toTrimmedString(body.processFamily).toLowerCase();
-          if (!['disciplinary', 'grievance', 'vehicle_accident'].includes(nextFamily)) {
+          if (!PROCESS_FAMILIES.has(nextFamily)) {
             res.status(400).json({ error: 'Invalid process family.' });
             return;
           }
@@ -928,19 +1027,46 @@ function createPeopleCasesApi({
             patch.stage = remappedStage;
             if (nextFamily === 'grievance') {
               patch.caseType = 'grievance';
+            } else if (nextFamily === 'samsara_coaching') {
+              Object.assign(patch, buildSamsaraConversionFields(existing));
             } else if (currentFamily === 'grievance' && (existing.caseType || '') === 'grievance') {
               patch.caseType = nextFamily === 'vehicle_accident' ? 'vehicle_accident' : 'other';
             } else if (nextFamily === 'vehicle_accident') {
               patch.caseType = 'vehicle_accident';
             }
-            if (body.caseType) patch.caseType = toTrimmedString(body.caseType);
+            if (body.caseType && nextFamily !== 'samsara_coaching') {
+              patch.caseType = toTrimmedString(body.caseType);
+            }
             events.push(['process_family_changed', {
               from: currentFamily,
               to: nextFamily,
               stageFrom: existing.stage,
-              stageTo: remappedStage,
+              stageTo: patch.stage || remappedStage,
             }]);
+            if (nextFamily === 'samsara_coaching') {
+              events.push(['converted_to_samsara_coaching', {
+                fromProcessFamily: currentFamily,
+                fromOutcomePreset: existing.outcomePreset || '',
+                eventDate: patch.eventDate || '',
+                title: patch.title || '',
+              }]);
+            }
           }
+        }
+
+        if (body.convertToSamsaraCoaching === true) {
+          const currentFamily = existing.processFamily || 'disciplinary';
+          if (currentFamily === 'samsara_coaching') {
+            res.status(400).json({ error: 'This case is already Samsara coaching.' });
+            return;
+          }
+          Object.assign(patch, buildSamsaraConversionFields(existing));
+          events.push(['converted_to_samsara_coaching', {
+            fromProcessFamily: currentFamily,
+            fromOutcomePreset: existing.outcomePreset || '',
+            eventDate: patch.eventDate || '',
+            title: patch.title || '',
+          }]);
         }
 
         if (body.stage) {
@@ -3523,6 +3649,90 @@ function createPeopleCasesApi({
     final_written_warning: 100,
   };
 
+  const {
+    DEFAULT_BASE_BONUS,
+    DEFAULT_FULL_TIME_HOURS_PER_WEEK,
+    DEFAULT_FULL_TIME_WEEKS_PER_YEAR,
+    DEFAULT_FULL_TIME_ANNUAL_HOURS,
+    DEFAULT_PAYMENT_SCHEDULE,
+    calculateBonusAtPaymentDate,
+    resolveNextPaymentDate,
+    listUpcomingPaymentOptions,
+    normalizeSchedule,
+    resolveBonusProRata,
+    applyBonusDeductionsAndProRata,
+    toIsoDateOnly: bonusToIsoDateOnly,
+  } = require('./bonusAccrual');
+
+  async function loadBonusConfig() {
+    try {
+      const snap = await db.collection('settings').doc('bonus').get();
+      if (!snap.exists) {
+        return {
+          schedule: DEFAULT_PAYMENT_SCHEDULE,
+          fullTimeHoursPerWeek: DEFAULT_FULL_TIME_HOURS_PER_WEEK,
+          fullTimeWeeksPerYear: DEFAULT_FULL_TIME_WEEKS_PER_YEAR,
+          fullTimeAnnualHours: DEFAULT_FULL_TIME_ANNUAL_HOURS,
+        };
+      }
+      const data = snap.data() || {};
+      const schedule = normalizeSchedule(data.paymentSchedule || data.paymentDates);
+      const weekly = Number(data.fullTimeHoursPerWeek);
+      const weeks = Number(data.fullTimeWeeksPerYear);
+      const annual = Number(data.fullTimeAnnualHours);
+      const fullTimeHoursPerWeek = weekly > 0 ? weekly : DEFAULT_FULL_TIME_HOURS_PER_WEEK;
+      const fullTimeWeeksPerYear = weeks > 0 ? weeks : DEFAULT_FULL_TIME_WEEKS_PER_YEAR;
+      const fullTimeAnnualHours = annual > 0
+        ? annual
+        : fullTimeHoursPerWeek * fullTimeWeeksPerYear;
+      return {
+        schedule: schedule.length ? schedule : DEFAULT_PAYMENT_SCHEDULE,
+        fullTimeHoursPerWeek,
+        fullTimeWeeksPerYear,
+        fullTimeAnnualHours,
+      };
+    } catch (error) {
+      console.warn('loadBonusConfig failed, using defaults', error.message || error);
+      return {
+        schedule: DEFAULT_PAYMENT_SCHEDULE,
+        fullTimeHoursPerWeek: DEFAULT_FULL_TIME_HOURS_PER_WEEK,
+        fullTimeWeeksPerYear: DEFAULT_FULL_TIME_WEEKS_PER_YEAR,
+        fullTimeAnnualHours: DEFAULT_FULL_TIME_ANNUAL_HOURS,
+      };
+    }
+  }
+
+  function bonusDeductionPresetId(item) {
+    const raw = toTrimmedString(item?.outcomePreset)
+      || toTrimmedString(item?.warningPresetId)
+      || '';
+    if (BONUS_DEDUCTION_AMOUNTS[raw]) return raw;
+    const lower = raw.toLowerCase().replace(/\s+/g, '_');
+    if (BONUS_DEDUCTION_AMOUNTS[lower]) return lower;
+    if (/final.?written/.test(lower)) return 'final_written_warning';
+    if (/written.?warning/.test(lower) && !/final/.test(lower)) return 'written_warning';
+    return '';
+  }
+
+  function bonusDeductionWasIssued(item) {
+    if (!item) return false;
+    if (item.outcomeIssuedAt || item.closedAt || item.warningEffectiveAt) return true;
+    if (isIsoDateOnly(item.warningExpiresAt) || isIsoDateOnly(item.warningEffectiveAt)) return true;
+    const stage = String(item.stage || '');
+    if (stage === 'closed' || stage === 'appeal' || stage === 'outcome') return true;
+    const status = String(item.status || '').toLowerCase();
+    if (
+      status.includes('closed')
+      || status.includes('awaiting_employee')
+      || status.includes('outcome')
+      || status.includes('warning')
+      || status.includes('signed')
+    ) {
+      return true;
+    }
+    return false;
+  }
+
   const getBonusDeductions = onRequest(
     { region: 'europe-west2' },
     withCors(async (req, res) => {
@@ -3535,6 +3745,19 @@ function createPeopleCasesApi({
 
       try {
         const employeeUidFilter = toTrimmedString(req.query?.employeeUid);
+        const {
+          schedule,
+          fullTimeHoursPerWeek,
+          fullTimeWeeksPerYear,
+          fullTimeAnnualHours,
+        } = await loadBonusConfig();
+        const todayIso = new Date().toISOString().slice(0, 10);
+        const requestedPaymentDate = bonusToIsoDateOnly(req.query?.paymentDate);
+        const nextDefault = resolveNextPaymentDate(todayIso, schedule);
+        const paymentDate = requestedPaymentDate || nextDefault;
+        const paymentOptions = listUpcomingPaymentOptions(todayIso, schedule, 6);
+        const baseBonus = DEFAULT_BASE_BONUS;
+
         const [usersSnap, casesSnap] = await Promise.all([
           employeeUidFilter
             ? db.collection('users').doc(employeeUidFilter).get().then((doc) => ({ docs: doc.exists ? [doc] : [] }))
@@ -3548,34 +3771,55 @@ function createPeopleCasesApi({
         for (const doc of usersSnap.docs) {
           const data = doc.data() || {};
           if (data.isActive === false) continue;
+          const profile = data.employeeProfile || {};
+          const startDate = bonusToIsoDateOnly(
+            profile.startDate
+            || profile.hireDate
+            || data.startDate
+            || data.hireDate
+            || '',
+          );
           employeesByUid.set(doc.id, {
             uid: doc.id,
             fullName: data.fullName || data.email || 'Unknown',
             email: data.email || '',
-            department: data.employeeProfile?.department || data.department || '',
+            department: profile.department || data.department || '',
+            startDate,
+            contractType: profile.contractType || data.contractType || '',
+            annualContractedHours: Number(
+              profile.annualContractedHours || data.annualContractedHours || 0,
+            ) || 0,
+            hoursPerWeek: Number(profile.hoursPerWeek || data.hoursPerWeek || 0) || 0,
+            fte: Number(profile.fte || data.fte || 0) || 0,
           });
         }
 
         const deductionsByEmployee = new Map();
         for (const doc of casesSnap.docs) {
           const item = serializeCase(doc);
-          const amount = BONUS_DEDUCTION_AMOUNTS[item.outcomePreset];
+          const presetId = bonusDeductionPresetId(item);
+          const amount = BONUS_DEDUCTION_AMOUNTS[presetId];
           if (!amount) continue;
-          if ((item.processFamily || 'disciplinary') !== 'disciplinary') continue;
+          const family = item.processFamily || 'disciplinary';
+          if (family && family !== 'disciplinary') continue;
           if (!item.employeeUid) continue;
-          // Only count issued outcomes (finalised / closed / pending employee sign-off).
-          if (!item.outcomeIssuedAt && !item.closedAt && !item.warningEffectiveAt) continue;
+          if (!bonusDeductionWasIssued(item)) continue;
 
           const givenAt = measureGivenAt(item)
             || toIsoDateOnly(item.outcomeIssuedAt)
             || toIsoDateOnly(item.closedAt)
             || toIsoDateOnly(item.warningEffectiveAt)
+            || toIsoDateOnly(item.updatedAt)
             || '';
-          const preset = outcomePresetById(item.outcomePreset);
+          const superseded = isSupersededMeasure(item);
+          const cleared = Boolean(item.warningClearedAt) && !superseded;
+          // Superseded / cleared warnings stay listed but do not reduce final payment.
+          const countsTowardPayment = !superseded && !item.warningClearedAt;
+          const preset = outcomePresetById(presetId);
           const entry = {
             caseId: item.id,
-            outcomePreset: item.outcomePreset,
-            warningLabel: preset?.label || item.outcomePreset,
+            outcomePreset: presetId,
+            warningLabel: preset?.label || presetId,
             amount,
             currency: 'GBP',
             reason: measureReason(item),
@@ -3584,8 +3828,11 @@ function createPeopleCasesApi({
             givenAt,
             warningExpiresAt: toIsoDateOnly(item.warningExpiresAt) || '',
             status: item.status || '',
+            stage: item.stage || '',
             warningClearedAt: item.warningClearedAt || null,
-            superseded: isSupersededMeasure(item),
+            superseded,
+            cleared,
+            countsTowardPayment,
             employeeNameSnapshot: item.employeeNameSnapshot || '',
           };
           const list = deductionsByEmployee.get(item.employeeUid) || [];
@@ -3597,32 +3844,93 @@ function createPeopleCasesApi({
           list.sort((left, right) => String(right.givenAt || '').localeCompare(String(left.givenAt || '')));
         }
 
-        const employeeUids = new Set([
+        // Active employees + anyone with a listed deduction (so warnings are never hidden).
+        const employeeUids = [...new Set([
           ...employeesByUid.keys(),
           ...deductionsByEmployee.keys(),
-        ]);
-        const rows = [...employeeUids]
+        ])];
+        const rows = employeeUids
           .map((uid) => {
             const employee = employeesByUid.get(uid);
             const deductions = deductionsByEmployee.get(uid) || [];
-            const totalAmount = deductions.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+            const applicableDeductions = deductions.filter((item) => item.countsTowardPayment);
+            const totalAmount = applicableDeductions.reduce(
+              (sum, item) => sum + (Number(item.amount) || 0),
+              0,
+            );
+            const listedDeductionTotal = deductions.reduce(
+              (sum, item) => sum + (Number(item.amount) || 0),
+              0,
+            );
+            const bonus = calculateBonusAtPaymentDate({
+              startDate: employee?.startDate || '',
+              paymentDate,
+              baseBonus,
+            });
+            const proRata = resolveBonusProRata({
+              contractType: employee?.contractType || '',
+              annualContractedHours: employee?.annualContractedHours || 0,
+              hoursPerWeek: employee?.hoursPerWeek || 0,
+              fte: employee?.fte || 0,
+              fullTimeHoursPerWeek,
+              fullTimeWeeksPerYear,
+              fullTimeAnnualHours,
+            });
+            const settlement = applyBonusDeductionsAndProRata({
+              bonus,
+              proRata,
+              deductionTotal: totalAmount,
+            });
             return {
               employeeUid: uid,
               employeeName: employee?.fullName || deductions[0]?.employeeNameSnapshot || 'Unknown employee',
               employeeEmail: employee?.email || '',
               department: employee?.department || '',
+              startDate: employee?.startDate || '',
+              contractType: employee?.contractType || '',
+              annualContractedHours: employee?.annualContractedHours || null,
+              hoursPerWeek: employee?.hoursPerWeek || null,
+              fte: employee?.fte || null,
+              isPartTime: Boolean(proRata.isPartTime),
+              isFullTime: Boolean(proRata.isFullTime),
+              isActiveEmployee: Boolean(employee),
+              proRata,
+              bonus,
+              bonusPaymentAmountGross: bonus.paymentAmount,
+              bonusAccruedPot: bonus.accruedPot,
+              preDeductionPot: settlement.preDeductionPot,
+              bonusPaymentAmount: settlement.preDeductionPot,
               deductions,
               totalAmount,
+              listedDeductionTotal,
               deductionCount: deductions.length,
+              applicableDeductionCount: applicableDeductions.length,
+              finalPayment: settlement.finalPayment,
             };
           })
           .sort((a, b) => String(a.employeeName).localeCompare(String(b.employeeName)));
 
         const grandTotal = rows.reduce((sum, row) => sum + (Number(row.totalAmount) || 0), 0);
+        const bonusPaymentsTotal = rows.reduce((sum, row) => sum + (Number(row.preDeductionPot) || 0), 0);
+        const finalPaymentsTotal = rows.reduce((sum, row) => sum + (Number(row.finalPayment) || 0), 0);
+        const partTimeCount = rows.filter((row) => row.isPartTime).length;
         res.status(200).json({
           amounts: BONUS_DEDUCTION_AMOUNTS,
           grandTotal,
+          bonusPaymentsTotal,
+          finalPaymentsTotal,
+          partTimeCount,
           currency: 'GBP',
+          paymentDate,
+          nextPaymentDate: nextDefault,
+          paymentOptions,
+          bonusConfig: {
+            baseBonus,
+            schedule,
+            fullTimeHoursPerWeek,
+            fullTimeWeeksPerYear,
+            fullTimeAnnualHours,
+          },
           rows,
           ...(employeeUidFilter ? {
             employeeUid: employeeUidFilter,
@@ -3669,27 +3977,39 @@ function createPeopleCasesApi({
           'verbal_warning',
           'written_warning',
           'final_written_warning',
+          'samsara_coaching',
         ]);
 
         const items = snap.docs
           .map((doc) => serializeCase(doc))
           .filter((item) => {
-            if (!item.outcomePreset || !INFORMAL_OUTCOMES.has(item.outcomePreset)) return false;
+            const isSamsara = (item.processFamily || '') === 'samsara_coaching'
+              || item.outcomePreset === 'samsara_coaching';
+            if (!isSamsara && (!item.outcomePreset || !INFORMAL_OUTCOMES.has(item.outcomePreset))) {
+              return false;
+            }
             const closedAt = item.closedAt || item.updatedAt || item.createdAt || '';
             return String(closedAt) >= cutoffIso;
           })
-          .sort((a, b) => String(b.closedAt || b.createdAt || '').localeCompare(String(a.closedAt || a.createdAt || '')))
+          .sort((a, b) => String(b.eventDate || b.closedAt || b.createdAt || '')
+            .localeCompare(String(a.eventDate || a.closedAt || a.createdAt || '')))
           .map((item) => ({
             id: item.id,
             title: item.title || '',
             processFamily: item.processFamily || 'disciplinary',
             caseType: item.caseType || '',
-            outcomePreset: item.outcomePreset,
+            issue: item.issue || '',
+            eventDate: item.eventDate || '',
+            outcomePreset: item.outcomePreset || (
+              (item.processFamily || '') === 'samsara_coaching' ? 'samsara_coaching' : ''
+            ),
             closeNotes: item.closeNotes || '',
             informalActionDetails: item.informalActionDetails || '',
             closedAt: item.closedAt || item.updatedAt || '',
             informalResolutionPath: item.informalResolutionPath || '',
             fileNoteReason: item.fileNoteReason || '',
+            processedOnSamsara: Boolean(item.processedOnSamsara)
+              || (item.processFamily || '') === 'samsara_coaching',
             recordedByName: item.closedByName
               || item.fileNoteIssuedByName
               || item.createdByName

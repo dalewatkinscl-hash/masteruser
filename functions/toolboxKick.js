@@ -216,6 +216,39 @@ function collectToolboxKickRecords(docs = []) {
   };
 }
 
+/** Best individual kicks ever — top N by distance (one row per kick, not per player). */
+function collectToolboxKickAllTimeTop(docs = [], limit = 10) {
+  const entries = [];
+
+  docs.forEach((doc) => {
+    const data = typeof doc.data === 'function' ? (doc.data() || {}) : (doc || {});
+    if ((data.status || '') !== 'won') return;
+    if (data.forfeited) return;
+    if (data.shameScore) return;
+    const distanceM = clampDistance(data.distanceM);
+    const uid = data.uid || doc.id || '';
+    if (!uid) return;
+    const completedAt = data.completedAt?.toDate?.()?.toISOString?.()
+      || data.completedAt
+      || null;
+    entries.push({
+      uid,
+      fullName: data.fullName || 'Colleague',
+      distanceM,
+      dayKey: data.dayKey || '',
+      mode: normalizeMode(data.mode),
+      energyDrinkUsed: Boolean(data.energyDrinkUsed),
+      completedAt,
+    });
+  });
+
+  entries.sort(compareToolboxKickRows);
+  return entries.slice(0, Math.max(1, limit)).map((row, index) => ({
+    rank: index + 1,
+    ...serializeToolboxKickAllTimeRecord(row),
+  }));
+}
+
 function clampDistance(value) {
   const n = Math.floor(Number(value));
   if (!Number.isFinite(n)) return 0;
@@ -283,6 +316,7 @@ module.exports = {
   toolboxKickResultLabel,
   serializeToolboxKickAllTimeRecord,
   collectToolboxKickRecords,
+  collectToolboxKickAllTimeTop,
   markToolboxKickCaughtCheating,
   buildToolboxKickForfeitPayload,
   clampDistance,

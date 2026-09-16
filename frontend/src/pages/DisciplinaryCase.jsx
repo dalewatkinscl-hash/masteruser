@@ -33,8 +33,38 @@ import { ALLOW_DELETE_CASES } from '../utils/featureFlags';
 import { isAmendmentPending } from '../utils/interviewNotes';
 import { buildHearingCalendarOffer, buildReviewCalendarOffer, downloadIcsFromOffer } from '../utils/calendarLinks';
 
-const CASE_TYPES = ['attendance', 'conduct', 'performance', 'policy', 'capability', 'grievance', 'vehicle_accident', 'other'];
+const CASE_TYPES = [
+  'attendance',
+  'conduct',
+  'performance',
+  'policy',
+  'capability',
+  'grievance',
+  'vehicle_accident',
+  'other',
+];
 const DOCUMENT_TYPES = ['evidence', 'letter', 'minutes', 'warning', 'outcome', 'invite', 'suspension_letter', 'training_outline', 'pip_plan', 'other'];
+
+function defaultCaseTypeForFamily(processFamily) {
+  if (processFamily === 'grievance') return 'grievance';
+  if (processFamily === 'vehicle_accident') return 'vehicle_accident';
+  if (processFamily === 'samsara_coaching') return 'samsara_coaching';
+  return 'conduct';
+}
+
+function isSamsaraCreateForm(form = {}) {
+  return form.processFamily === 'samsara_coaching' || form.caseType === 'samsara_coaching';
+}
+
+function formatHistoryDate(value) {
+  if (!value) return '—';
+  const text = String(value).slice(0, 10);
+  const match = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (match) return `${match[3]}/${match[2]}/${match[1]}`;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '—';
+  return date.toLocaleDateString('en-GB');
+}
 
 function readFileAsBase64(file) {
   return new Promise((resolve, reject) => {
@@ -165,13 +195,16 @@ export default function DisciplinaryCase() {
   const [minutes, setMinutes] = useState([]);
   const [reviews, setReviews] = useState([]);
   const [history, setHistory] = useState([]);
+  const [coachingHistory, setCoachingHistory] = useState([]);
+  const [priorHistory, setPriorHistory] = useState([]);
+  const [priorHistoryLoading, setPriorHistoryLoading] = useState(false);
   const [sharePointConfigured, setSharePointConfigured] = useState(false);
   const [sharePointPath, setSharePointPath] = useState('');
   const [sharePointFolderConfirmed, setSharePointFolderConfirmed] = useState(false);
   const [documentTemplates, setDocumentTemplates] = useState([]);
   const [missingDocuments, setMissingDocuments] = useState([]);
-  const [activeMeasures, setActiveMeasures] = useState([]);
-  const [activeMeasuresLoading, setActiveMeasuresLoading] = useState(false);
+  const [titleDraft, setTitleDraft] = useState('');
+  const [editingTitle, setEditingTitle] = useState(false);
   const [outcomeRestriction, setOutcomeRestriction] = useState({
     enabled: false,
     type: '',
@@ -217,9 +250,9 @@ export default function DisciplinaryCase() {
   const [employeesLoading, setEmployeesLoading] = useState(false);
   const [form, setForm] = useState({
     employeeUid: '',
-    ownerManagerUid: '',
+    ownerManagerUid: user?.uid || '',
     processFamily: prefilledFamily,
-    caseType: prefilledFamily === 'grievance' ? 'grievance' : prefilledFamily === 'vehicle_accident' ? 'vehicle_accident' : 'conduct',
+    caseType: defaultCaseTypeForFamily(prefilledFamily),
     issue: '',
     summary: '',
     informalResolutionPath: 'resolve_informally',
@@ -228,9 +261,16 @@ export default function DisciplinaryCase() {
     informalActionDetails: '',
     offPortalRaiseDate: '',
     offPortalRaiseNotes: '',
+    eventDate: new Date().toISOString().slice(0, 10),
   });
-
   const family = caseData?.processFamily || form.processFamily || 'disciplinary';
+  const isSamsaraFamily = family === 'samsara_coaching';
+  const isSamsaraCreate = isNew && isSamsaraCreateForm(form);
+
+  useEffect(() => {
+    if (!isNew || !user?.uid) return;
+    setForm((prev) => (prev.ownerManagerUid ? prev : { ...prev, ownerManagerUid: user.uid }));
+  }, [isNew, user?.uid]);
   const stages = useMemo(
     () => (isNew ? stagesForFamily(family) : stagesForCaseDisplay(family, caseData || {})),
     [isNew, family, caseData],
@@ -360,9 +400,14 @@ export default function DisciplinaryCase() {
   const composedCaseTitle = useMemo(() => {
     const name = selectedEmployeeName.trim() || 'Employee';
     const issue = String(form.issue || '').trim() || '…';
-    const dateLabel = new Date().toLocaleDateString('en-GB');
+    const dateLabel = isSamsaraCreateForm(form) && form.eventDate
+      ? formatHistoryDate(form.eventDate)
+      : new Date().toLocaleDateString('en-GB');
+    if (isSamsaraCreateForm(form)) {
+      return `${name} - ${issue} Samsara Coaching ${dateLabel}`;
+    }
     return `${name} - ${issue} - ${dateLabel}`;
-  }, [selectedEmployeeName, form.issue]);
+  }, [selectedEmployeeName, form.issue, form.processFamily, form.caseType, form.eventDate]);
 
   const todayIso = new Date().toISOString().slice(0, 10);
   const hearingAt = hearingForm.hearingScheduledAt
@@ -381,11 +426,14 @@ export default function DisciplinaryCase() {
     if (!response.ok) throw new Error(data.error || 'Failed to load case.');
     if (!data.case) throw new Error('Case payload missing from server response.');
     setCaseData(data.case);
+    setTitleDraft(data.case.title || '');
+    setEditingTitle(false);
     setEvents(data.events || []);
     setDocuments(data.documents || []);
     setMinutes(data.minutes || []);
     setReviews(data.reviews || []);
     setHistory(data.history || []);
+    setCoachingHistory(data.coachingHistory || []);
     setSharePointConfigured(Boolean(data.sharePointConfigured));
     setSharePointPath(data.sharePointPath || '');
     setSharePointFolderConfirmed(Boolean(data.sharePointFolderConfirmed));
@@ -460,7 +508,41 @@ export default function DisciplinaryCase() {
 
   const handleChange = (e) => {
     const { name, value, type, checked } = e.target;
-    setForm((prev) => ({ ...prev, [name]: type === 'checkbox' ? checked : value }));
+    setForm((prev) => {
+      const next = { ...prev, [name]: type === 'checkbox' ? checked : value };
+      if (name === 'processFamily') {
+        next.caseType = defaultCaseTypeForFamily(value);
+        if (value === 'samsara_coaching') {
+          next.informalResolutionPath = '';
+          if (!next.eventDate) next.eventDate = new Date().toISOString().slice(0, 10);
+        } else if (!next.informalResolutionPath) {
+          next.informalResolutionPath = 'resolve_informally';
+        }
+      }
+      if (name === 'caseType' && value === 'samsara_coaching') {
+        next.processFamily = 'samsara_coaching';
+        next.informalResolutionPath = '';
+        if (!next.eventDate) next.eventDate = new Date().toISOString().slice(0, 10);
+      }
+      return next;
+    });
+  };
+
+  const loadPriorHistory = (employeeUid) => {
+    if (!employeeUid) {
+      setPriorHistory([]);
+      return;
+    }
+    setPriorHistoryLoading(true);
+    fetch(`/api/getEmployeeInformalHistory?employeeUid=${encodeURIComponent(employeeUid)}`, {
+      credentials: 'include',
+    })
+      .then((r) => readJsonResponse(r).then((d) => ({ ok: r.ok, d })))
+      .then(({ ok, d }) => {
+        if (ok) setPriorHistory((d || {}).items || []);
+      })
+      .catch(() => {})
+      .finally(() => setPriorHistoryLoading(false));
   };
 
   const handleEmployeeSelect = (uid, employee) => {
@@ -470,18 +552,30 @@ export default function DisciplinaryCase() {
       ...prev,
       employeeUid: resolvedUid,
     }));
-    setActiveMeasures([]);
-    if (resolvedUid) {
-      setActiveMeasuresLoading(true);
-      fetch(`/api/getActiveDisciplinaryMeasures?employeeUid=${encodeURIComponent(resolvedUid)}`, { credentials: 'include' })
-        .then((r) => readJsonResponse(r).then((d) => ({ ok: r.ok, d })))
-        .then(({ ok, d }) => {
-          if (ok) setActiveMeasures((d || {}).items || (d || {}).rows?.[0]?.measures || []);
-        })
-        .catch(() => {})
-        .finally(() => setActiveMeasuresLoading(false));
+    if (!resolvedUid) {
+      setActiveMeasures([]);
+      setPriorHistory([]);
     }
   };
+
+  useEffect(() => {
+    if (!isNew || !form.employeeUid) {
+      if (isNew) {
+        setActiveMeasures([]);
+        setPriorHistory([]);
+      }
+      return;
+    }
+    loadPriorHistory(form.employeeUid);
+    setActiveMeasuresLoading(true);
+    fetch(`/api/getActiveDisciplinaryMeasures?employeeUid=${encodeURIComponent(form.employeeUid)}`, { credentials: 'include' })
+      .then((r) => readJsonResponse(r).then((d) => ({ ok: r.ok, d })))
+      .then(({ ok, d }) => {
+        if (ok) setActiveMeasures((d || {}).items || (d || {}).rows?.[0]?.measures || []);
+      })
+      .catch(() => {})
+      .finally(() => setActiveMeasuresLoading(false));
+  }, [isNew, form.employeeUid]);
 
   const emptyRestriction = {
     enabled: false,
@@ -681,36 +775,67 @@ export default function DisciplinaryCase() {
     }
   };
 
+  const saveTitle = async () => {
+    const nextTitle = String(titleDraft || '').trim();
+    if (!nextTitle) {
+      setError('Title cannot be empty.');
+      return;
+    }
+    if (nextTitle === (caseData?.title || '')) {
+      setEditingTitle(false);
+      return;
+    }
+    const result = await apiUpdate({ title: nextTitle });
+    if (result?.ok !== false) {
+      setEditingTitle(false);
+      setMessage('Title updated.');
+    }
+  };
+
   const handleCreate = async () => {
     if (!form.employeeUid) {
       setError('Select the employee this case is about, then open the case.');
       return;
     }
-    if (!String(form.issue || '').trim()) {
-      setError('Enter the issue before opening the case.');
+    const isSamsara = isSamsaraCreateForm(form);
+    const issue = String(form.issue || '').trim();
+    if (!issue) {
+      setError(isSamsara ? 'Enter the issue before logging coaching.' : 'Enter the issue before opening the case.');
       return;
     }
-    if ((form.processFamily === 'disciplinary' || form.processFamily === 'grievance') && !form.informalResolutionPath) {
+    if (!isSamsara && (form.processFamily === 'disciplinary' || form.processFamily === 'grievance') && !form.informalResolutionPath) {
       setError('Choose how you are starting the case before opening it.');
       return;
     }
     setSaving(true);
     setError('');
     try {
+      const eventDate = isSamsara
+        ? (form.eventDate || new Date().toISOString().slice(0, 10))
+        : '';
       const response = await fetch('/api/createPeopleCase', {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...form,
-          issue: String(form.issue || '').trim(),
+          issue,
+          caseType: isSamsara ? 'samsara_coaching' : form.caseType,
           title: composedCaseTitle,
           informalTried: form.informalResolutionPath === 'proceed_formal',
+          eventDate,
         }),
       });
       const data = (await readJsonResponse(response)) || {};
       if (!response.ok) throw new Error(data.error || 'Failed to create case.');
-      navigate(`/dashboard/hr/cases/${data.id}`);
+      if (isSamsara) {
+        navigate('/dashboard/hr/cases', {
+          replace: true,
+          state: { message: data.message || 'Samsara coaching logged.' },
+        });
+      } else {
+        navigate(`/dashboard/hr/cases/${data.id}`);
+      }
     } catch (err) {
       setError(err.message || 'Failed to create case.');
     } finally {
@@ -993,6 +1118,12 @@ export default function DisciplinaryCase() {
     return `${title} — ${outcome} — expires ${expires}`;
   };
 
+  const formatCoachingHistoryItem = (item) => {
+    const eventType = item.issue || item.title || 'Samsara coaching';
+    const dateLabel = formatHistoryDate(item.eventDate || item.closedAt);
+    return `Samsara coaching — ${eventType} — ${dateLabel}`;
+  };
+
   const openActiveWarningCase = (item) => {
     if (!item?.id) return;
     window.open(`/dashboard/hr/cases/${item.id}`, '_blank', 'noopener,noreferrer');
@@ -1199,7 +1330,7 @@ export default function DisciplinaryCase() {
       <div>
         <p className="text-sm font-semibold text-white">Unexpired disciplinary history</p>
         <p className="text-xs text-slate-400 mt-1">
-          Review live warnings on this employee before the initial interview.
+          Review live warnings and recent Samsara coaching on this employee before the initial interview.
         </p>
       </div>
       {history.length === 0 ? (
@@ -1219,6 +1350,25 @@ export default function DisciplinaryCase() {
             </li>
           ))}
         </ul>
+      )}
+      {coachingHistory.length > 0 && (
+        <div className="space-y-2 pt-2 border-t border-[#1a2540]">
+          <p className="text-xs uppercase tracking-wide text-slate-500">Recent Samsara coaching (12 months)</p>
+          <ul className="space-y-2">
+            {coachingHistory.map((item) => (
+              <li key={item.id}>
+                <button
+                  type="button"
+                  className="w-full text-left text-sm text-slate-300 border border-[#1a2540] rounded-lg px-3 py-2 hover:border-indigo-500/40 hover:bg-indigo-500/10 hover:text-indigo-100"
+                  onClick={() => openActiveWarningCase(item)}
+                >
+                  {formatCoachingHistoryItem(item)}
+                  <span className="block text-[11px] text-indigo-300 mt-1">Open entry ↗</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
       )}
       <button
         type="button"
@@ -2565,6 +2715,40 @@ export default function DisciplinaryCase() {
   };
 
   const renderCurrentStep = () => {
+    if (family === 'samsara_coaching') {
+      return (
+        <StepCard title="Samsara coaching — logged">
+          <div className="space-y-3 text-sm text-slate-300">
+            <p>
+              This entry records that coaching was processed on the Samsara system.
+              No portal interview or hearing is required.
+            </p>
+            <dl className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <dt className="text-xs uppercase tracking-wide text-slate-500">Driver</dt>
+                <dd className="mt-1 text-white">{caseData?.employeeNameSnapshot || '—'}</dd>
+              </div>
+              <div>
+                <dt className="text-xs uppercase tracking-wide text-slate-500">Event date</dt>
+                <dd className="mt-1 text-white">{formatHistoryDate(caseData?.eventDate || caseData?.closedAt)}</dd>
+              </div>
+              <div>
+                <dt className="text-xs uppercase tracking-wide text-slate-500">Event type</dt>
+                <dd className="mt-1 text-white">{caseData?.issue || '—'}</dd>
+              </div>
+              <div>
+                <dt className="text-xs uppercase tracking-wide text-slate-500">Logged by</dt>
+                <dd className="mt-1 text-white">{caseData?.closedByName || caseData?.createdByName || '—'}</dd>
+              </div>
+            </dl>
+            {caseData?.closeNotes && (
+              <p className="text-slate-400">{caseData.closeNotes}</p>
+            )}
+          </div>
+        </StepCard>
+      );
+    }
+
     const step = viewingPastStage ? (
       <StepCard title={`Viewing — ${stageLabel(displayStage)}`}>
         <p className="text-sm text-slate-400">
@@ -2662,10 +2846,47 @@ export default function DisciplinaryCase() {
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center justify-between px-8 py-5 border-b border-[#1a2540] gap-3 flex-wrap">
-        <div>
-          <h1 className="text-xl font-bold text-white">
-            {isNew ? 'New people case' : (caseData?.title || 'Case')}
-          </h1>
+        <div className="min-w-0 flex-1">
+          {isNew ? (
+            <h1 className="text-xl font-bold text-white">New people case</h1>
+          ) : editingTitle ? (
+            <div className="flex flex-wrap items-center gap-2 max-w-3xl">
+              <input
+                value={titleDraft}
+                onChange={(e) => setTitleDraft(e.target.value)}
+                className={`${inputClass} flex-1 min-w-[16rem]`}
+                aria-label="Case title"
+              />
+              <button type="button" className={btnPrimary} disabled={saving} onClick={saveTitle}>
+                Save title
+              </button>
+              <button
+                type="button"
+                className={btnSecondary}
+                disabled={saving}
+                onClick={() => {
+                  setTitleDraft(caseData?.title || '');
+                  setEditingTitle(false);
+                }}
+              >
+                Cancel
+              </button>
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center gap-3">
+              <h1 className="text-xl font-bold text-white">{caseData?.title || 'Case'}</h1>
+              <button
+                type="button"
+                className="text-sm text-indigo-300 hover:text-indigo-200"
+                onClick={() => {
+                  setTitleDraft(caseData?.title || '');
+                  setEditingTitle(true);
+                }}
+              >
+                Edit title
+              </button>
+            </div>
+          )}
           {!isNew && (
             <div className="mt-1 space-y-1">
               <p className="text-sm text-slate-400">
@@ -2745,9 +2966,15 @@ export default function DisciplinaryCase() {
         {isNew ? (
           <div className="bg-[#0b1220] border border-[#1a2540] rounded-xl p-5 space-y-4 max-w-3xl overflow-visible">
             <div>
-              <p className="text-sm font-medium text-white">Step 0 — Open the case</p>
+              <p className="text-sm font-medium text-white">
+                {isSamsaraCreate
+                  ? 'Log Samsara coaching'
+                  : 'Step 0 — Open the case'}
+              </p>
               <p className="text-sm text-slate-400 mt-1">
-                Record the concern and open the case. You can hold interviews, upload notes, and decide later whether it resolves informally or goes formal.
+                {isSamsaraCreate
+                  ? 'Record that coaching was processed on Samsara. No portal interview is required.'
+                  : 'Record the concern and open the case. You can hold interviews, upload notes, and decide later whether it resolves informally or goes formal.'}
               </p>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -2758,11 +2985,13 @@ export default function DisciplinaryCase() {
                   ))}
                 </select>
               </Field>
-              <Field label="Case type">
-                <select name="caseType" value={form.caseType} onChange={handleChange} className={inputClass}>
-                  {CASE_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
-                </select>
-              </Field>
+              {!isSamsaraCreate && (
+                <Field label="Case type">
+                  <select name="caseType" value={form.caseType} onChange={handleChange} className={inputClass}>
+                    {CASE_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
+                  </select>
+                </Field>
+              )}
               <Field label="Employee">
                 <EmployeeSelect
                   value={form.employeeUid}
@@ -2784,13 +3013,16 @@ export default function DisciplinaryCase() {
                 />
               </Field>
             </div>
+
             <Field label="Issue">
               <input
                 name="issue"
                 value={form.issue}
                 onChange={handleChange}
                 className={inputClass}
-                placeholder="Short description of the issue"
+                placeholder={isSamsaraCreate
+                  ? 'Short description of the coaching event'
+                  : 'Short description of the issue'}
                 autoComplete="off"
               />
             </Field>
@@ -2802,14 +3034,86 @@ export default function DisciplinaryCase() {
                 aria-label="Case title is generated automatically"
               />
               <span className="block text-xs text-slate-500 mt-1">
-                Built as Employee name — Issue — Date
+                {isSamsaraCreate
+                  ? 'Built as Name — Issue Samsara Coaching Date'
+                  : 'Built as Employee name — Issue — Date'}
               </span>
             </Field>
-            <Field label="Summary">
-              <textarea name="summary" value={form.summary} onChange={handleChange} rows={4} className={inputClass} />
-            </Field>
+            {!isSamsaraCreate && (
+              <Field label="Summary">
+                <textarea name="summary" value={form.summary} onChange={handleChange} rows={4} className={inputClass} />
+              </Field>
+            )}
 
-            {(form.processFamily === 'disciplinary' || form.processFamily === 'grievance') && (
+            {form.employeeUid && (
+              <div className="rounded-lg border border-[#1a2540] bg-[#060e1a]/60 p-3 space-y-3">
+                <p className="text-xs uppercase tracking-wide text-slate-500">
+                  Recent history for this employee
+                </p>
+                {priorHistoryLoading && (
+                  <p className="text-xs text-slate-400">Loading…</p>
+                )}
+                {!priorHistoryLoading && priorHistory.length === 0 && activeMeasures.length === 0 && (
+                  <p className="text-xs text-slate-400">No recent coaching, informal outcomes, or active measures.</p>
+                )}
+                {!priorHistoryLoading && priorHistory.length > 0 && (
+                  <ul className="space-y-2">
+                    {priorHistory.slice(0, 8).map((item) => {
+                      const isSamsara = item.processFamily === 'samsara_coaching'
+                        || item.outcomePreset === 'samsara_coaching';
+                      const dateStr = formatHistoryDate(item.eventDate || item.closedAt);
+                      return (
+                        <li key={item.id}>
+                          <a
+                            href={`/dashboard/hr/cases/${item.id}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="block text-xs border-l-2 border-sky-500/30 pl-2.5 space-y-0.5 hover:border-sky-400/70 hover:bg-sky-500/5 rounded-r-md pr-1 py-0.5 transition-colors"
+                          >
+                            <p className="text-sky-100 font-medium">
+                              {isSamsara
+                                ? `Samsara coaching — ${item.issue || item.title || 'event'}`
+                                : (item.title || stageLabel(item.outcomePreset || 'outcome'))}
+                              <span className="text-slate-400 font-normal"> · {dateStr}</span>
+                              <span className="text-slate-600 ml-1">↗</span>
+                            </p>
+                          </a>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+                {!priorHistoryLoading && activeMeasures.length > 0 && !isSamsaraCreate && (
+                  <div className="space-y-2 pt-1 border-t border-[#1a2540]">
+                    <p className="text-xs text-amber-200/80">Active measures</p>
+                    <ul className="space-y-2">
+                      {activeMeasures.map((item) => {
+                        const dateStr = item.givenAt
+                          ? String(item.givenAt).slice(0, 10).split('-').reverse().join('/')
+                          : '—';
+                        return (
+                          <li key={`${item.caseId}-${item.outcomePreset}-${item.reason}`}>
+                            <a
+                              href={`/dashboard/hr/cases/${item.caseId}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="block text-xs border-l-2 border-amber-500/30 pl-2.5 hover:border-amber-400/70 hover:bg-amber-500/5 rounded-r-md pr-1 py-0.5"
+                            >
+                              <span className="text-amber-200 font-medium">
+                                {item.measureType || item.outcomePreset}
+                              </span>
+                              <span className="text-slate-400"> · given {dateStr}</span>
+                            </a>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {!isSamsaraCreate && (form.processFamily === 'disciplinary' || form.processFamily === 'grievance') && (
               <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-4 space-y-4">
                 <div>
                   <p className="text-sm font-medium text-amber-100">How are you starting?</p>
@@ -2822,52 +3126,6 @@ export default function DisciplinaryCase() {
                   <p className="text-xs text-amber-300">
                     Select an employee above to see their current active measures before choosing how to start.
                   </p>
-                )}
-
-                {form.employeeUid && (
-                  <div className="rounded-lg border border-[#1a2540] bg-[#060e1a]/60 p-3 space-y-2">
-                    <p className="text-xs uppercase tracking-wide text-slate-500">
-                      Current active measures
-                    </p>
-                    {activeMeasuresLoading && (
-                      <p className="text-xs text-slate-400">Loading…</p>
-                    )}
-                    {!activeMeasuresLoading && activeMeasures.length === 0 && (
-                      <p className="text-xs text-slate-400">No active disciplinary measures.</p>
-                    )}
-                    {!activeMeasuresLoading && activeMeasures.length > 0 && (
-                      <ul className="space-y-2">
-                        {activeMeasures.map((item) => {
-                          const dateStr = item.givenAt
-                            ? String(item.givenAt).slice(0, 10).split('-').reverse().join('/')
-                            : '—';
-                          const expiresStr = item.expiresAt
-                            ? String(item.expiresAt).slice(0, 10).split('-').reverse().join('/')
-                            : '—';
-                          return (
-                            <li key={`${item.caseId}-${item.outcomePreset}-${item.reason}`}>
-                              <a
-                                href={`/dashboard/hr/cases/${item.caseId}`}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="block text-xs border-l-2 border-amber-500/30 pl-2.5 space-y-0.5 hover:border-amber-400/70 hover:bg-amber-500/5 rounded-r-md pr-1 py-0.5 transition-colors"
-                              >
-                                <p className="text-amber-200 font-medium">
-                                  {item.measureType || item.outcomePreset}
-                                  <span className="text-slate-400 font-normal"> · given {dateStr}</span>
-                                  <span className="text-slate-500 font-normal"> · expires {expiresStr}</span>
-                                  <span className="text-slate-600 ml-1">↗</span>
-                                </p>
-                                {item.reason && item.reason !== item.measureType && (
-                                  <p className="text-slate-500 line-clamp-2">{item.reason}</p>
-                                )}
-                              </a>
-                            </li>
-                          );
-                        })}
-                      </ul>
-                    )}
-                  </div>
                 )}
 
                 <div className="space-y-3">
@@ -2909,7 +3167,7 @@ export default function DisciplinaryCase() {
               </div>
             )}
 
-            {form.processFamily === 'grievance' && (
+            {!isSamsaraCreate && form.processFamily === 'grievance' && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <Field label="Off-portal raise date">
                   <input type="date" name="offPortalRaiseDate" value={form.offPortalRaiseDate} onChange={handleChange} className={inputClass} />
@@ -2927,11 +3185,15 @@ export default function DisciplinaryCase() {
                 saving
                 || !form.employeeUid
                 || !String(form.issue || '').trim()
-                || ((form.processFamily === 'disciplinary' || form.processFamily === 'grievance') && !form.informalResolutionPath)
+                || (!isSamsaraCreate && (form.processFamily === 'disciplinary' || form.processFamily === 'grievance') && !form.informalResolutionPath)
               }
               className={btnPrimary}
             >
-              {saving ? 'Saving…' : 'Open case — start fact-finding'}
+              {saving
+                ? 'Saving…'
+                : isSamsaraCreate
+                  ? 'Log coaching'
+                  : 'Open case — start fact-finding'}
             </button>
             {!form.employeeUid && (
               <p className="text-xs text-amber-300">
@@ -2940,7 +3202,9 @@ export default function DisciplinaryCase() {
             )}
             {form.employeeUid && !String(form.issue || '').trim() && (
               <p className="text-xs text-amber-300">
-                Enter the issue — the case title is built from the employee name, issue, and today’s date.
+                {isSamsaraCreate
+                  ? 'Enter the issue — the title is built as Name — Issue Samsara Coaching Date.'
+                  : 'Enter the issue — the case title is built from the employee name, issue, and today’s date.'}
               </p>
             )}
           </div>
@@ -2976,10 +3240,27 @@ export default function DisciplinaryCase() {
                       {uploadedDocumentsList}
                     </div>
                     <div>
-                      <h4 className="text-white font-medium mb-3">Case type</h4>
+                      <h4 className="text-white font-medium mb-3">Case details</h4>
                       <p className="text-xs text-slate-500 mb-3">
-                        Change if this case was opened under the wrong process. The current step is remapped to the equivalent stage.
+                        Edit the title, or change the process family if this case was opened under the wrong type (for example disciplinary → grievance).
                       </p>
+                      <Field label="Title">
+                        <div className="flex flex-wrap gap-2">
+                          <input
+                            value={titleDraft}
+                            onChange={(e) => setTitleDraft(e.target.value)}
+                            className={`${inputClass} flex-1 min-w-[12rem]`}
+                          />
+                          <button
+                            type="button"
+                            className={btnSecondary}
+                            disabled={saving || !String(titleDraft || '').trim() || titleDraft === (caseData?.title || '')}
+                            onClick={saveTitle}
+                          >
+                            Save title
+                          </button>
+                        </div>
+                      </Field>
                       <Field label="Process family">
                         <select
                           className={inputClass}

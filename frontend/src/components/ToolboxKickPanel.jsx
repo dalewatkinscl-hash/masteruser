@@ -3345,6 +3345,7 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
   const [game, setGame] = useState(null);
   const [leaderboard, setLeaderboard] = useState([]);
   const [allTimeRecord, setAllTimeRecord] = useState(null);
+  const [allTimeTop10, setAllTimeTop10] = useState([]);
   const [superRage, setSuperRage] = useState(null);
   const [mode, setMode] = useState(null);
   const [introOpen, setIntroOpen] = useState(() => !hasSeenIntro());
@@ -3362,6 +3363,7 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
       setGame(null);
       setLeaderboard([]);
       setAllTimeRecord(null);
+      setAllTimeTop10([]);
       setSuperRage(null);
       setMode(null);
       roundLockedRef.current = false;
@@ -3372,6 +3374,7 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
     setGame(payload.game || null);
     setLeaderboard(payload.leaderboard || []);
     setAllTimeRecord(payload.allTimeRecord || null);
+    setAllTimeTop10(Array.isArray(payload.allTimeTop10) ? payload.allTimeTop10 : []);
     setSuperRage(payload.superRage || null);
     if (payload.game?.status === 'won' && payload.game?.roundComplete !== false) {
       setMode(payload.game.mode || 'careful');
@@ -3430,6 +3433,9 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
       if (!response.ok) throw new Error(payload.error || 'Failed to lock today’s round.');
       if (Array.isArray(payload.leaderboard)) setLeaderboard(payload.leaderboard);
       if (payload.allTimeRecord !== undefined) setAllTimeRecord(payload.allTimeRecord || null);
+      if (payload.allTimeTop10 !== undefined) {
+        setAllTimeTop10(Array.isArray(payload.allTimeTop10) ? payload.allTimeTop10 : []);
+      }
       if (payload.game) setGame(payload.game);
 
       if (payload.alreadySubmitted || (payload.game?.status === 'won' && payload.game?.roundComplete !== false)) {
@@ -3479,6 +3485,9 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
       }
       if (Array.isArray(payload.leaderboard)) setLeaderboard(payload.leaderboard);
       if (payload.allTimeRecord !== undefined) setAllTimeRecord(payload.allTimeRecord || null);
+      if (payload.allTimeTop10 !== undefined) {
+        setAllTimeTop10(Array.isArray(payload.allTimeTop10) ? payload.allTimeTop10 : []);
+      }
       if (payload.superRage) setSuperRage(payload.superRage);
       if (finalize && Array.isArray(payload.achievements) && onAchievements) {
         onAchievements(payload.achievements);
@@ -3621,6 +3630,35 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
             {allTimeRecord.uid === currentUserUid ? ' (you)' : ''}
             {allTimeRecord.dayKey ? ` · ${allTimeRecord.dayKey}` : ''}
           </p>
+        </div>
+      ) : null}
+
+      {!practice && alreadyDone && allTimeTop10.length ? (
+        <div className="rounded-xl border border-[#1a2540] overflow-hidden">
+          <div className="px-4 py-3 border-b border-[#1a2540]">
+            <h4 className="text-sm font-semibold text-amber-200">
+              Wall of fame · top 10 all-time kicks
+            </h4>
+          </div>
+          <ol className="divide-y divide-[#1a2540] px-4 py-2">
+            {allTimeTop10.map((row) => (
+              <FunLeaderboardRow
+                key={`${row.uid}-${row.dayKey}-${row.rank}`}
+                row={{
+                  ...row,
+                  rank: row.rank,
+                  medal: row.rank === 1 ? 'gold' : row.rank === 2 ? 'silver' : row.rank === 3 ? 'bronze' : null,
+                }}
+                currentUserUid={currentUserUid}
+                resultText={row.resultLabel || formatDistance(row.distanceM)}
+                metaText={[
+                  row.dayKey || null,
+                  row.mode === 'allOrNothing' ? 'All or nothing' : '3 goes',
+                  row.energyDrinkUsed ? '⚡ energy drink' : null,
+                ].filter(Boolean).join(' · ')}
+              />
+            ))}
+          </ol>
         </div>
       ) : null}
 

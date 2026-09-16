@@ -55,7 +55,7 @@ export default function EmployeeDisciplinaryPanel({ employeeUid, employeeName, e
         <div className="px-5 py-4 border-b border-[#1a2540] flex items-center justify-between gap-4 flex-wrap">
           <div>
             <h3 className="text-sm font-semibold text-white">People cases</h3>
-            <p className="text-sm text-slate-400 mt-1">Disciplinary, grievance, and accident cases for this employee</p>
+            <p className="text-sm text-slate-400 mt-1">Disciplinary, grievance, accident, and Samsara coaching for this employee</p>
           </div>
           <button
             type="button"

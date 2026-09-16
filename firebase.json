@@ -327,6 +327,11 @@
         "region": "europe-west2"
       },
       {
+        "source": "/api/startTriviaRound",
+        "function": "startTriviaRound",
+        "region": "europe-west2"
+      },
+      {
         "source": "/api/getSuggestions",
         "function": "getSuggestions",
         "region": "europe-west2"

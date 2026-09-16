@@ -383,7 +383,7 @@ function questionById(questionId) {
 /**
  * Pick a bank question that has not been used before (trivia_spent/{id}).
  * Locks the choice on trivia_day_locks/{dayKey} so the day stays stable.
- * When every bank question is spent, the cycle resets and reuse is allowed again.
+ * When every bank question is spent, the spent set is cleared and a new cycle starts.
  */
 async function resolveBankQuestion(db, dayKey, FieldValue) {
   const lockRef = db.collection('trivia_day_locks').doc(dayKey);
@@ -403,10 +403,20 @@ async function resolveBankQuestion(db, dayKey, FieldValue) {
     }
   }
 
-  const spentSnap = await db.collection('trivia_spent').limit(200).get();
-  const spent = new Set(spentSnap.docs.map((doc) => doc.id));
+  const spentSnap = await db.collection('trivia_spent').limit(Math.max(QUESTIONS.length + 20, 200)).get();
+  const spentDocs = spentSnap.docs;
+  const spent = new Set(spentDocs.map((doc) => doc.id));
   const recycle = spent.size >= QUESTIONS.length;
-  if (recycle) spent.clear();
+
+  // Actually clear spent docs when the bank is exhausted, otherwise every later day
+  // keeps recycling and only walks the same 50 questions by calendar ordinal.
+  if (recycle) {
+    const wipe = db.batch();
+    spentDocs.forEach((doc) => wipe.delete(doc.ref));
+    // Firestore batches max 500; bank is ~50 so one batch is fine.
+    await wipe.commit();
+    spent.clear();
+  }
 
   const start = ((dayOrdinal(dayKey) % QUESTIONS.length) + QUESTIONS.length) % QUESTIONS.length;
   let chosen = null;
@@ -451,6 +461,27 @@ function publicQuestion(question) {
   };
 }
 
+/** Hide prompt/options until the player starts the timer. */
+function hiddenQuestion(question) {
+  return {
+    dayKey: question.dayKey,
+    questionId: question.questionId,
+    prompt: null,
+    options: null,
+  };
+}
+
+/** Format milliseconds for trivia leaderboard (e.g. 4.2s, 1:05). */
+function formatTriviaElapsed(elapsedMs) {
+  const ms = Math.max(0, Math.floor(Number(elapsedMs) || 0));
+  if (ms < 1000) return `${(ms / 1000).toFixed(2)}s`;
+  const totalSec = ms / 1000;
+  if (totalSec < 60) return `${totalSec.toFixed(1)}s`;
+  const min = Math.floor(totalSec / 60);
+  const sec = Math.round(totalSec % 60);
+  return `${min}:${String(sec).padStart(2, '0')}`;
+}
+
 module.exports = {
   QUESTIONS,
   getLondonDayKey,
@@ -458,4 +489,6 @@ module.exports = {
   resolveBankQuestion,
   questionById,
   publicQuestion,
+  hiddenQuestion,
+  formatTriviaElapsed,
 };

@@ -2,7 +2,7 @@ const { wrapWithLetterhead } = require('./letterTemplate');
 const { formatSignatureBlock } = require('./fileNoteForImprovement');
 
 /**
- * People Cases — disciplinary, grievance, and vehicle-accident workflows.
+ * People Cases — disciplinary, grievance, vehicle-accident, and Samsara coaching workflows.
  * Guide/ACAS copy is data-driven so HR can update without code changes later.
  */
 
@@ -10,7 +10,12 @@ const CASES_PORTAL = 'cases_app';
 const ACAS_CODE_URL =
   'https://www.acas.org.uk/acas-code-of-practice-on-disciplinary-and-grievance-procedures/html';
 
-const PROCESS_FAMILIES = new Set(['disciplinary', 'grievance', 'vehicle_accident']);
+const PROCESS_FAMILIES = new Set([
+  'disciplinary',
+  'grievance',
+  'vehicle_accident',
+  'samsara_coaching',
+]);
 
 const DISCIPLINARY_STAGES = [
   'fact_finding',
@@ -37,6 +42,11 @@ const ACCIDENT_STAGES = [
   'closed',
 ];
 
+/** Logged coaching only — managed on Samsara; portal records that it was processed. */
+const SAMSARA_STAGES = [
+  'closed',
+];
+
 function toTrimmedString(value) {
   if (value === undefined || value === null) return '';
   return String(value).trim();
@@ -53,6 +63,9 @@ function normalizeStage(processFamily, stage) {
     if (raw === 'reported' || raw === 'minutes_signoff') return raw === 'minutes_signoff' ? 'investigation' : 'triage';
     return ACCIDENT_STAGES.includes(raw) ? raw : 'triage';
   }
+  if (processFamily === 'samsara_coaching') {
+    return 'closed';
+  }
   // disciplinary
   if (raw === 'intake' || raw === 'investigation' || raw === 'minutes_signoff') return 'fact_finding';
   return DISCIPLINARY_STAGES.includes(raw) ? raw : 'fact_finding';
@@ -64,6 +77,7 @@ function mapStageForFamilyChange(fromFamily, toFamily, currentStage) {
   const to = toTrimmedString(toFamily) || 'disciplinary';
   const stage = normalizeStage(from, currentStage);
   if (from === to) return stage;
+  if (to === 'samsara_coaching') return 'closed';
   if (['outcome_pack', 'closed', 'appeal'].includes(stage) && stagesForFamily(to).includes(stage)) {
     return stage;
   }
@@ -92,6 +106,7 @@ const CASE_TYPES = new Set([
   'capability',
   'grievance',
   'vehicle_accident',
+  'samsara_coaching',
   'other',
 ]);
 
@@ -99,6 +114,7 @@ const OUTCOME_PRESETS = [
   { id: 'informal_action', label: 'Informal action (recorded)', warning: false },
   { id: 'file_note_for_improvement', label: 'File note for improvement', warning: false },
   { id: 'no_further_action', label: 'No further action', warning: false },
+  { id: 'samsara_coaching', label: 'Samsara coaching (logged)', warning: false },
   { id: 'verbal_warning', label: 'Verbal warning', warning: true, suggestedExpiryMonths: 6 },
   { id: 'written_warning', label: 'Written warning', warning: true, suggestedExpiryMonths: 6 },
   { id: 'final_written_warning', label: 'Final written warning', warning: true, suggestedExpiryMonths: 12 },
@@ -325,6 +341,18 @@ const STAGE_GUIDES = {
       checklist: [],
     },
   },
+  samsara_coaching: {
+    closed: {
+      title: 'Logged — Samsara coaching',
+      howTo: [
+        'Coaching is completed on the Samsara system.',
+        'This portal entry records that the coaching was processed (date, driver, event type).',
+      ],
+      doNext: 'No further portal steps — entry is closed.',
+      acasTip: null,
+      checklist: ['processed_on_samsara'],
+    },
+  },
 };
 
 /** People Cases hub access requires an explicit cases_app role (or master admin). Headcount/HR does not grant it. */
@@ -348,7 +376,15 @@ function canHrOverseeCases(profile, getEffectivePortalRole) {
 function stagesForFamily(processFamily) {
   if (processFamily === 'grievance') return GRIEVANCE_STAGES;
   if (processFamily === 'vehicle_accident') return ACCIDENT_STAGES;
+  if (processFamily === 'samsara_coaching') return SAMSARA_STAGES;
   return DISCIPLINARY_STAGES;
+}
+
+function defaultCaseTypeForFamily(processFamily) {
+  if (processFamily === 'grievance') return 'grievance';
+  if (processFamily === 'vehicle_accident') return 'vehicle_accident';
+  if (processFamily === 'samsara_coaching') return 'samsara_coaching';
+  return 'other';
 }
 
 function guideFor(processFamily, stage) {
@@ -369,20 +405,23 @@ function guideFor(processFamily, stage) {
 }
 
 function sanitizeCaseCreateInput(input = {}) {
-  const processFamily = toTrimmedString(input.processFamily).toLowerCase() || 'disciplinary';
+  const processFamilyRaw = toTrimmedString(input.processFamily).toLowerCase() || 'disciplinary';
+  const processFamily = PROCESS_FAMILIES.has(processFamilyRaw) ? processFamilyRaw : 'disciplinary';
   const caseType = toTrimmedString(input.caseType).toLowerCase();
   const stages = stagesForFamily(processFamily);
-  const initialStage = toTrimmedString(input.stage).toLowerCase() || stages[0];
+  const defaultStage = processFamily === 'samsara_coaching' ? 'closed' : stages[0];
+  const initialStage = toTrimmedString(input.stage).toLowerCase() || defaultStage;
+  const eventDate = toTrimmedString(input.eventDate).slice(0, 10);
   return {
     employeeUid: toTrimmedString(input.employeeUid),
-    processFamily: PROCESS_FAMILIES.has(processFamily) ? processFamily : 'disciplinary',
-    caseType: CASE_TYPES.has(caseType) ? caseType : (processFamily === 'grievance' ? 'grievance' : processFamily === 'vehicle_accident' ? 'vehicle_accident' : 'other'),
+    processFamily,
+    caseType: CASE_TYPES.has(caseType) ? caseType : defaultCaseTypeForFamily(processFamily),
     issue: toTrimmedString(input.issue),
     title: toTrimmedString(input.title),
     summary: toTrimmedString(input.summary),
     severity: toTrimmedString(input.severity).toLowerCase() || '',
     ownerManagerUid: toTrimmedString(input.ownerManagerUid || input.managerUid),
-    stage: stages.includes(initialStage) ? initialStage : stages[0],
+    stage: stages.includes(initialStage) ? initialStage : defaultStage,
     dueAt: toTrimmedString(input.dueAt),
     informalTried: Boolean(input.informalTried),
     informalNotes: toTrimmedString(input.informalNotes),
@@ -394,6 +433,7 @@ function sanitizeCaseCreateInput(input = {}) {
     offPortalRaiseDate: toTrimmedString(input.offPortalRaiseDate),
     offPortalRaiseNotes: toTrimmedString(input.offPortalRaiseNotes),
     sourceIncidentId: toTrimmedString(input.sourceIncidentId),
+    eventDate: /^\d{4}-\d{2}-\d{2}$/.test(eventDate) ? eventDate : '',
   };
 }
 
@@ -797,6 +837,7 @@ module.exports = {
   DISCIPLINARY_STAGES,
   GRIEVANCE_STAGES,
   ACCIDENT_STAGES,
+  SAMSARA_STAGES,
   CASE_TYPES,
   OUTCOME_PRESETS,
   RESTRICTION_OPTIONS,
