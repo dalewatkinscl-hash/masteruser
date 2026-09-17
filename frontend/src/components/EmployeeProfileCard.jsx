@@ -15,6 +15,7 @@ import {
   resolveBusinessContactEmail,
 } from '../utils/employeeProfile';
 import { SHOW_HR_RECORDS } from '../utils/featureFlags';
+import { useLanguage } from '../context/LanguageContext';
 
 const THEME_KEYS = new Set(PORTAL_THEME_OPTIONS.map((t) => t.key));
 const THEME_LABELS = Object.fromEntries(PORTAL_THEME_OPTIONS.map((t) => [t.key, t.label]));
@@ -71,9 +72,11 @@ function inputClassName(disabled) {
   return `input input-bordered input-sm w-full ${disabled ? 'input-disabled opacity-70 cursor-not-allowed' : ''}`;
 }
 
-function PhoneCallButton({ phone, label = 'Call' }) {
+function PhoneCallButton({ phone, label }) {
+  const { t } = useLanguage();
   const href = phoneHref(phone);
   if (!href) return null;
+  const text = label || t('card.call');
 
   return (
     <a
@@ -81,7 +84,7 @@ function PhoneCallButton({ phone, label = 'Call' }) {
       className="btn btn-success btn-outline btn-xs gap-1.5"
     >
       <PhoneIcon className="w-3.5 h-3.5" />
-      {label}
+      {text}
     </a>
   );
 }
@@ -97,6 +100,7 @@ function ProfileSummary({
   isDriver = false,
   kudosToday = [],
 }) {
+  const { t } = useLanguage();
   const displayPhone = editable.phoneNumber ? form.phoneNumber : employee.phoneNumber;
   const displayPersonalEmail = editable.personalEmail ? form.personalEmail : employee.personalEmail;
   const displayDob = editable.hr ? form.dateOfBirth : employee.dateOfBirth;
@@ -120,8 +124,8 @@ function ProfileSummary({
                   className={`${inputClassName(false)} text-2xl font-semibold tracking-tight text-cl-fg max-w-md`}
                   value={fullName}
                   onChange={(e) => onFullNameChange?.(e.target.value)}
-                  placeholder="Employee name"
-                  aria-label="Employee name"
+                  placeholder={t('card.employeeName')}
+                  aria-label={t('card.employeeName')}
                 />
               ) : (
                 <h2 className="text-2xl font-semibold tracking-tight text-cl-fg">{profile?.fullName || '—'}</h2>
@@ -129,7 +133,7 @@ function ProfileSummary({
               <YearsOfServiceBadge startDate={employee.startDate} />
               {isBirthdayToday && (
                 <span className="px-2.5 py-1 rounded-full text-xs font-medium bg-pink-500/20 text-pink-200 border border-pink-400/35">
-                  Birthday today
+                  {t('card.birthdayToday')}
                 </span>
               )}
             </div>
@@ -152,7 +156,7 @@ function ProfileSummary({
                         <p className="text-xs font-semibold text-cl-fg">
                           {item.badgeLabel || meta.label}
                         </p>
-                        <p className="text-[11px] text-cl-muted mt-0.5">From {item.fromName}</p>
+                        <p className="text-[11px] text-cl-muted mt-0.5">{t('card.from', { name: item.fromName })}</p>
                         <p className="text-xs text-slate-400 mt-1 leading-relaxed line-clamp-3">
                           {item.message}
                         </p>
@@ -166,11 +170,11 @@ function ProfileSummary({
           <div className="flex items-center gap-2 flex-wrap">
             {profile?.isActive ? (
               <span className="px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                Active
+                {t('card.active')}
               </span>
             ) : (
               <span className="px-2.5 py-1 rounded-full text-xs font-medium bg-white/5 text-cl-muted border border-cl-border">
-                Inactive
+                {t('card.inactive')}
               </span>
             )}
             {displayPhone && <PhoneCallButton phone={displayPhone} />}
@@ -179,7 +183,7 @@ function ProfileSummary({
 
         <div className={`grid grid-cols-1 sm:grid-cols-2 gap-4 ${isDriver ? 'lg:grid-cols-3 xl:grid-cols-4' : 'lg:grid-cols-4 xl:grid-cols-5'}`}>
           {!isDriver && (
-            <Field label="Work email">
+            <Field label={t('card.workEmail')}>
               <div className="flex items-center gap-2 text-sm text-cl-fg break-all">
                 <MailIcon className="w-4 h-4 text-cl-muted flex-shrink-0" />
                 {profile?.email || '—'}
@@ -187,7 +191,7 @@ function ProfileSummary({
             </Field>
           )}
 
-          <Field label={isDriver ? 'Email' : 'Personal email'}>
+          <Field label={isDriver ? t('card.email') : t('card.personalEmail')}>
             {editable.personalEmail ? (
               <input
                 type="email"
@@ -204,7 +208,7 @@ function ProfileSummary({
             )}
           </Field>
 
-          <Field label="Phone">
+          <Field label={t('card.phone')}>
             {editable.phoneNumber ? (
               <input
                 className={inputClassName(false)}
@@ -216,7 +220,7 @@ function ProfileSummary({
             )}
           </Field>
 
-          <Field label="Date of birth">
+          <Field label={t('card.dob')}>
             {editable.hr ? (
               <input
                 type="date"
@@ -229,12 +233,18 @@ function ProfileSummary({
             )}
           </Field>
 
-          <Field label="Age">
+          <Field label={t('card.age')}>
             <p className="text-sm text-cl-fg">
-              {birthday ? `${birthday.age} years` : '—'}
+              {birthday ? t('card.years', { count: birthday.age }) : '—'}
             </p>
             {birthday && (
-              <p className="text-xs text-cl-accent mt-0.5">{birthday.birthdayLabel}</p>
+              <p className="text-xs text-cl-accent mt-0.5">
+                {birthday.daysUntil === 0
+                  ? t('card.birthdayToday')
+                  : birthday.daysUntil === 1
+                    ? t('card.birthdayTomorrow')
+                    : t('card.birthdayInDays', { count: birthday.daysUntil })}
+              </p>
             )}
           </Field>
         </div>
@@ -270,6 +280,7 @@ export default function EmployeeProfileCard({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const { t, locale } = useLanguage();
 
   const canEditAll = permissions?.canEditAll;
   const canEditSelfService = permissions?.canEditSelfService;
@@ -298,7 +309,7 @@ export default function EmployeeProfileCard({
         const data = (await readJsonResponse(response)) || {};
 
         if (!response.ok) {
-          throw new Error(data.error || 'Failed to load employee profile.');
+          throw new Error(data.error || t('card.loadFailed'));
         }
 
         if (cancelled) return;
@@ -339,7 +350,7 @@ export default function EmployeeProfileCard({
         setThemePreference(normalizeThemeKey(data.profile?.themePreference));
         setThemeEnforced(data.profile?.themeEnforced === true);
       } catch (err) {
-        if (!cancelled) setError(err.message || 'Failed to load employee profile.');
+        if (!cancelled) setError(err.message || t('card.loadFailed'));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -350,7 +361,7 @@ export default function EmployeeProfileCard({
     return () => {
       cancelled = true;
     };
-  }, [uid]);
+  }, [uid, t]);
 
   const updateField = (key, value) => {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -403,7 +414,7 @@ export default function EmployeeProfileCard({
 
       const data = (await readJsonResponse(response)) || {};
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to save employee profile.');
+        throw new Error(data.error || t('card.saveFailed'));
       }
 
       setProfile(data.profile);
@@ -428,7 +439,7 @@ export default function EmployeeProfileCard({
         onProfileSaved(data.profile);
       }
     } catch (err) {
-      setError(err.message || 'Failed to save employee profile.');
+      setError(err.message || t('card.saveFailed'));
     } finally {
       setSaving(false);
     }
@@ -437,7 +448,7 @@ export default function EmployeeProfileCard({
   if (loading) {
     return (
       <div className="flex items-center justify-center py-16">
-        <p className="text-slate-400 text-sm">Loading employee profile…</p>
+        <p className="text-slate-400 text-sm">{t('card.loading')}</p>
       </div>
     );
   }
@@ -498,9 +509,9 @@ export default function EmployeeProfileCard({
       )}
 
       {show('summary') && (
-        <Section title="Kudos history">
+        <Section title={t('card.kudosHistory')}>
           {kudosHistory.length === 0 ? (
-            <p className="text-sm text-cl-muted">No kudos recorded yet.</p>
+            <p className="text-sm text-cl-muted">{t('card.noKudos')}</p>
           ) : (
             <ul className="space-y-3">
               {kudosHistory.map((item) => {
@@ -508,7 +519,7 @@ export default function EmployeeProfileCard({
                 const when = item.dayKey
                   ? formatDisplayDate(item.dayKey)
                   : (item.createdAt
-                    ? new Date(item.createdAt).toLocaleDateString('en-GB', {
+                    ? new Date(item.createdAt).toLocaleDateString(locale, {
                       day: 'numeric',
                       month: 'short',
                       year: 'numeric',
@@ -526,8 +537,8 @@ export default function EmployeeProfileCard({
                           {item.badgeLabel || meta.label}
                         </span>
                         <span className="text-xs text-cl-muted">
-                          From {item.fromName} · {when}
-                          {kudosToday.some((row) => row.id === item.id) ? ' · today' : ''}
+                          {t('card.fromWhen', { name: item.fromName, when })}
+                          {kudosToday.some((row) => row.id === item.id) ? ` · ${t('card.today')}` : ''}
                         </span>
                       </div>
                       <p className="text-sm text-slate-400 mt-1 leading-relaxed">{item.message}</p>
@@ -541,7 +552,7 @@ export default function EmployeeProfileCard({
       )}
 
       {showCommunications && (
-        <Section title="Business communications">
+        <Section title={t('card.businessComms')}>
           <BusinessCommsEmailSelector
             workEmail={profile?.email}
             personalEmail={form.personalEmail}
@@ -551,7 +562,7 @@ export default function EmployeeProfileCard({
           />
           {!isEditing && (
             <p className="text-xs text-cl-muted mt-3">
-              Currently sending portal notifications to {resolvedContactEmail || '—'}.
+              {t('card.currentlySending', { email: resolvedContactEmail || '—' })}
             </p>
           )}
         </Section>
@@ -559,16 +570,16 @@ export default function EmployeeProfileCard({
 
       {isDriver && show('summary') && (
         <p className="text-xs text-cl-muted -mt-2 px-1">
-          Portal notifications use your email address above.
+          {t('card.driverNotifications')}
         </p>
       )}
 
       {(showEmployment || showHrRecords) && (
         <div className={`grid grid-cols-1 gap-4 ${showEmployment && showHrRecords ? 'xl:grid-cols-2' : ''}`}>
           {showEmployment && (
-            <Section title="Employment">
+            <Section title={t('card.employment')}>
               <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                <Field label="Job title">
+                <Field label={t('card.jobTitle')}>
                   {editable.hr ? (
                     <input
                       className={inputClassName(false)}
@@ -579,7 +590,7 @@ export default function EmployeeProfileCard({
                     <p className="text-sm text-white">{employee.jobRole || '—'}</p>
                   )}
                 </Field>
-                <Field label="Department">
+                <Field label={t('card.department')}>
                   {editable.hr ? (
                     <input
                       className={inputClassName(false)}
@@ -590,7 +601,7 @@ export default function EmployeeProfileCard({
                     <p className="text-sm text-white">{employee.department || '—'}</p>
                   )}
                 </Field>
-                <Field label="Manager">
+                <Field label={t('card.manager')}>
                   {editable.hr ? (
                     <input
                       className={inputClassName(false)}
@@ -601,7 +612,7 @@ export default function EmployeeProfileCard({
                     <p className="text-sm text-white">{employee.managerName || '—'}</p>
                   )}
                 </Field>
-                <Field label="Contract">
+                <Field label={t('card.contract')}>
                   {editable.hr ? (
                     <input
                       className={inputClassName(false)}
@@ -613,7 +624,7 @@ export default function EmployeeProfileCard({
                     <p className="text-sm text-white">{employee.contractType || '—'}</p>
                   )}
                 </Field>
-                <Field label="Annual contracted hours">
+                <Field label={t('card.annualHours')}>
                   {editable.hr ? (
                     <input
                       type="number"
@@ -630,12 +641,12 @@ export default function EmployeeProfileCard({
                   ) : (
                     <p className="text-sm text-white">
                       {employee.annualContractedHours
-                        ? `${employee.annualContractedHours} hrs / year`
+                        ? t('card.hrsYear', { count: employee.annualContractedHours })
                         : '—'}
                     </p>
                   )}
                 </Field>
-                <Field label="Start date" value={formatDisplayDate(employee.startDate)}>
+                <Field label={t('card.startDate')} value={formatDisplayDate(employee.startDate)}>
                   {editable.hr ? (
                     <input
                       type="date"
@@ -645,57 +656,57 @@ export default function EmployeeProfileCard({
                     />
                   ) : null}
                 </Field>
-                <Field label="Driving staff" value={employee.drivingStaff ? 'Yes' : 'No'}>
+                <Field label={t('card.drivingStaff')} value={employee.drivingStaff ? t('card.yes') : t('card.no')}>
                   {editable.hr ? (
                     <select
                       className={inputClassName(false)}
                       value={form.drivingStaff ? 'yes' : 'no'}
                       onChange={(e) => updateField('drivingStaff', e.target.value === 'yes')}
                     >
-                      <option value="yes">Yes</option>
-                      <option value="no">No</option>
+                      <option value="yes">{t('card.yes')}</option>
+                      <option value="no">{t('card.no')}</option>
                     </select>
                   ) : null}
                 </Field>
-                <Field label="Computer user" value={employee.computerUser ? 'Yes' : 'No'}>
+                <Field label={t('card.computerUser')} value={employee.computerUser ? t('card.yes') : t('card.no')}>
                   {editable.hr ? (
                     <select
                       className={inputClassName(false)}
                       value={form.computerUser ? 'yes' : 'no'}
                       onChange={(e) => updateField('computerUser', e.target.value === 'yes')}
                     >
-                      <option value="yes">Yes</option>
-                      <option value="no">No</option>
+                      <option value="yes">{t('card.yes')}</option>
+                      <option value="no">{t('card.no')}</option>
                     </select>
                   ) : null}
                 </Field>
-                <Field label="Emergency phone cover" value={employee.emergencyPhoneCover ? 'Yes' : 'No'}>
+                <Field label={t('card.emergencyPhoneCover')} value={employee.emergencyPhoneCover ? t('card.yes') : t('card.no')}>
                   {editable.hr ? (
                     <select
                       className={inputClassName(false)}
                       value={form.emergencyPhoneCover ? 'yes' : 'no'}
                       onChange={(e) => updateField('emergencyPhoneCover', e.target.value === 'yes')}
                     >
-                      <option value="yes">Yes</option>
-                      <option value="no">No</option>
+                      <option value="yes">{t('card.yes')}</option>
+                      <option value="no">{t('card.no')}</option>
                     </select>
                   ) : null}
                 </Field>
-                <Field label="Can issue kudos" value={employee.canIssueKudos ? 'Yes' : 'No'}>
+                <Field label={t('card.canIssueKudos')} value={employee.canIssueKudos ? t('card.yes') : t('card.no')}>
                   {editable.hr ? (
                     <select
                       className={inputClassName(false)}
                       value={form.canIssueKudos ? 'yes' : 'no'}
                       onChange={(e) => updateField('canIssueKudos', e.target.value === 'yes')}
                     >
-                      <option value="yes">Yes</option>
-                      <option value="no">No</option>
+                      <option value="yes">{t('card.yes')}</option>
+                      <option value="no">{t('card.no')}</option>
                     </select>
                   ) : null}
                 </Field>
                 <Field
-                  label="Portal theme"
-                  value={THEME_LABELS[themePreference] || 'User choice'}
+                  label={t('card.portalTheme')}
+                  value={THEME_LABELS[themePreference] || t('card.userChoice')}
                 >
                   {editable.hr ? (
                     <div className="space-y-2">
@@ -704,7 +715,7 @@ export default function EmployeeProfileCard({
                         value={themePreference}
                         onChange={(e) => setThemePreference(e.target.value)}
                       >
-                        <option value="">User choice</option>
+                        <option value="">{t('card.userChoice')}</option>
                         {PORTAL_THEME_OPTIONS.map((option) => (
                           <option key={option.key} value={option.key}>
                             {option.label}
@@ -718,12 +729,12 @@ export default function EmployeeProfileCard({
                           checked={themeEnforced}
                           onChange={(e) => setThemeEnforced(e.target.checked)}
                         />
-                        <span className="label-text text-xs">Enforce theme</span>
+                        <span className="label-text text-xs">{t('card.enforceTheme')}</span>
                       </label>
                     </div>
                   ) : null}
                 </Field>
-                <Field label="Equipment">
+                <Field label={t('card.equipment')}>
                   {editable.hr ? (
                     <input
                       className={inputClassName(false)}
@@ -739,9 +750,9 @@ export default function EmployeeProfileCard({
           )}
 
           {showHrRecords && (
-            <Section title="HR records">
+            <Section title={t('card.hrRecords')}>
               <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                <Field label="Last appraisal" value={formatDisplayDate(employee.lastAppraisalDate)}>
+                <Field label={t('card.lastAppraisal')} value={formatDisplayDate(employee.lastAppraisalDate)}>
                   {editable.hr ? (
                     <input
                       type="date"
@@ -752,14 +763,14 @@ export default function EmployeeProfileCard({
                   ) : null}
                 </Field>
                 <Field
-                  label="Days since appraisal"
+                  label={t('card.daysSinceAppraisal')}
                   value={
                     employee.daysSinceLastAppraisal === null || employee.daysSinceLastAppraisal === undefined
                       ? '—'
                       : String(employee.daysSinceLastAppraisal)
                   }
                 />
-                <Field label="Last at-fault accident" value={formatDisplayDate(employee.lastAtFaultAccidentDate)}>
+                <Field label={t('card.lastAccident')} value={formatDisplayDate(employee.lastAtFaultAccidentDate)}>
                   {editable.hr ? (
                     <input
                       type="date"
@@ -778,14 +789,14 @@ export default function EmployeeProfileCard({
       {(showAddress || showNextOfKin) && (
         <div className={`grid grid-cols-1 gap-4 ${showAddress && showNextOfKin ? 'xl:grid-cols-2' : ''}`}>
           {showAddress && (
-            <Section title="Home address">
+            <Section title={t('card.homeAddress')}>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {[
-                  ['line1', 'Line 1'],
-                  ['line2', 'Line 2'],
-                  ['city', 'City / town'],
-                  ['county', 'County'],
-                  ['postcode', 'Postcode'],
+                  ['line1', t('card.line1')],
+                  ['line2', t('card.line2')],
+                  ['city', t('card.city')],
+                  ['county', t('card.county')],
+                  ['postcode', t('card.postcode')],
                 ].map(([key, label]) => (
                   <Field key={key} label={label} className={key === 'line1' ? 'sm:col-span-2' : ''}>
                     {editable.address ? (
@@ -804,9 +815,9 @@ export default function EmployeeProfileCard({
           )}
 
           {showNextOfKin && (
-            <Section title="Next of kin">
+            <Section title={t('card.nextOfKin')}>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <Field label="Name">
+                <Field label={t('card.name')}>
                   {editable.nextOfKin ? (
                     <input
                       className={inputClassName(false)}
@@ -817,7 +828,7 @@ export default function EmployeeProfileCard({
                     <p className="text-sm text-white">{employee.nextOfKin?.name || '—'}</p>
                   )}
                 </Field>
-                <Field label="Relationship">
+                <Field label={t('card.relationship')}>
                   {editable.nextOfKin ? (
                     <input
                       className={inputClassName(false)}
@@ -828,7 +839,7 @@ export default function EmployeeProfileCard({
                     <p className="text-sm text-white">{employee.nextOfKin?.relationship || '—'}</p>
                   )}
                 </Field>
-                <Field label="Phone">
+                <Field label={t('card.phone')}>
                   <div className="flex items-center gap-2 flex-wrap">
                     {editable.nextOfKin ? (
                       <input
@@ -840,11 +851,11 @@ export default function EmployeeProfileCard({
                       <p className="text-sm text-white">{employee.nextOfKin?.phoneNumber || '—'}</p>
                     )}
                     {employee.nextOfKin?.phoneNumber && (
-                      <PhoneCallButton phone={employee.nextOfKin.phoneNumber} label="Call" />
+                      <PhoneCallButton phone={employee.nextOfKin.phoneNumber} />
                     )}
                   </div>
                 </Field>
-                <Field label="Email">
+                <Field label={t('card.email')}>
                   {editable.nextOfKin ? (
                     <input
                       type="email"
@@ -856,7 +867,7 @@ export default function EmployeeProfileCard({
                     <p className="text-sm text-white">{employee.nextOfKin?.email || '—'}</p>
                   )}
                 </Field>
-                <Field label="Address" className="sm:col-span-2">
+                <Field label={t('card.address')} className="sm:col-span-2">
                   {editable.nextOfKin ? (
                     <textarea
                       rows={2}
@@ -882,7 +893,7 @@ export default function EmployeeProfileCard({
             disabled={saving}
             className="cl-btn-primary disabled:opacity-50"
           >
-            {saving ? 'Saving…' : 'Save profile'}
+            {saving ? t('profile.saving') : t('card.saveProfile')}
           </button>
         </div>
       )}

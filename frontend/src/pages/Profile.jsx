@@ -10,6 +10,7 @@ import ProfileWidgets from '../components/ProfileWidgets';
 import WorkspaceTabs from '../components/WorkspaceTabs';
 import EmployeeCaseActionsPanel from '../components/EmployeeCaseActionsPanel';
 import { canManagePortalAccess } from '../utils/portalAccess';
+import { useLanguage } from '../context/LanguageContext';
 
 function KeyIcon({ className }) {
   return (
@@ -52,21 +53,21 @@ async function readJsonResponse(res) {
 }
 
 const PORTAL_META = {
-  mentoring_app: { label: 'Mentor Portal', href: 'https://mentor.countrylion.co.uk' },
-  assessment_app: { label: 'Assessment Portal', href: 'https://assessments.countrylion.co.uk' },
-  routes_app: { label: 'Routes Portal', href: 'https://routes.countrylion.co.uk' },
-  hr_app: { label: 'Headcount', href: 'https://headcount.countrylion.co.uk' },
-  tyre_app: { label: 'Tyre Tracker', href: 'https://tyres.countrylion.co.uk' },
-  cleaning_app: { label: 'Vehicle Cleaning', href: 'https://cleaning.countrylion.co.uk' },
-  contracts_app: { label: 'Contracts Portal', href: 'https://contracts.countrylion.co.uk' },
-  cpc_app: { label: 'CPC Portal', href: 'https://cpc.countrylion.co.uk' },
-  compliance_app: { label: 'Weekend Availability', href: 'https://compliance.countrylion.co.uk' },
-  attendance_app: { label: 'Attendance', href: 'https://attendance.countrylion.co.uk' },
-  training_app: { label: 'Training', href: 'https://training.countrylion.co.uk' },
-  holidays_app: { label: 'Holidays', href: 'https://holidays.countrylion.co.uk' },
-  events_app: { label: 'Events Transport', href: 'https://events.countrylion.co.uk' },
-  cases_app: { label: 'People Cases', href: null },
-  master_admin: { label: 'Employee Portal (Admin)', href: null },
+  mentoring_app: { labelKey: 'portal.mentor', href: 'https://mentor.countrylion.co.uk' },
+  assessment_app: { labelKey: 'portal.assessment', href: 'https://assessments.countrylion.co.uk' },
+  routes_app: { labelKey: 'portal.routes', href: 'https://routes.countrylion.co.uk' },
+  hr_app: { labelKey: 'portal.headcount', href: 'https://headcount.countrylion.co.uk' },
+  tyre_app: { labelKey: 'portal.tyres', href: 'https://tyres.countrylion.co.uk' },
+  cleaning_app: { labelKey: 'portal.cleaning', href: 'https://cleaning.countrylion.co.uk' },
+  contracts_app: { labelKey: 'portal.contracts', href: 'https://contracts.countrylion.co.uk' },
+  cpc_app: { labelKey: 'portal.cpc', href: 'https://cpc.countrylion.co.uk' },
+  compliance_app: { labelKey: 'portal.compliance', href: 'https://compliance.countrylion.co.uk' },
+  attendance_app: { labelKey: 'portal.attendance', href: 'https://attendance.countrylion.co.uk' },
+  training_app: { labelKey: 'portal.training', href: 'https://training.countrylion.co.uk' },
+  holidays_app: { labelKey: 'portal.holidays', href: 'https://holidays.countrylion.co.uk' },
+  events_app: { labelKey: 'portal.events', href: 'https://events.countrylion.co.uk' },
+  cases_app: { labelKey: 'portal.peopleCases', href: null },
+  master_admin: { labelKey: 'portal.admin', href: null },
 };
 
 function formatRole(role) {
@@ -76,6 +77,7 @@ function formatRole(role) {
 
 export default function Profile() {
   const { user } = useAuth();
+  const { t } = useLanguage();
   const location = useLocation();
   const [activeTab, setActiveTab] = useState(() => location.state?.profileTab || 'profile');
   const [newPassword, setNewPassword] = useState('');
@@ -95,13 +97,13 @@ export default function Profile() {
 
     if (newPassword.length < 6) {
       setPasswordStatus('error');
-      setPasswordError('Password must be at least 6 characters.');
+      setPasswordError(t('profile.passwordTooShort'));
       return;
     }
 
     if (newPassword !== confirmPassword) {
       setPasswordStatus('error');
-      setPasswordError('Passwords do not match.');
+      setPasswordError(t('profile.passwordMismatch'));
       return;
     }
 
@@ -118,7 +120,7 @@ export default function Profile() {
       const data = (await readJsonResponse(response)) || {};
 
       if (!response.ok) {
-        throw new Error(data.error || 'Failed to change password.');
+        throw new Error(data.error || t('profile.passwordFailed'));
       }
 
       setPasswordStatus('saved');
@@ -126,7 +128,7 @@ export default function Profile() {
       setConfirmPassword('');
     } catch (error) {
       setPasswordStatus('error');
-      setPasswordError(error.message || 'Failed to change password.');
+      setPasswordError(error.message || t('profile.passwordFailed'));
     }
   };
 
@@ -146,7 +148,7 @@ export default function Profile() {
             </div>
             <aside className="w-full xl:w-[22rem] xl:sticky xl:top-4 flex-shrink-0">
               <div className="rounded-xl border border-base-300 bg-base-100/40 p-4">
-                <p className="text-[10px] font-mono uppercase tracking-[0.18em] text-primary mb-3">Polls</p>
+                <p className="text-[10px] font-mono uppercase tracking-[0.18em] text-primary mb-3">{t('profile.polls')}</p>
                 <PollsPanel compact />
               </div>
             </aside>
@@ -171,7 +173,7 @@ export default function Profile() {
           </div>
         ) : (
           <div className="px-4 sm:px-8 py-6">
-            <p className="text-sm text-slate-400">Only managers and admins can issue kudos.</p>
+            <p className="text-sm text-slate-400">{t('profile.kudosManagersOnly')}</p>
           </div>
         )
       ) : (
@@ -186,18 +188,18 @@ export default function Profile() {
                 <div className="bg-[#0b1220] border border-[#1a2540] rounded-xl overflow-hidden">
                   <div className="px-6 py-6">
                     <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-widest mb-4">
-                      Your Access
+                      {t('profile.yourAccess')}
                     </h2>
                     <div className="space-y-2">
                       {portals.map(([key, role]) => {
-                        const meta = PORTAL_META[key] ?? { label: key, href: null };
+                        const meta = PORTAL_META[key] ?? { labelKey: null, href: null };
                         return (
                           <div
                             key={key}
                             className="flex items-center justify-between bg-[#060e1a] rounded-lg px-4 py-3"
                           >
                             <div>
-                              <p className="text-sm text-white font-medium">{meta.label}</p>
+                              <p className="text-sm text-white font-medium">{meta.labelKey ? t(meta.labelKey) : key}</p>
                               <p className="text-xs text-indigo-400 mt-0.5">{formatRole(role)}</p>
                             </div>
                             {meta.href && (
@@ -205,7 +207,7 @@ export default function Profile() {
                                 href={meta.href}
                                 className="flex items-center gap-1.5 text-xs text-indigo-300 hover:text-indigo-100 transition-colors"
                               >
-                                Open
+                                {t('profile.open')}
                                 <ExternalLinkIcon className="w-3.5 h-3.5" />
                               </a>
                             )}
@@ -220,15 +222,15 @@ export default function Profile() {
               <div className="bg-[#0b1220] border border-[#1a2540] rounded-xl overflow-hidden">
                 <div className="px-6 py-6">
                   <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-widest mb-1">
-                    Password
+                    {t('profile.password')}
                   </h2>
                   <p className="text-xs text-slate-500 mb-4">
-                    Change your password directly from this portal.
+                    {t('profile.passwordHint')}
                   </p>
 
                   <form onSubmit={handleChangePassword} className="space-y-3">
                     <div>
-                      <label htmlFor="newPassword" className="block text-xs text-slate-500 mb-1">New password</label>
+                      <label htmlFor="newPassword" className="block text-xs text-slate-500 mb-1">{t('profile.newPassword')}</label>
                       <input
                         id="newPassword"
                         type="password"
@@ -240,7 +242,7 @@ export default function Profile() {
                       />
                     </div>
                     <div>
-                      <label htmlFor="confirmPassword" className="block text-xs text-slate-500 mb-1">Confirm new password</label>
+                      <label htmlFor="confirmPassword" className="block text-xs text-slate-500 mb-1">{t('profile.confirmPassword')}</label>
                       <input
                         id="confirmPassword"
                         type="password"
@@ -258,13 +260,13 @@ export default function Profile() {
                       className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white transition-colors"
                     >
                       <KeyIcon className="w-4 h-4" />
-                      {passwordStatus === 'saving' ? 'Saving…' : 'Change password'}
+                      {passwordStatus === 'saving' ? t('profile.saving') : t('profile.changePassword')}
                     </button>
 
                     {passwordStatus === 'saved' && (
                       <div className="flex items-center gap-2 text-green-400 text-sm">
                         <CheckCircleIcon className="w-4 h-4" />
-                        Password updated successfully.
+                        {t('profile.passwordUpdated')}
                       </div>
                     )}
 

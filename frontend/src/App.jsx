@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate, useParams } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
+import { LanguageProvider } from './context/LanguageContext';
 import { ThemeProvider } from './context/ThemeContext';
 import PortalThemeSync from './components/PortalThemeSync';
 import ProtectedRoute from './components/ProtectedRoute';
@@ -49,6 +50,7 @@ function DisciplinaryCaseRoute() {
 export default function App() {
   return (
     <ThemeProvider>
+      <LanguageProvider>
       <AuthProvider>
         <PortalThemeSync />
         <BrowserRouter>
@@ -205,6 +207,7 @@ export default function App() {
           </Routes>
         </BrowserRouter>
       </AuthProvider>
+      </LanguageProvider>
     </ThemeProvider>
   );
 }

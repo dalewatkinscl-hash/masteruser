@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { canViewAllEmployeeProfiles } from '../utils/employeeProfile';
+import { useLanguage } from '../context/LanguageContext';
 
 const BADGE_POLL_MS = 45000;
 const LAST_SEEN_KEY = 'cl_suggestion_latest_id';
@@ -16,7 +17,7 @@ async function readJsonResponse(res) {
   }
 }
 
-function maybeNotifyNewSuggestion({ latestId, latestTitle, onSuggestionsTab }) {
+function maybeNotifyNewSuggestion({ latestId, latestTitle, onSuggestionsTab, t }) {
   if (!latestId || onSuggestionsTab) return;
   if (typeof window === 'undefined' || !('Notification' in window)) return;
 
@@ -47,8 +48,8 @@ function maybeNotifyNewSuggestion({ latestId, latestTitle, onSuggestionsTab }) {
 
   if (Notification.permission === 'granted') {
     try {
-      const note = new Notification('New suggestion', {
-        body: latestTitle || 'A colleague submitted a new suggestion.',
+      const note = new Notification(t('notify.newSuggestion'), {
+        body: latestTitle || t('notify.newSuggestionBody'),
         tag: `suggestion-${latestId}`,
       });
       note.onclick = () => {
@@ -67,6 +68,7 @@ function maybeNotifyNewSuggestion({ latestId, latestTitle, onSuggestionsTab }) {
  */
 export default function WorkspaceTabs({ activeProfileTab = null, onProfileTabChange = null }) {
   const { user } = useAuth();
+  const { t } = useLanguage();
   const navigate = useNavigate();
   const location = useLocation();
   const [newSuggestionCount, setNewSuggestionCount] = useState(0);
@@ -108,6 +110,7 @@ export default function WorkspaceTabs({ activeProfileTab = null, onProfileTabCha
           latestId: payload.latestId,
           latestTitle: payload.latestTitle,
           onSuggestionsTab,
+          t,
         });
       } catch {
         // ignore badge polling failures
@@ -123,7 +126,7 @@ export default function WorkspaceTabs({ activeProfileTab = null, onProfileTabCha
       window.clearInterval(timer);
       window.removeEventListener('cl-suggestions-changed', onChanged);
     };
-  }, [canSeeSuggestionBadge, onSuggestionsTab]);
+  }, [canSeeSuggestionBadge, onSuggestionsTab, t]);
 
   useEffect(() => {
     if (!canSeeSuggestionBadge || notifiedRef.current) return;
@@ -156,27 +159,27 @@ export default function WorkspaceTabs({ activeProfileTab = null, onProfileTabCha
   }, []);
 
   const tabs = [
-    { id: 'profile', label: 'Profile', kind: 'profile', profileTab: 'profile' },
-    { id: 'cases-inbox', label: 'My cases', kind: 'profile', profileTab: 'cases', showDot: caseActionCount > 0 },
-    { id: 'fun', label: 'Fun', kind: 'profile', profileTab: 'fun' },
-    { id: 'polls', label: 'Polls', kind: 'profile', profileTab: 'polls' },
+    { id: 'profile', label: t('tabs.profile'), kind: 'profile', profileTab: 'profile' },
+    { id: 'cases-inbox', label: t('tabs.myCases'), kind: 'profile', profileTab: 'cases', showDot: caseActionCount > 0 },
+    { id: 'fun', label: t('tabs.fun'), kind: 'profile', profileTab: 'fun' },
+    { id: 'polls', label: t('tabs.polls'), kind: 'profile', profileTab: 'polls' },
     {
       id: 'suggestions',
-      label: 'Suggestions',
+      label: t('tabs.suggestions'),
       kind: 'profile',
       profileTab: 'suggestions',
       showDot: canSeeSuggestionBadge && newSuggestionCount > 0,
     },
-    user?.canIssueKudos && { id: 'kudos', label: 'Kudos', kind: 'profile', profileTab: 'kudos' },
+    user?.canIssueKudos && { id: 'kudos', label: t('tabs.kudos'), kind: 'profile', profileTab: 'kudos' },
     {
       id: 'emergency-phone',
-      label: 'Emergency phone',
+      label: t('tabs.emergencyPhone'),
       kind: 'route',
       to: '/dashboard/emergency-phone',
     },
     isAdmin && {
       id: 'portal-matrix',
-      label: 'Portal matrix',
+      label: t('tabs.portalMatrix'),
       kind: 'route',
       to: '/dashboard/portal-access',
     },
@@ -209,7 +212,7 @@ export default function WorkspaceTabs({ activeProfileTab = null, onProfileTabCha
 
   return (
     <div className="px-4 sm:px-8 border-b border-cl-border bg-cl-elevated/40">
-      <nav className="flex gap-1 overflow-x-auto scrollbar-thin" aria-label="Employee portal sections">
+      <nav className="flex gap-1 overflow-x-auto scrollbar-thin" aria-label={t('tabs.aria')}>
         {tabs.map((tab) => {
           const active = isActive(tab);
           return (
@@ -226,7 +229,11 @@ export default function WorkspaceTabs({ activeProfileTab = null, onProfileTabCha
                 {tab.showDot && (
                   <span
                     className="absolute -top-0.5 -right-2.5 h-2 w-2 rounded-full bg-rose-500 ring-2 ring-[var(--cl-bg-elevated)]"
-                    aria-label={`${newSuggestionCount} new suggestion${newSuggestionCount === 1 ? '' : 's'}`}
+                    aria-label={
+                      newSuggestionCount === 1
+                        ? t('tabs.newSuggestions', { count: newSuggestionCount })
+                        : t('tabs.newSuggestionsPlural', { count: newSuggestionCount })
+                    }
                   />
                 )}
               </span>

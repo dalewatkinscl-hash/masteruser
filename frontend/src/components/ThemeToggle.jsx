@@ -1,6 +1,7 @@
 import { useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { PORTAL_THEME_OPTIONS, useTheme } from '../context/ThemeContext';
+import { useLanguage } from '../context/LanguageContext';
 
 const LABELS = Object.fromEntries(PORTAL_THEME_OPTIONS.map((t) => [t.key, t.label]));
 
@@ -26,6 +27,7 @@ async function persistThemePreference(theme) {
 export default function ThemeToggle({ showLabel = true, className = '' }) {
   const { theme, assignedTheme, isAssignedThemeLocked, setTheme, themes } = useTheme();
   const { user, setUser } = useAuth();
+  const { t } = useLanguage();
   const saveSeq = useRef(0);
   const label = LABELS[theme] || 'Theme';
   const options = themes || PORTAL_THEME_OPTIONS;
@@ -54,7 +56,7 @@ export default function ThemeToggle({ showLabel = true, className = '' }) {
         className={`w-full space-y-2 ${className}`}
         title={`Theme set by HR (${LABELS[assignedTheme] || assignedTheme})`}
       >
-        {showLabel ? <p className="text-sm font-medium text-base-content/70">Theme</p> : null}
+        {showLabel ? <p className="text-sm font-medium text-base-content/70">{t('nav.theme')}</p> : null}
         <select className={`${selectClass} select-disabled`} value={selectValue} disabled>
           {options.map((option) => (
             <option key={option.key} value={option.key}>
@@ -64,7 +66,7 @@ export default function ThemeToggle({ showLabel = true, className = '' }) {
         </select>
         <p className="text-[10px] text-base-content/60">
           {label}
-          <span className="ml-1 opacity-70">(enforced)</span>
+          <span className="ml-1 opacity-70">{t('nav.themeEnforced')}</span>
         </p>
       </div>
     );
@@ -74,12 +76,12 @@ export default function ThemeToggle({ showLabel = true, className = '' }) {
     <div className={`w-full space-y-2 ${className}`}>
       {showLabel ? (
         <label className="block text-sm font-medium text-base-content/70" htmlFor="portal-theme-select">
-          Theme
+          {t('nav.theme')}
         </label>
       ) : null}
       <select
         id="portal-theme-select"
-        aria-label="Theme"
+        aria-label={t('nav.theme')}
         className={selectClass}
         value={selectValue}
         onChange={(e) => onThemeChange(e.target.value)}

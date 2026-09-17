@@ -3,8 +3,10 @@ import { useNavigate } from 'react-router-dom';
 import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { auth } from '../firebase';
 import { useAuth } from '../context/AuthContext';
+import { useLanguage } from '../context/LanguageContext';
 import AmbientBackground from '../components/AmbientBackground';
 import ThemeToggle from '../components/ThemeToggle';
+import LanguageSwitcher from '../components/LanguageSwitcher';
 
 // ─── Icon helpers ────────────────────────────────────────────────────────────
 
@@ -116,17 +118,17 @@ function Spinner({ className }) {
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function mapFirebaseError(code) {
+function mapFirebaseError(code, t) {
   switch (code) {
     case 'auth/invalid-credential':
     case 'auth/wrong-password':
     case 'auth/user-not-found':
     case 'auth/invalid-email':
-      return 'Invalid email address or password.';
+      return t('login.errorInvalid');
     case 'auth/user-disabled':
-      return 'This account has been disabled. Contact your administrator.';
+      return t('login.errorDisabled');
     case 'auth/too-many-requests':
-      return 'Too many failed attempts. Please try again later.';
+      return t('login.errorTooMany');
     default:
       return null;
   }
@@ -161,6 +163,7 @@ export default function Login() {
 
   const navigate = useNavigate();
   const { user, loading, setUser } = useAuth();
+  const { t } = useLanguage();
 
   // Read the optional ?app=<portalKey> query param so we know where to send the user.
   const appParam = new URLSearchParams(window.location.search).get('app');
@@ -249,8 +252,8 @@ async function readJsonResponse(res) {
       // Ensure local Firebase state is always cleared on error.
       await signOut(auth).catch(() => {});
 
-      const mapped = mapFirebaseError(err.code);
-      setError(mapped ?? err.message ?? 'An unexpected error occurred. Please try again.');
+      const mapped = mapFirebaseError(err.code, t);
+      setError(mapped ?? err.message ?? t('login.errorUnexpected'));
     } finally {
       setIsLoading(false);
     }
@@ -261,7 +264,10 @@ async function readJsonResponse(res) {
   return (
     <div className="min-h-screen flex items-center justify-center p-4 relative overflow-hidden bg-cl-base">
       <AmbientBackground />
-      <div className="absolute top-4 right-4 z-20">
+      <div className="absolute top-4 right-4 z-20 flex items-start gap-3">
+        <div className="card bg-base-100/80 shadow-md border border-base-300 p-2 backdrop-blur-md">
+          <LanguageSwitcher />
+        </div>
         <ThemeToggle showLabel className="!w-auto card bg-base-100/80 shadow-md border border-base-300 p-3 backdrop-blur-md" />
       </div>
 
@@ -281,13 +287,13 @@ async function readJsonResponse(res) {
                   Country Lion
                 </h1>
                 <p className="mt-1 text-[10px] font-mono font-medium tracking-[0.18em] uppercase text-cl-accent">
-                  Employee Portal
+                  {t('login.employeePortal')}
                 </p>
               </div>
             </div>
 
             <p className="text-[13px] text-cl-muted mb-7 leading-relaxed">
-              Sign in with your Country Lion credentials to access your portal.
+              {t('login.intro')}
             </p>
 
             {/* ── Error banner ── */}
@@ -306,7 +312,7 @@ async function readJsonResponse(res) {
                   htmlFor="email"
                   className="block text-[11px] font-mono font-medium uppercase tracking-widest text-cl-muted mb-1.5"
                 >
-                  Email address
+                  {t('login.email')}
                 </label>
                 <div className="relative">
                   <div className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-cl-muted">
@@ -331,7 +337,7 @@ async function readJsonResponse(res) {
                   htmlFor="password"
                   className="block text-[11px] font-mono font-medium uppercase tracking-widest text-cl-muted mb-1.5"
                 >
-                  Password
+                  {t('login.password')}
                 </label>
                 <div className="relative">
                   <div className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-cl-muted">
@@ -351,7 +357,7 @@ async function readJsonResponse(res) {
                     type="button"
                     onClick={() => setShowPassword((v) => !v)}
                     className="absolute right-3.5 top-1/2 -translate-y-1/2 text-cl-muted hover:text-cl-fg transition-colors p-0.5 rounded"
-                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                    aria-label={showPassword ? t('login.hidePassword') : t('login.showPassword')}
                   >
                     {showPassword ? (
                       <EyeClosedIcon className="w-[15px] h-[15px]" />
@@ -372,10 +378,10 @@ async function readJsonResponse(res) {
                   {isLoading ? (
                     <>
                       <span className="loading loading-spinner loading-sm" />
-                      <span>Authenticating…</span>
+                      <span>{t('login.authenticating')}</span>
                     </>
                   ) : (
-                    'Sign in to Portal'
+                    t('login.signIn')
                   )}
                 </button>
               </div>
@@ -385,7 +391,7 @@ async function readJsonResponse(res) {
             <div className="mt-8 pt-6 border-t border-cl-border flex items-center justify-center gap-1.5">
               <LockIcon className="w-3 h-3 text-cl-muted/40" />
               <p className="text-[11px] text-cl-muted/50 select-none">
-                Secure access · Authorised personnel only
+                {t('login.secure')}
               </p>
             </div>
           </div>

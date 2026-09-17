@@ -5,10 +5,12 @@ import { auth } from '../firebase';
 import { useAuth } from '../context/AuthContext';
 import AmbientBackground from '../components/AmbientBackground';
 import ThemeToggle from '../components/ThemeToggle';
+import LanguageSwitcher from '../components/LanguageSwitcher';
 import DigitalClock from '../components/DigitalClock';
 import KudosWelcomeModal from '../components/KudosWelcomeModal';
 import KawaiiDecor from '../components/KawaiiDecor';
 import { useTheme } from '../context/ThemeContext';
+import { useLanguage } from '../context/LanguageContext';
 import { canAccessHrPortal } from '../utils/peopleCasesAccess';
 
 function MenuIcon({ className }) {
@@ -100,6 +102,7 @@ export default function Dashboard() {
   });
   const { user, setUser } = useAuth();
   const { isKawaii } = useTheme();
+  const { t } = useLanguage();
   const navigate = useNavigate();
   const location = useLocation();
 
@@ -163,19 +166,19 @@ export default function Dashboard() {
   const showLabels = isDesktop ? sidebarOpen : true;
 
   const portalLinks = [
-    hasAssessmentAccess && { label: 'Assessment Portal', href: 'https://assessments.countrylion.co.uk' },
-    hasAttendanceAccess && { label: 'Attendance', href: 'https://attendance.countrylion.co.uk' },
-    hasCpcAccess && { label: 'CPC Portal', href: 'https://cpc.countrylion.co.uk' },
-    hasContractsAccess && { label: 'Contracts Portal', href: 'https://contracts.countrylion.co.uk' },
-    hasHrAccess && { label: 'Headcount', href: 'https://headcount.countrylion.co.uk' },
-    hasMentoringAccess && { label: 'Mentor Portal', href: 'https://mentor.countrylion.co.uk' },
-    hasRoutesAccess && { label: 'Routes Portal', href: 'https://routes.countrylion.co.uk' },
-    hasTrainingAccess && { label: 'Training', href: 'https://training.countrylion.co.uk' },
-    hasHolidaysAccess && { label: 'Holidays', href: 'https://holidays.countrylion.co.uk' },
-    hasEventsAccess && { label: 'Events Transport', href: 'https://events.countrylion.co.uk' },
-    hasTyreAccess && { label: 'Tyre Tracker', href: 'https://tyres.countrylion.co.uk' },
-    hasCleaningAccess && { label: 'Vehicle Cleaning', href: 'https://cleaning.countrylion.co.uk' },
-    hasComplianceAccess && { label: 'Weekend Availability', href: 'https://compliance.countrylion.co.uk' },
+    hasAssessmentAccess && { label: t('portal.assessment'), href: 'https://assessments.countrylion.co.uk' },
+    hasAttendanceAccess && { label: t('portal.attendance'), href: 'https://attendance.countrylion.co.uk' },
+    hasCpcAccess && { label: t('portal.cpc'), href: 'https://cpc.countrylion.co.uk' },
+    hasContractsAccess && { label: t('portal.contracts'), href: 'https://contracts.countrylion.co.uk' },
+    hasHrAccess && { label: t('portal.headcount'), href: 'https://headcount.countrylion.co.uk' },
+    hasMentoringAccess && { label: t('portal.mentor'), href: 'https://mentor.countrylion.co.uk' },
+    hasRoutesAccess && { label: t('portal.routes'), href: 'https://routes.countrylion.co.uk' },
+    hasTrainingAccess && { label: t('portal.training'), href: 'https://training.countrylion.co.uk' },
+    hasHolidaysAccess && { label: t('portal.holidays'), href: 'https://holidays.countrylion.co.uk' },
+    hasEventsAccess && { label: t('portal.events'), href: 'https://events.countrylion.co.uk' },
+    hasTyreAccess && { label: t('portal.tyres'), href: 'https://tyres.countrylion.co.uk' },
+    hasCleaningAccess && { label: t('portal.cleaning'), href: 'https://cleaning.countrylion.co.uk' },
+    hasComplianceAccess && { label: t('portal.compliance'), href: 'https://compliance.countrylion.co.uk' },
   ]
     .filter(Boolean)
     .sort((a, b) => a.label.localeCompare(b.label, 'en', { sensitivity: 'base' }));
@@ -205,7 +208,7 @@ export default function Dashboard() {
           type="button"
           onClick={() => setSidebarOpen(!sidebarOpen)}
           className="btn btn-ghost btn-sm btn-square text-base-content/70"
-          aria-label={sidebarOpen ? 'Close menu' : 'Open menu'}
+          aria-label={sidebarOpen ? t('nav.closeMenu') : t('nav.openMenu')}
         >
           {isDesktop ? <MenuIcon className="w-5 h-5" /> : <CloseIcon className="w-5 h-5" />}
         </button>
@@ -214,13 +217,13 @@ export default function Dashboard() {
       <nav className="flex-1 px-3 py-6 space-y-1 overflow-y-auto scrollbar-thin">
         <button type="button" onClick={() => go('/dashboard/profile')} className={navClass(isProfileActive)}>
           <UserCircleIcon className="w-5 h-5 flex-shrink-0" />
-          {showLabels && <span>My Profile</span>}
+          {showLabels && <span>{t('nav.myProfile')}</span>}
         </button>
 
         {showHrPortal && (
           <button type="button" onClick={() => go('/dashboard/hr')} className={navClass(isHrPortalActive)}>
             <BookOpenIcon className="w-5 h-5 flex-shrink-0" />
-            {showLabels && <span>HR</span>}
+            {showLabels && <span>{t('nav.hr')}</span>}
           </button>
         )}
 
@@ -235,7 +238,7 @@ export default function Dashboard() {
       <div className="px-3 py-4 border-t border-cl-border space-y-3">
         {showLabels && (
           <div className="px-2 py-2 rounded-lg border border-base-300 bg-base-200/50">
-            <p className="text-[10px] font-mono uppercase tracking-widest text-base-content/60">Signed in as</p>
+            <p className="text-[10px] font-mono uppercase tracking-widest text-base-content/60">{t('nav.signedInAs')}</p>
             <p className="text-xs font-semibold text-base-content mt-1 truncate">{user?.fullName || user?.email}</p>
           </div>
         )}
@@ -246,7 +249,7 @@ export default function Dashboard() {
           className="btn btn-ghost btn-sm w-full justify-start text-error hover:bg-error/10"
         >
           <SignOutIcon className="w-4 h-4 flex-shrink-0" />
-          {showLabels && <span>Sign out</span>}
+          {showLabels && <span>{t('nav.signOut')}</span>}
         </button>
       </div>
     </aside>
@@ -261,7 +264,7 @@ export default function Dashboard() {
         <button
           type="button"
           className="fixed inset-0 z-40 bg-black/60 backdrop-blur-[1px]"
-          aria-label="Close menu"
+          aria-label={t('nav.closeMenu')}
           onClick={() => setSidebarOpen(false)}
         />
       )}
@@ -269,23 +272,35 @@ export default function Dashboard() {
       {sidebar}
 
       <main className="relative z-10 flex-1 min-w-0 overflow-y-auto scrollbar-thin">
-        <div className="px-4 sm:px-8 py-3 sm:py-4 border-b border-base-300 bg-base-200/60 backdrop-blur-md flex items-center gap-3">
+        <div className="px-4 sm:px-8 py-3 sm:py-4 border-b border-base-300 bg-base-200/60 backdrop-blur-md flex items-center gap-3 relative z-20">
           {!isDesktop && (
             <button
               type="button"
               onClick={() => setSidebarOpen(true)}
               className="btn btn-ghost btn-sm btn-square"
-              aria-label="Open menu"
+              aria-label={t('nav.openMenu')}
             >
               <MenuIcon className="w-5 h-5" />
             </button>
           )}
           <div className="min-w-0 flex-1 flex items-center gap-3">
             <p className="text-base-content/70 text-sm min-w-0 truncate">
-              Hello, <span className="font-semibold text-base-content">{firstName}</span>
+              {(() => {
+                const greeting = t('nav.hello', { name: firstName });
+                const index = greeting.indexOf(firstName);
+                if (index === -1) return greeting;
+                return (
+                  <>
+                    {greeting.slice(0, index)}
+                    <span className="font-semibold text-base-content">{firstName}</span>
+                    {greeting.slice(index + firstName.length)}
+                  </>
+                );
+              })()}
             </p>
             <DigitalClock />
           </div>
+          <LanguageSwitcher />
           <div className="sm:hidden">
             <ThemeToggle showLabel={false} className="!w-auto px-2" />
           </div>
