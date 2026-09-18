@@ -198,6 +198,8 @@ export default function DisciplinaryCase() {
   const [coachingHistory, setCoachingHistory] = useState([]);
   const [priorHistory, setPriorHistory] = useState([]);
   const [priorHistoryLoading, setPriorHistoryLoading] = useState(false);
+  const [activeMeasures, setActiveMeasures] = useState([]);
+  const [activeMeasuresLoading, setActiveMeasuresLoading] = useState(false);
   const [sharePointConfigured, setSharePointConfigured] = useState(false);
   const [sharePointPath, setSharePointPath] = useState('');
   const [sharePointFolderConfirmed, setSharePointFolderConfirmed] = useState(false);
