@@ -103,6 +103,7 @@ export const KNOWN_PORTALS = [
     label: 'Training',
     roles: [
       { value: 'employee', label: 'Employee' },
+      { value: 'learner', label: 'Learner' },
       { value: 'manager', label: 'Manager' },
       { value: 'trainer', label: 'Trainer' },
       { value: 'admin', label: 'Admin' },

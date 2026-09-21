@@ -154,13 +154,13 @@ const {
 const {
   getLondonDayKey: getToolboxKickDayKey,
   serializeToolboxKickGame,
-  isToolboxKickTrackedGame,
   isToolboxKickRoundFullyDone,
   compareToolboxKickRows,
   toolboxKickResultLabel,
   collectToolboxKickRecords,
   collectToolboxKickAllTimeTop,
   markToolboxKickCaughtCheating,
+  markToolboxKickExtraRun,
   buildToolboxKickForfeitPayload,
   clampDistance: clampToolboxKickDistance,
   normalizeMode: normalizeToolboxKickMode,
@@ -181,6 +181,15 @@ const {
   WANTED_LIVE_FROM,
   PENALTY_MS: WANTED_PENALTY_MS,
 } = require('./wanted');
+const {
+  getLondonDayKey: getStackWalkDayKey,
+  serializeStackWalkGame,
+  compareStackWalkRows,
+  stackWalkResultLabel,
+  clampDistance: clampStackWalkDistance,
+  STACK_WALK_LIVE_FROM,
+  STACK_WALK_PREVIEW_FROM,
+} = require('./stackWalk');
 const {
   recordFunStreakWin,
   recordFunStreakFail,
@@ -948,8 +957,12 @@ async function provisionTrainingUser({ uid, email, fullName, role }) {
 
   if (!trainingUrl || !secret) {
     console.warn('provisionTrainingUser: TRAINING_PORTAL_URL or TRAINING_PROVISION_SECRET not configured, skipping.');
-    return;
+    return { ok: false, skipped: true };
   }
+
+  const normalizedRole = ['learner', 'staff', 'user'].includes(String(role || '').toLowerCase())
+    ? 'employee'
+    : (role || 'employee');
 
   try {
     const response = await fetch(`${trainingUrl}/api/provisionUser`, {
@@ -958,15 +971,50 @@ async function provisionTrainingUser({ uid, email, fullName, role }) {
         'Content-Type': 'application/json',
         'x-provision-secret': secret,
       },
-      body: JSON.stringify({ uid, email, fullName, role }),
+      body: JSON.stringify({
+        uid,
+        email,
+        fullName,
+        role: normalizedRole,
+      }),
     });
 
     if (!response.ok) {
       const body = await response.text().catch(() => '');
       console.error(`provisionTrainingUser: training responded ${response.status} — ${body}`);
+      return { ok: false, status: response.status, body };
     }
+    return { ok: true };
   } catch (err) {
     console.error('provisionTrainingUser: request failed —', err.message);
+    return { ok: false, error: err.message };
+  }
+}
+
+async function deprovisionTrainingUser({ uid, email, fullName }) {
+  const trainingUrl = process.env.TRAINING_PORTAL_URL;
+  const secret = process.env.TRAINING_PROVISION_SECRET;
+
+  if (!trainingUrl || !secret || !uid) return { ok: false, skipped: true };
+
+  try {
+    const response = await fetch(`${trainingUrl}/api/deprovisionUser`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-provision-secret': secret,
+      },
+      body: JSON.stringify({ uid, email, fullName }),
+    });
+    if (!response.ok) {
+      const body = await response.text().catch(() => '');
+      console.error(`deprovisionTrainingUser: training responded ${response.status} — ${body}`);
+      return { ok: false, status: response.status, body };
+    }
+    return { ok: true };
+  } catch (err) {
+    console.error('deprovisionTrainingUser: request failed —', err.message);
+    return { ok: false, error: err.message };
   }
 }
 
@@ -1607,6 +1655,12 @@ async function provisionPortalUsers(uid, portalsAccess, profile, portalMappings)
       email: profile?.email || '',
       fullName: profile?.fullName || '',
       role: trainingRole,
+    });
+  } else {
+    await deprovisionTrainingUser({
+      uid,
+      email: profile?.email || '',
+      fullName: profile?.fullName || '',
     });
   }
 
@@ -4199,14 +4253,25 @@ function parseSandboxFlag(req) {
   return raw === true || raw === '1' || raw === 'true';
 }
 
+/** Soft-launch unlock (O×5 on Fun) — competitive play before STACK_WALK_LIVE_FROM. */
+function parseStackWalkPreviewFlag(req) {
+  const raw = req.query?.preview ?? req.body?.preview;
+  return raw === true || raw === '1' || raw === 'true';
+}
+
+function isStackWalkSecretPreviewDay(dayKey) {
+  const key = String(dayKey || '');
+  return key >= STACK_WALK_PREVIEW_FROM && key < STACK_WALK_LIVE_FROM;
+}
+
 /**
  * Enforce weekday rotation for competitive play.
  * Sandbox / practice / admin preview skip the gate.
  * Soft GETs return a closed payload for weekends and sit-outs instead of throwing.
  */
-async function enforceFunGameAccess(gameKey, { dayKey, practice, sandbox }, { softWeekend = false } = {}) {
+async function enforceFunGameAccess(gameKey, { dayKey, practice, sandbox, preview }, { softWeekend = false } = {}) {
   await loadFunRotationSettings(db);
-  if (sandbox || practice) {
+  if (sandbox || practice || preview) {
     return { closed: false, rotation: getFunRotationForDay(dayKey) };
   }
   try {
@@ -8022,17 +8087,17 @@ exports.getDailyToolboxKick = onRequest(
         const snap = await ref.get();
         if (snap.exists) {
           gameData = snap.data() || gameData;
-          // Mid-round reload (F5) — quietly mark caught; round stays open with speed nerf.
+          // Mid-round reload: log an extra run for investigation — do NOT auto-punish.
           const midRound = gameData.status === 'in_progress'
             || (gameData.status === 'won' && gameData.roundComplete === false);
           if (midRound) {
-            const cheatPatch = markToolboxKickCaughtCheating(gameData, {
+            const runPatch = markToolboxKickExtraRun(gameData, {
               FieldValue: admin.firestore.FieldValue,
               reason: 'reload',
             });
             const punishPatch = punished || gameData.punished ? { punished: true } : {};
-            await ref.set({ ...cheatPatch, ...punishPatch }, { merge: true });
-            gameData = { ...gameData, ...cheatPatch, ...punishPatch };
+            await ref.set({ ...runPatch, ...punishPatch }, { merge: true });
+            gameData = { ...gameData, ...runPatch, ...punishPatch };
           } else if (punished && !gameData.punished) {
             await ref.set({ punished: true }, { merge: true });
             gameData = { ...gameData, punished: true };
@@ -8135,16 +8200,12 @@ exports.submitToolboxKickResult = onRequest(
       const existing = await ref.get();
       const existingData = existing.exists ? existing.data() || {} : {};
       const punished = Boolean(existingData.punished) || isToolboxPunishedProfile(session.profile);
-      const tracked = isToolboxKickTrackedGame({
-        ...existingData,
-        punished,
-        caughtCheating: Boolean(existingData.caughtCheating),
-      });
       const maxAttempts = mode === 'allOrNothing' ? 1 : 3;
+      // Honour client finalize; also finalize once all attempts are in.
+      // Do NOT force-finalize non-tracked games — every attempt is saved as a partial.
       const finalize = req.body?.finalize === true
         || req.body?.finalize === 'true'
-        || attempts.length >= maxAttempts
-        || !tracked;
+        || attempts.length >= maxAttempts;
       const fullyDone = isToolboxKickRoundFullyDone(existingData);
 
       if (existing.exists && fullyDone) {
@@ -8187,9 +8248,10 @@ exports.submitToolboxKickResult = onRequest(
         distanceM: bestDistance,
         attempts: mergedAttempts,
         energyDrinkUsed: Boolean(energyDrinkUsed || existingData.energyDrinkUsed),
-        caughtCheating: Boolean(existingData.caughtCheating),
+        caughtCheating: false,
         punished,
         roundComplete: finalize,
+        runCount: Math.max(1, Math.floor(Number(existingData.runCount) || 1)),
         reloadCount: Math.max(0, Math.floor(Number(existingData.reloadCount) || 0)),
         forfeited: false,
         forfeitReason: null,
@@ -8317,25 +8379,28 @@ exports.startToolboxKickRound = onRequest(
         return;
       }
 
-      // Already locked / mid tracked round (usually after F5) → caught, resume with nerf.
+      // Already locked / mid round (usually after F5) → log extra run, resume without nerf.
       const midRound = existingData?.status === 'in_progress'
         || (existingData?.status === 'won' && existingData?.roundComplete === false);
       if (midRound) {
-        const cheatPatch = markToolboxKickCaughtCheating(existingData, {
+        const runPatch = markToolboxKickExtraRun(existingData, {
           FieldValue: admin.firestore.FieldValue,
           reason: 'restart',
         });
         await ref.set({
-          ...cheatPatch,
+          ...runPatch,
           punished: Boolean(punished || existingData.punished),
           mode: normalizeToolboxKickMode(existingData.mode || mode),
+          // Keep any best distance already submitted; clear incomplete round flag.
+          status: 'in_progress',
+          roundComplete: false,
         }, { merge: true });
         const snap = await ref.get();
         res.status(200).json({
           practice: false,
-          game: serializeToolboxKickGame(snap.data() || { ...existingData, ...cheatPatch, punished }),
+          game: serializeToolboxKickGame(snap.data() || { ...existingData, ...runPatch, punished }),
           locked: true,
-          caughtCheating: true,
+          extraRun: true,
           punished,
         });
         return;
@@ -8354,7 +8419,14 @@ exports.startToolboxKickRound = onRequest(
         caughtCheating: false,
         punished: Boolean(punished),
         roundComplete: false,
+        runCount: 1,
         reloadCount: 0,
+        runs: [{
+          at: new Date().toISOString(),
+          reason: 'start',
+          distanceMAtTime: 0,
+          attemptsAtTime: [],
+        }],
         forfeited: false,
         startedAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -8786,6 +8858,215 @@ exports.submitWantedResult = onRequest(
   }),
 );
 
+// GET → O Dell's Amazon Run saved result / leaderboard (one walk per day).
+exports.getDailyStackWalk = onRequest(
+  { region: 'europe-west2' },
+  withCors(async (req, res) => {
+    if (req.method !== 'GET') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
+
+    const session = await getVerifiedSessionUser(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+
+    try {
+      const todayKey = getStackWalkDayKey();
+      const sandbox = parseSandboxFlag(req) && canManagePortalAccess(session.profile);
+      const secretPreview = parseStackWalkPreviewFlag(req) && isStackWalkSecretPreviewDay(todayKey);
+      if (todayKey < STACK_WALK_LIVE_FROM && !sandbox && !secretPreview) {
+        res.status(403).json({
+          error: `O Dell's Amazon Run goes live ${STACK_WALK_LIVE_FROM}.`,
+          stackWalkLiveFrom: STACK_WALK_LIVE_FROM,
+        });
+        return;
+      }
+      const { dayKey, practice } = resolvePlayableDayKey(req.query?.dayKey, todayKey, {
+        sandbox,
+        allowFuturePreview: sandbox,
+      });
+      const access = await enforceFunGameAccess(
+        'stackwalk',
+        { dayKey, practice, sandbox, preview: secretPreview },
+        { softWeekend: true },
+      );
+      if (access.closed) {
+        res.status(200).json({
+          ...funAccessClosedPayload(dayKey, access),
+          totalSolved: 0,
+        });
+        return;
+      }
+
+      const leaderboard = practice ? [] : await buildStackWalkLeaderboard(dayKey);
+      let gameData = {
+        dayKey,
+        status: 'ready',
+        distanceM: 0,
+      };
+      if (!practice) {
+        const snap = await db.collection('stack_walk_games').doc(`${dayKey}_${session.profile.uid}`).get();
+        if (snap.exists) gameData = snap.data() || gameData;
+      }
+
+      res.status(200).json({
+        practice,
+        preview: Boolean(secretPreview),
+        weekend: false,
+        rotation: access.rotation,
+        stackWalkLiveFrom: STACK_WALK_LIVE_FROM,
+        game: serializeStackWalkGame(gameData),
+        leaderboard,
+        totalSolved: leaderboard.length,
+      });
+    } catch (error) {
+      console.error('getDailyStackWalk failed', error);
+      res.status(error.status || 500).json({ error: error.message || "Failed to load O Dell's Amazon Run." });
+    }
+  }),
+);
+
+// POST { distanceM, durationMs?, startedAt?, dayKey?, sandbox? } → one competitive walk per day.
+exports.submitStackWalkResult = onRequest(
+  { region: 'europe-west2' },
+  withCors(async (req, res) => {
+    if (req.method !== 'POST') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
+
+    const session = await getVerifiedSessionUser(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+
+    try {
+      const todayKey = getStackWalkDayKey();
+      const sandbox = parseSandboxFlag(req) && canManagePortalAccess(session.profile);
+      const secretPreview = parseStackWalkPreviewFlag(req) && isStackWalkSecretPreviewDay(todayKey);
+      if (todayKey < STACK_WALK_LIVE_FROM && !sandbox && !secretPreview) {
+        res.status(403).json({
+          error: `O Dell's Amazon Run goes live ${STACK_WALK_LIVE_FROM}. Practice scores are not submitted.`,
+          stackWalkLiveFrom: STACK_WALK_LIVE_FROM,
+        });
+        return;
+      }
+      const { dayKey, practice } = resolvePlayableDayKey(req.body?.dayKey, todayKey, {
+        sandbox,
+        allowFuturePreview: sandbox,
+      });
+      await enforceFunGameAccess('stackwalk', {
+        dayKey,
+        practice,
+        sandbox,
+        preview: secretPreview,
+      });
+
+      const distanceM = clampStackWalkDistance(req.body?.distanceM);
+      if (!Number.isFinite(Number(req.body?.distanceM))) {
+        res.status(400).json({ error: 'Need a valid distance.' });
+        return;
+      }
+      const clientDuration = Number(req.body?.durationMs);
+      const clientStartedAt = typeof req.body?.startedAt === 'string' ? req.body.startedAt : null;
+      const durationMs = Number.isFinite(clientDuration) && clientDuration >= 0
+        ? Math.floor(clientDuration)
+        : null;
+
+      if (practice || sandbox) {
+        res.status(200).json({
+          practice: true,
+          sandbox: Boolean(sandbox),
+          game: serializeStackWalkGame({
+            dayKey,
+            status: 'won',
+            distanceM,
+            durationMs,
+            startedAt: clientStartedAt,
+            completedAt: new Date().toISOString(),
+          }),
+          leaderboard: [],
+          totalSolved: 0,
+        });
+        return;
+      }
+
+      const gameId = `${dayKey}_${session.profile.uid}`;
+      const ref = db.collection('stack_walk_games').doc(gameId);
+      const existing = await ref.get();
+      const existingData = existing.exists ? existing.data() || {} : {};
+      if (existing.exists && existingData.status === 'won') {
+        const prev = clampStackWalkDistance(existingData.distanceM);
+        if (distanceM <= prev) {
+          const leaderboard = await buildStackWalkLeaderboard(dayKey);
+          res.status(200).json({
+            practice: false,
+            game: serializeStackWalkGame(existingData),
+            leaderboard,
+            totalSolved: leaderboard.length,
+            alreadySubmitted: true,
+          });
+          return;
+        }
+      }
+
+      const payload = {
+        uid: session.profile.uid,
+        fullName: session.profile.fullName || session.profile.email || 'Colleague',
+        email: session.profile.email || '',
+        dayKey,
+        status: 'won',
+        distanceM,
+        durationMs,
+        startedAt: clientStartedAt || existingData.startedAt || null,
+        completedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+      await ref.set(payload, { merge: true });
+
+      const streaks = await recordFunStreakWin(db, {
+        uid: session.profile.uid,
+        fullName: payload.fullName,
+        email: payload.email,
+        gameKey: 'stackwalk',
+        dayKey,
+        FieldValue: admin.firestore.FieldValue,
+      });
+      const all = await loadFunStreaks(db, session.profile.uid, {
+        todayKey: dayKey,
+        fullName: payload.fullName,
+        email: payload.email,
+        FieldValue: admin.firestore.FieldValue,
+      });
+      const achievements = serializeAchievements({ ...all, stackwalk: streaks }, dayKey);
+
+      const snap = await ref.get();
+      const leaderboard = await buildStackWalkLeaderboard(dayKey);
+      await syncDayMedals(db, {
+        gameKey: 'stackwalk',
+        dayKey,
+        leaderboardRows: leaderboard,
+        FieldValue: admin.firestore.FieldValue,
+      });
+
+      res.status(200).json({
+        practice: false,
+        game: serializeStackWalkGame(snap.data() || {}),
+        leaderboard,
+        totalSolved: leaderboard.length,
+        achievements,
+      });
+    } catch (error) {
+      console.error('submitStackWalkResult failed', error);
+      res.status(error.status || 500).json({ error: error.message || "Failed to submit O Dell's Amazon Run." });
+    }
+  }),
+);
+
 const FUN_LEADERBOARD_LIMIT = 2000;
 
 const FUN_GAME_COLLECTIONS = {
@@ -8800,7 +9081,39 @@ const FUN_GAME_COLLECTIONS = {
   pipes: 'pipes_games',
   toolboxkick: 'toolbox_kick_games',
   wanted: 'wanted_games',
+  stackwalk: 'stack_walk_games',
 };
+
+async function buildStackWalkLeaderboard(dayKey) {
+  const snap = await db.collection('stack_walk_games').where('dayKey', '==', dayKey).limit(FUN_LEADERBOARD_LIMIT).get();
+  const rows = snap.docs.map((doc) => {
+    const data = doc.data() || {};
+    return {
+      uid: data.uid || doc.id,
+      fullName: data.fullName || 'Colleague',
+      status: data.status || 'ready',
+      distanceM: clampStackWalkDistance(data.distanceM),
+      durationMs: Number.isFinite(data.durationMs) ? data.durationMs : null,
+      completedAt: data.completedAt?.toDate?.()?.toISOString?.() || null,
+    };
+  }).filter((row) => row.status === 'won');
+
+  rows.sort(compareStackWalkRows);
+  assignJointRanks(rows, (a, b) => a.distanceM === b.distanceM);
+
+  return rows.map((row) => ({
+    uid: row.uid,
+    fullName: row.fullName,
+    status: row.status,
+    distanceM: row.distanceM,
+    durationMs: row.durationMs,
+    rank: row.rank,
+    joint: row.joint,
+    medal: row.medal,
+    completedAt: row.completedAt,
+    resultLabel: stackWalkResultLabel(row),
+  }));
+}
 
 async function buildPipesLeaderboard(dayKey) {
   const snap = await db.collection('pipes_games').where('dayKey', '==', dayKey).limit(FUN_LEADERBOARD_LIMIT).get();
@@ -8839,16 +9152,23 @@ async function buildPipesLeaderboard(dayKey) {
 }
 
 async function buildToolboxKickLeaderboardBundle(dayKey) {
-  const snap = await db.collection('toolbox_kick_games')
+  // Day board: query by dayKey so recent scores cannot fall outside a global won-limit.
+  const daySnap = await db.collection('toolbox_kick_games')
+    .where('dayKey', '==', dayKey)
+    .limit(FUN_LEADERBOARD_LIMIT)
+    .get();
+  // All-time pool: won games (cap is high enough for current volume).
+  const allSnap = await db.collection('toolbox_kick_games')
     .where('status', '==', 'won')
     .limit(FUN_LEADERBOARD_LIMIT)
     .get();
-  const { worldRecord, personalBests } = collectToolboxKickRecords(snap.docs);
-  const allTimeTop10 = collectToolboxKickAllTimeTop(snap.docs, 10);
+  const { worldRecord, personalBests } = collectToolboxKickRecords(allSnap.docs);
+  const allTimeTop10 = collectToolboxKickAllTimeTop(allSnap.docs, 10);
   const wrDistance = worldRecord ? worldRecord.distanceM : null;
 
-  const rows = snap.docs.map((doc) => {
+  const rows = daySnap.docs.map((doc) => {
     const data = doc.data() || {};
+    const runCount = Math.max(1, Math.floor(Number(data.runCount) || 1));
     return {
       uid: data.uid || doc.id,
       fullName: data.fullName || 'Colleague',
@@ -8859,6 +9179,8 @@ async function buildToolboxKickLeaderboardBundle(dayKey) {
       forfeited: Boolean(data.forfeited),
       caughtCheating: Boolean(data.caughtCheating),
       punished: Boolean(data.punished),
+      runCount,
+      investigate: runCount > 3,
       shameScore: Boolean(data.shameScore),
       resultLabelOverride: data.resultLabelOverride ? String(data.resultLabelOverride) : null,
       leaderboardGif: data.leaderboardGif ? String(data.leaderboardGif) : null,
@@ -8904,6 +9226,8 @@ async function buildToolboxKickLeaderboardBundle(dayKey) {
       forfeited: row.forfeited,
       caughtCheating: row.caughtCheating,
       punished: row.punished,
+      runCount: row.runCount,
+      investigate: row.investigate,
       shameScore: row.shameScore,
       leaderboardGif: row.leaderboardGif,
       failed: row.forfeited || row.shameScore,
@@ -9044,6 +9368,7 @@ async function buildLeaderboardForGame(gameKey, dayKey) {
   if (gameKey === 'pipes') return buildPipesLeaderboard(dayKey);
   if (gameKey === 'toolboxkick') return buildToolboxKickLeaderboard(dayKey);
   if (gameKey === 'wanted') return buildWantedLeaderboard(dayKey);
+  if (gameKey === 'stackwalk') return buildStackWalkLeaderboard(dayKey);
   return [];
 }
 
@@ -9694,6 +10019,7 @@ exports.adminBackfillFunMedals = onRequest(
         pipes: (dayKey) => buildPipesLeaderboard(dayKey),
         toolboxkick: (dayKey) => buildToolboxKickLeaderboard(dayKey),
         wanted: (dayKey) => buildWantedLeaderboard(dayKey),
+        stackwalk: (dayKey) => buildStackWalkLeaderboard(dayKey),
       };
       const dayKeysByGame = {};
       await Promise.all(Object.entries(FUN_GAME_COLLECTIONS).map(async ([gameKey, collectionName]) => {
