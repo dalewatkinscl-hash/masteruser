@@ -28,6 +28,12 @@ export const TOOLBOX_KICK_GAME = { key: 'toolboxkick', label: 'Little Dicks Tool
 export const WANTED_LIVE_FROM = '2026-09-08';
 export const WANTED_GAME = { key: 'wanted', label: 'Daily Wanted' };
 
+/** Soft launch / O×5 secret unlock from this day. */
+export const STACK_WALK_PREVIEW_FROM = '2026-09-18';
+/** Joins Fun rotation (normal play) from this Europe/London day. */
+export const STACK_WALK_LIVE_FROM = '2026-09-19';
+export const STACK_WALK_GAME = { key: 'stackwalk', label: "O Dell's Amazon Run" };
+
 export const PERMANENT_FUN_FROM = '2026-08-27';
 
 export const DEFAULT_PERMANENT_GAME_KEYS = ['wordle', 'toolboxkick', 'wanted'];
@@ -43,6 +49,7 @@ export const FUN_GAME_ROSTER = [
   PIPES_GAME,
   TOOLBOX_KICK_GAME,
   WANTED_GAME,
+  STACK_WALK_GAME,
 ];
 
 export const ROTATION_START_DAY_KEY = '2026-08-03';
@@ -94,6 +101,7 @@ export function getRosterForDay(dayKey) {
   if (key >= PIPES_LIVE_FROM) roster.push(PIPES_GAME);
   if (key >= TOOLBOX_KICK_LIVE_FROM) roster.push(TOOLBOX_KICK_GAME);
   if (key >= WANTED_LIVE_FROM) roster.push(WANTED_GAME);
+  if (key >= STACK_WALK_LIVE_FROM) roster.push(STACK_WALK_GAME);
   return roster;
 }
 
@@ -127,6 +135,15 @@ export function isToolboxKickLive(dayKey) {
 
 export function isWantedLive(dayKey) {
   return String(dayKey || '') >= WANTED_LIVE_FROM;
+}
+
+export function isStackWalkLive(dayKey) {
+  return String(dayKey || '') >= STACK_WALK_LIVE_FROM;
+}
+
+export function isStackWalkPreviewDay(dayKey) {
+  const key = String(dayKey || '');
+  return key >= STACK_WALK_PREVIEW_FROM && key < STACK_WALK_LIVE_FROM;
 }
 
 export function addDaysToDayKey(dayKey, deltaDays) {
@@ -252,6 +269,7 @@ export function getFunRotationForDay(dayKey, settingsInput = null) {
       pipesPractice: false,
       toolboxKickLive: Boolean(key && key >= TOOLBOX_KICK_LIVE_FROM),
       wantedLive: Boolean(key && key >= WANTED_LIVE_FROM),
+      stackWalkLive: Boolean(key && key >= STACK_WALK_LIVE_FROM),
     };
   }
 
@@ -295,6 +313,7 @@ export function getFunRotationForDay(dayKey, settingsInput = null) {
     pipesPractice: key < PIPES_LIVE_FROM && !isWeekendDayKey(key),
     toolboxKickLive: key >= TOOLBOX_KICK_LIVE_FROM,
     wantedLive: key >= WANTED_LIVE_FROM,
+    stackWalkLive: key >= STACK_WALK_LIVE_FROM,
   };
 }
 

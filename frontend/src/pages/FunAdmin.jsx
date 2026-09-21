@@ -10,6 +10,7 @@ import GeoGuessrPanel from '../components/GeoGuessrPanel';
 import { EncloseSandbox } from '../components/EnclosePanel';
 import { LetterboxSandbox } from '../components/LetterboxPanel';
 import { PipesSandbox } from '../components/PipesPanel';
+import { StackWalkSandbox } from '../components/StackWalkPanel';
 import { CasefileSandbox } from '../components/CasefilePanel';
 import { ToolboxKickSandbox } from '../components/ToolboxKickPanel';
 import { WantedSandbox } from '../components/WantedPanel';
@@ -368,6 +369,7 @@ const TABS = [
   { id: 'enclose', label: 'Dev · Enclose (cow)' },
   { id: 'letterbox', label: 'Dev · Letter Box' },
   { id: 'pipes', label: 'Dev · Pipes' },
+  { id: 'stackwalk', label: "Dev · O Dell's Amazon Run" },
   { id: 'casefile', label: 'Dev · Casefile' },
   { id: 'toolboxkick', label: 'Dev · Little Dicks Toolbox' },
   { id: 'geoguessr', label: 'GeoGuessr' },
@@ -1280,6 +1282,7 @@ export default function FunAdmin() {
         {tab === 'enclose' && <EncloseSandbox />}
         {tab === 'letterbox' && <LetterboxSandbox />}
         {tab === 'pipes' && <PipesSandbox />}
+        {tab === 'stackwalk' && <StackWalkSandbox />}
         {tab === 'casefile' && <CasefileSandbox />}
         {tab === 'toolboxkick' && <ToolboxKickSandbox />}
         {tab === 'geoguessr' && <GeoGuessrSandbox />}

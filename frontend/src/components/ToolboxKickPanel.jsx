@@ -33,6 +33,46 @@ const CHUNK_SIZE = 4000;
 const AHEAD_BUFFER = 2800;
 const INTRO_STORAGE_KEY = 'toolbox-kick-intro-seen-v4';
 const MAX_ATTEMPTS = 3;
+const TOOLBOX_PENDING_SCORE_KEY = 'toolbox-kick-pending-score';
+
+function readPendingToolboxScore() {
+  try {
+    const raw = sessionStorage.getItem(TOOLBOX_PENDING_SCORE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    if (!parsed.dayKey || !Number.isFinite(Number(parsed.distanceM))) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writePendingToolboxScore(payload) {
+  try {
+    sessionStorage.setItem(TOOLBOX_PENDING_SCORE_KEY, JSON.stringify({
+      ...payload,
+      savedAt: Date.now(),
+    }));
+  } catch {
+    /* ignore quota / private mode */
+  }
+}
+
+function clearPendingToolboxScore(dayKey = null) {
+  try {
+    if (!dayKey) {
+      sessionStorage.removeItem(TOOLBOX_PENDING_SCORE_KEY);
+      return;
+    }
+    const pending = readPendingToolboxScore();
+    if (!pending || pending.dayKey === dayKey) {
+      sessionStorage.removeItem(TOOLBOX_PENDING_SCORE_KEY);
+    }
+  } catch {
+    /* ignore */
+  }
+}
 /** World X where rare smoker drivers can appear (12 km of flight). */
 const SMOKER_FROM_X = BOX_REST_X + 12 * 1000 * PX_PER_METRE;
 /** Even rarer Macan — starts a bit further out than the smoker. */
@@ -1927,6 +1967,7 @@ function ToolboxKickGame({
       roundBest,
       attemptDistances,
       roundReported: false,
+      lastSubmittedAttempt: 0,
       perfectLaunch: false,
       message,
       kickFlash: 0,
@@ -2514,11 +2555,10 @@ function ToolboxKickGame({
                     facing: -1,
                   };
                   st.message = `Attempt ${st.attempt} · ${formatDistance(dist)}. HA-HA…`;
-                } else {
                   const maxAttempts = st.maxAttempts || MAX_ATTEMPTS;
-                  const tracked = Boolean(st.caughtCheating);
                   const finalize = st.attempt >= maxAttempts;
-                  if (competitiveRef.current && (tracked || finalize) && (!st.roundReported || tracked)) {
+                  if (competitiveRef.current && st.lastSubmittedAttempt !== st.attempt) {
+                    st.lastSubmittedAttempt = st.attempt;
                     if (finalize) {
                       st.roundReported = true;
                       setRoundDone(true);
@@ -2527,35 +2567,36 @@ function ToolboxKickGame({
                       distanceM: st.roundBest,
                       attempts: [...st.attemptDistances],
                       energyDrinkUsed: Boolean(st.roundBestUsedEnergyDrink),
-                      finalize: finalize || !tracked,
+                      finalize,
+                    });
+                  }
+                } else {
+                  const maxAttempts = st.maxAttempts || MAX_ATTEMPTS;
+                  const finalize = st.attempt >= maxAttempts;
+                  // Save every attempt (not only the last) so a reload cannot wipe a finished kick.
+                  if (competitiveRef.current && st.lastSubmittedAttempt !== st.attempt) {
+                    st.lastSubmittedAttempt = st.attempt;
+                    if (finalize) {
+                      st.roundReported = true;
+                      setRoundDone(true);
+                    }
+                    onRoundCompleteRef.current?.({
+                      distanceM: st.roundBest,
+                      attempts: [...st.attemptDistances],
+                      energyDrinkUsed: Boolean(st.roundBestUsedEnergyDrink),
+                      finalize,
                     });
                   }
                   if (st.attempt < maxAttempts) {
-                    st.message = `Attempt ${st.attempt} · ${formatDistance(dist)}. Tap for attempt ${st.attempt + 1}/${maxAttempts}`;
+                    st.message = competitiveRef.current
+                      ? `Attempt ${st.attempt} · ${formatDistance(dist)}. Saving… Tap for attempt ${st.attempt + 1}/${maxAttempts}`
+                      : `Attempt ${st.attempt} · ${formatDistance(dist)}. Tap for attempt ${st.attempt + 1}/${maxAttempts}`;
                   } else if (competitiveRef.current) {
-                    st.message = `Round locked · best ${formatDistance(st.roundBest)}. Leaderboard score submitted.`;
+                    st.message = `Round locked · best ${formatDistance(st.roundBest)}. Saving score…`;
                   } else {
                     st.message = dist < 0
                       ? `Round over · best ${formatDistance(st.roundBest)}. (Yes, negative is allowed.) Tap for a new round`
                       : `Round over · best ${formatDistance(st.roundBest)}. Tap for a new round`;
-                  }
-                }
-                // Punished: log score now (before Mach 2 humiliation), then wait for Little Dick.
-                if (st.punished) {
-                  const maxAttempts = st.maxAttempts || MAX_ATTEMPTS;
-                  const tracked = true;
-                  const finalize = st.attempt >= maxAttempts;
-                  if (competitiveRef.current && (!st.roundReported || tracked)) {
-                    if (finalize) {
-                      st.roundReported = true;
-                      setRoundDone(true);
-                    }
-                    onRoundCompleteRef.current?.({
-                      distanceM: st.roundBest,
-                      attempts: [...st.attemptDistances],
-                      energyDrinkUsed: Boolean(st.roundBestUsedEnergyDrink),
-                      finalize: finalize || !tracked,
-                    });
                   }
                 }
                 syncHud(st);
@@ -3383,7 +3424,7 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
       payload.game?.status === 'in_progress'
       || (payload.game?.status === 'won' && payload.game?.roundComplete === false)
     ) {
-      // Reload mid-round: server marks caughtCheating; resume with speed nerf.
+      // Mid-round reload: resume the same mode (extra runs are logged server-side; no auto-nerf).
       setMode(payload.game.mode || 'careful');
       roundLockedRef.current = !practice;
     } else {
@@ -3398,6 +3439,52 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
       try {
         setLoading(true);
         await load(dayKey);
+        if (cancelled || practice) return;
+
+        const pending = readPendingToolboxScore();
+        if (!pending || pending.dayKey !== dayKey) return;
+
+        try {
+          setSubmitting(true);
+          const response = await fetch('/api/submitToolboxKickResult', {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              mode: pending.mode || 'careful',
+              distanceM: pending.distanceM,
+              attempts: Array.isArray(pending.attempts) ? pending.attempts : [pending.distanceM],
+              energyDrinkUsed: Boolean(pending.energyDrinkUsed),
+              finalize: Boolean(pending.finalize),
+              dayKey: dayKey !== todayKey ? dayKey : undefined,
+            }),
+          });
+          const payload = (await readJsonResponse(response)) || {};
+          if (cancelled) return;
+          if (response.ok || payload.alreadySubmitted) {
+            clearPendingToolboxScore(dayKey);
+            if (payload.game) setGame(payload.game);
+            if (Array.isArray(payload.leaderboard)) setLeaderboard(payload.leaderboard);
+            if (payload.allTimeRecord !== undefined) setAllTimeRecord(payload.allTimeRecord || null);
+            if (payload.allTimeTop10 !== undefined) {
+              setAllTimeTop10(Array.isArray(payload.allTimeTop10) ? payload.allTimeTop10 : []);
+            }
+            if (payload.superRage) setSuperRage(payload.superRage);
+            if (payload.game?.status === 'won' && payload.game?.roundComplete !== false) {
+              setMode(payload.game.mode || pending.mode || 'careful');
+              roundLockedRef.current = false;
+            }
+            setError('');
+          } else if (!payload.needStart) {
+            setError(payload.error || 'Could not recover your saved score. Keep this tab open and try again.');
+          }
+        } catch (flushErr) {
+          if (!cancelled) {
+            setError(flushErr.message || 'Could not recover your saved score.');
+          }
+        } finally {
+          if (!cancelled) setSubmitting(false);
+        }
       } catch (err) {
         if (!cancelled) {
           setError(err.message || 'Failed to load Little Dicks Toolbox.');
@@ -3410,7 +3497,7 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
     return () => {
       cancelled = true;
     };
-  }, [dayKey, load]);
+  }, [dayKey, load, practice, todayKey]);
 
   const startRound = useCallback(async (pickedMode) => {
     if (practice) {
@@ -3446,6 +3533,45 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
 
       roundLockedRef.current = true;
       setMode(payload.game?.mode || pickedMode);
+
+      // If a kick finished before the server round was open, flush the stashed score now.
+      const pending = readPendingToolboxScore();
+      if (pending && pending.dayKey === dayKey) {
+        try {
+          setSubmitting(true);
+          const submitResponse = await fetch('/api/submitToolboxKickResult', {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              mode: pending.mode || pickedMode,
+              distanceM: pending.distanceM,
+              attempts: Array.isArray(pending.attempts) ? pending.attempts : [pending.distanceM],
+              energyDrinkUsed: Boolean(pending.energyDrinkUsed),
+              finalize: Boolean(pending.finalize),
+              dayKey: dayKey !== todayKey ? dayKey : undefined,
+            }),
+          });
+          const submitPayload = (await readJsonResponse(submitResponse)) || {};
+          if (submitResponse.ok || submitPayload.alreadySubmitted) {
+            clearPendingToolboxScore(dayKey);
+            if (submitPayload.game) setGame(submitPayload.game);
+            if (Array.isArray(submitPayload.leaderboard)) setLeaderboard(submitPayload.leaderboard);
+            if (submitPayload.allTimeRecord !== undefined) setAllTimeRecord(submitPayload.allTimeRecord || null);
+            if (submitPayload.allTimeTop10 !== undefined) {
+              setAllTimeTop10(Array.isArray(submitPayload.allTimeTop10) ? submitPayload.allTimeTop10 : []);
+            }
+            if (submitPayload.superRage) setSuperRage(submitPayload.superRage);
+            if (submitPayload.game?.status === 'won' && submitPayload.game?.roundComplete !== false) {
+              roundLockedRef.current = false;
+            }
+          }
+        } catch {
+          /* pending kept for next load */
+        } finally {
+          setSubmitting(false);
+        }
+      }
     } catch (err) {
       setError(err.message || 'Could not start your round.');
       setMode(null);
@@ -3461,24 +3587,36 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
     energyDrinkUsed = false,
     finalize = true,
   }) => {
-    if (practice || !mode) return;
+    if (practice) return;
+    const submitMode = mode || 'careful';
+    writePendingToolboxScore({
+      dayKey,
+      mode: submitMode,
+      distanceM,
+      attempts: Array.isArray(attempts) ? attempts : [distanceM],
+      energyDrinkUsed: Boolean(energyDrinkUsed),
+      finalize: Boolean(finalize),
+    });
     try {
       setSubmitting(true);
+      setError('');
       const response = await fetch('/api/submitToolboxKickResult', {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          mode,
+          mode: submitMode,
           distanceM,
           attempts,
           energyDrinkUsed: Boolean(energyDrinkUsed),
           finalize: Boolean(finalize),
           dayKey: dayKey !== todayKey ? dayKey : undefined,
         }),
+        keepalive: true,
       });
       const payload = (await readJsonResponse(response)) || {};
       if (!response.ok) throw new Error(payload.error || 'Failed to submit score.');
+      clearPendingToolboxScore(dayKey);
       setGame(payload.game || null);
       if (finalize || payload.game?.roundComplete !== false) {
         roundLockedRef.current = false;
@@ -3493,11 +3631,8 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
         onAchievements(payload.achievements);
       }
     } catch (err) {
-      setError(err.message || 'Could not submit your score.');
-      if (finalize) {
-        setMode(null);
-        roundLockedRef.current = false;
-      }
+      // Keep the round open and leave the pending stash so reload can recover the score.
+      setError(`${err.message || 'Could not submit your score.'} Your kick is saved on this device — leave the tab open or refresh to retry.`);
     } finally {
       setSubmitting(false);
     }
@@ -3521,9 +3656,10 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
 
   const alreadyDone = game?.status === 'won' && game?.roundComplete !== false;
   const forfeited = Boolean(game?.forfeited);
-  const caughtCheating = Boolean(game?.caughtCheating);
   const punished = Boolean(game?.punished);
-  const speedNerfed = caughtCheating || punished;
+  const investigate = Boolean(game?.investigate) || (Number(game?.runCount) || 1) > 3;
+  const runCount = Math.max(1, Math.floor(Number(game?.runCount) || 1));
+  const speedNerfed = punished;
   const modeLabel = game?.mode === 'allOrNothing' || mode === 'allOrNothing' ? 'All or nothing' : '3 goes';
   const rageReady = practice || Boolean(superRage?.available);
 
@@ -3562,12 +3698,13 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
         </div>
       ) : null}
 
-      {!alreadyDone && caughtCheating && !punished ? (
-        <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 space-y-1">
-          <p className="text-sm text-amber-100 font-medium">Caught cheating</p>
+      {!alreadyDone && runCount > 1 && !punished ? (
+        <div className="rounded-xl border border-slate-500/40 bg-slate-500/10 px-4 py-3 space-y-1">
+          <p className="text-sm text-slate-200 font-medium">
+            Run {runCount} today
+          </p>
           <p className="text-xs text-slate-400">
-            Mid-round reload detected. Your toolbox is stuck at 10% speed for the rest of today’s go,
-            and each attempt is logged as you land.
+            Reload/restart detected earlier. Your best distance still counts — no speed penalty.
           </p>
         </div>
       ) : null}
@@ -3587,13 +3724,14 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
         <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 space-y-1">
           <p className="text-sm text-emerald-100 font-medium">
             Today’s kick logged · {formatDistance(game.distanceM)}
-            {caughtCheating ? ' · caught cheating (10% speed)' : ''}
             {punished ? ' · punished (10% speed)' : ''}
+            {investigate ? ' · investigate (4+ runs)' : ''}
             {submitting ? ' · Saving…' : ''}
           </p>
           <p className="text-xs text-slate-400">
             Mode: {modeLabel}
             {game.energyDrinkUsed ? ' · energy drink' : ''}
+            {runCount > 1 ? ` · ${runCount} runs` : ''}
             {Array.isArray(game.attempts) && game.attempts.length > 1
               ? ` · attempts ${game.attempts.map((n) => formatDistance(n)).join(', ')}`
               : ''}
@@ -3607,13 +3745,13 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
 
       {!alreadyDone && mode ? (
         <ToolboxKickGame
-          key={`${dayKey}-${mode}-${speedNerfed ? 'nerf' : 'clean'}-${punished ? 'pun' : 'free'}`}
+          key={`${dayKey}-${mode}-${speedNerfed ? 'nerf' : 'clean'}-${punished ? 'pun' : 'free'}-${runCount}`}
           mode={mode}
           competitive={!practice}
           onRoundComplete={practice ? null : submitRound}
           superRageAvailable={rageReady}
           onActivateSuperRage={practice ? null : activateSuperRage}
-          caughtCheating={caughtCheating}
+          caughtCheating={false}
           punished={punished}
         />
       ) : null}
@@ -3678,7 +3816,7 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
                 resultText={row.resultLabel || formatDistance(row.distanceM)}
                 metaText={[
                   row.forfeited ? 'quit/reload' : null,
-                  row.caughtCheating ? 'caught cheating' : null,
+                  row.investigate ? `investigate · ${row.runCount || 0} runs` : null,
                   row.punished ? 'punished' : null,
                   row.mode === 'allOrNothing' ? 'All or nothing' : '3 goes',
                   row.energyDrinkUsed ? '⚡ energy drink' : null,

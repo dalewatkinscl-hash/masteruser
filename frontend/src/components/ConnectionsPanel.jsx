@@ -80,11 +80,11 @@ export default function ConnectionsPanel({
   }, [forcedDayKey]);
 
   const solvedWordSet = useMemo(
-    () => new Set(solved.flatMap((g) => g.words || [])),
+    () => new Set((Array.isArray(solved) ? solved : []).flatMap((g) => g.words || [])),
     [solved],
   );
   const remainingWords = useMemo(
-    () => words.filter((w) => !solvedWordSet.has(w)),
+    () => (Array.isArray(words) ? words : []).filter((w) => !solvedWordSet.has(w)),
     [words, solvedWordSet],
   );
 
@@ -118,13 +118,13 @@ export default function ConnectionsPanel({
       });
       const payload = (await readJsonResponse(response)) || {};
       if (!response.ok) throw new Error(payload.error || 'Failed to submit Connections.');
-      setSolved(payload.game?.solved || nextSolved);
+      setSolved(Array.isArray(payload.game?.solved) ? payload.game.solved : (nextSolved || []));
       setMistakes(payload.game?.mistakes ?? nextMistakes);
       setSolution(payload.game?.solution || null);
       if (payload.game?.durationMs != null) setDurationMs(payload.game.durationMs);
       if (payload.game?.startedAt) setStartedAt(payload.game.startedAt);
       setFinished(true);
-      setLeaderboard(payload.leaderboard || []);
+      setLeaderboard(Array.isArray(payload.leaderboard) ? payload.leaderboard.filter(Boolean) : []);
       setTotalPlayed(payload.totalPlayed || 0);
       clearLocalGame(dayKey);
       if (Array.isArray(payload.achievements) && onAchievements) onAchievements(payload.achievements);
@@ -163,7 +163,7 @@ export default function ConnectionsPanel({
 
     setWords(payload.puzzle?.words || []);
     setGroupMeta(payload.puzzle?.groups || []);
-    setLeaderboard(payload.leaderboard || []);
+    setLeaderboard(Array.isArray(payload.leaderboard) ? payload.leaderboard.filter(Boolean) : []);
     setTotalPlayed(payload.totalPlayed || 0);
     setSelected([]);
     setMessage('');
@@ -171,7 +171,7 @@ export default function ConnectionsPanel({
 
     const alreadyDone = payload.game?.status === 'won' || payload.game?.status === 'lost';
     if (alreadyDone && !payload.practice) {
-      setSolved(payload.game.solved || []);
+      setSolved(Array.isArray(payload.game?.solved) ? payload.game.solved : []);
       setMistakes(payload.game.mistakes || 0);
       setSolution(payload.game.solution || null);
       setStartedAt(payload.game.startedAt || null);
@@ -183,15 +183,17 @@ export default function ConnectionsPanel({
 
     const local = payload.practice || isSandbox ? null : loadLocalGame(key);
     if (local) {
-      setSolved(local.solved || []);
-      setGuesses(local.guesses || []);
+      const localSolved = Array.isArray(local.solved) ? local.solved : [];
+      const localGuesses = Array.isArray(local.guesses) ? local.guesses : [];
+      setSolved(localSolved);
+      setGuesses(localGuesses);
       setMistakes(local.mistakes || 0);
       setStartedAt(local.startedAt || null);
       setDurationMs(local.durationMs ?? null);
-      const done = (local.solved || []).length >= 4 || (local.mistakes || 0) >= MAX_MISTAKES;
+      const done = localSolved.length >= 4 || (local.mistakes || 0) >= MAX_MISTAKES;
       setFinished(done);
       if (done) {
-        await syncFinish(local.guesses || [], local.solved || [], local.mistakes || 0, local.startedAt || null);
+        await syncFinish(localGuesses, localSolved, local.mistakes || 0, local.startedAt || null);
       }
     } else {
       setSolved([]);
@@ -503,7 +505,7 @@ export default function ConnectionsPanel({
             <p className="text-sm text-slate-500">No results yet.</p>
           ) : (
             <ol className="space-y-1.5">
-              {leaderboard.map((row) => (
+              {leaderboard.filter(Boolean).map((row) => (
                 <FunLeaderboardRow
                   key={row.uid || row.rank}
                   row={row}

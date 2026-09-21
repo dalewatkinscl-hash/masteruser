@@ -169,7 +169,7 @@ export function analyzeBoard(size, masks) {
 }
 
 export function getEffectiveMasks(tiles) {
-  return tiles.map((tile) => rotateMask(tile.baseMask, tile.rotation));
+  return (Array.isArray(tiles) ? tiles : []).map((tile) => rotateMask(tile?.baseMask, tile?.rotation));
 }
 
 export function isSolved(size, tiles) {
@@ -241,9 +241,10 @@ export function formatDuration(ms) {
 }
 
 export function clonePuzzle(puzzle) {
+  const tiles = Array.isArray(puzzle?.tiles) ? puzzle.tiles : [];
   return {
     ...puzzle,
-    tiles: puzzle.tiles.map((t) => ({ ...t })),
+    tiles: tiles.map((t) => ({ ...t })),
   };
 }
 

@@ -7,6 +7,7 @@ export default function AchievementsPanel({ achievements = [], isAdmin = false }
   const [backfilling, setBackfilling] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  const list = Array.isArray(achievements) ? achievements : [];
 
   const runBackfill = async () => {
     if (!isAdmin || backfilling) return;
@@ -32,7 +33,7 @@ export default function AchievementsPanel({ achievements = [], isAdmin = false }
     }
   };
 
-  if (!achievements.length) {
+  if (!list.length) {
     return (
       <div className="space-y-3">
         <p className="text-sm text-slate-500 text-center py-2">
@@ -60,7 +61,7 @@ export default function AchievementsPanel({ achievements = [], isAdmin = false }
         Weekday win streaks · fails reset · missed days don’t break them. Reach 5 for a star.
       </p>
       <ul className="divide-y divide-[#1a2540] rounded-xl border border-[#1a2540] overflow-hidden">
-        {achievements.map((item) => {
+        {list.map((item) => {
           const best = item.best || 0;
           const current = item.current || 0;
           const target = item.target || 5;

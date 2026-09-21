@@ -3,6 +3,7 @@ import { useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import EmployeeProfileCard from '../components/EmployeeProfileCard';
 import EmployeeFunPanel from '../components/EmployeeFunPanel';
+import FunErrorBoundary from '../components/FunErrorBoundary';
 import SuggestionBoxPanel from '../components/SuggestionBoxPanel';
 import KudosPanel from '../components/KudosPanel';
 import PollsPanel from '../components/PollsPanel';
@@ -144,7 +145,9 @@ export default function Profile() {
         <div className="px-4 sm:px-8 py-6">
           <div className="flex flex-col xl:flex-row gap-6 items-start">
             <div className="min-w-0 flex-1 w-full">
-              <EmployeeFunPanel currentUserUid={user?.uid} isAdmin={canManagePortalAccess(user)} />
+              <FunErrorBoundary>
+                <EmployeeFunPanel currentUserUid={user?.uid} isAdmin={canManagePortalAccess(user)} />
+              </FunErrorBoundary>
             </div>
             <aside className="w-full xl:w-[22rem] xl:sticky xl:top-4 flex-shrink-0">
               <div className="rounded-xl border border-base-300 bg-base-100/40 p-4">

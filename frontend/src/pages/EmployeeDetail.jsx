@@ -5,6 +5,7 @@ import EmployeeProfileCard from '../components/EmployeeProfileCard';
 import EmployeeDisciplinaryPanel from '../components/EmployeeDisciplinaryPanel';
 import EmployeeSharePointDocuments from '../components/EmployeeSharePointDocuments';
 import EmployeeFunPanel from '../components/EmployeeFunPanel';
+import FunErrorBoundary from '../components/FunErrorBoundary';
 import SuggestionBoxPanel from '../components/SuggestionBoxPanel';
 import PollsPanel from '../components/PollsPanel';
 import MergeEmployeeCard from '../components/MergeEmployeeCard';
@@ -663,7 +664,9 @@ export default function EmployeeDetail() {
             {activeTab === TAB_IDS.fun && (
               <div className="flex flex-col xl:flex-row gap-6 items-start">
                 <div className="min-w-0 flex-1 w-full">
-                  <EmployeeFunPanel currentUserUid={user?.uid} isAdmin={isAdmin} />
+                  <FunErrorBoundary>
+                    <EmployeeFunPanel currentUserUid={user?.uid} isAdmin={isAdmin} />
+                  </FunErrorBoundary>
                 </div>
                 <aside className="w-full xl:w-[22rem] xl:sticky xl:top-4 flex-shrink-0">
                   <div className="rounded-xl border border-[#1a2540] bg-[#0b1220]/60 p-4">

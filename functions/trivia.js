@@ -383,7 +383,8 @@ function questionById(questionId) {
 /**
  * Pick a bank question that has not been used before (trivia_spent/{id}).
  * Locks the choice on trivia_day_locks/{dayKey} so the day stays stable.
- * When every bank question is spent, the spent set is cleared and a new cycle starts.
+ * Questions stay burned for the whole cycle. Only when every bank ID is spent
+ * do we wipe spent and start a new cycle.
  */
 async function resolveBankQuestion(db, dayKey, FieldValue) {
   const lockRef = db.collection('trivia_day_locks').doc(dayKey);
@@ -403,43 +404,64 @@ async function resolveBankQuestion(db, dayKey, FieldValue) {
     }
   }
 
-  const spentSnap = await db.collection('trivia_spent').limit(Math.max(QUESTIONS.length + 20, 200)).get();
-  const spentDocs = spentSnap.docs;
-  const spent = new Set(spentDocs.map((doc) => doc.id));
-  const recycle = spent.size >= QUESTIONS.length;
+  // Heal drift: union spent with every historical day lock so reused IDs stay burned.
+  const [spentSnap, locksSnap] = await Promise.all([
+    db.collection('trivia_spent').limit(Math.max(QUESTIONS.length + 50, 300)).get(),
+    db.collection('trivia_day_locks').limit(400).get().catch(() => ({ docs: [] })),
+  ]);
+  const spent = new Set(spentSnap.docs.map((doc) => doc.id));
+  locksSnap.docs.forEach((doc) => {
+    const qid = String(doc.data()?.questionId || '');
+    if (qid) spent.add(qid);
+  });
 
-  // Actually clear spent docs when the bank is exhausted, otherwise every later day
-  // keeps recycling and only walks the same 50 questions by calendar ordinal.
-  if (recycle) {
+  const bankIds = QUESTIONS.map((q) => q.id);
+  const allBurned = bankIds.every((id) => spent.has(id));
+  let recycled = false;
+
+  if (allBurned) {
+    recycled = true;
     const wipe = db.batch();
-    spentDocs.forEach((doc) => wipe.delete(doc.ref));
-    // Firestore batches max 500; bank is ~50 so one batch is fine.
+    spentSnap.docs.forEach((doc) => wipe.delete(doc.ref));
     await wipe.commit();
     spent.clear();
   }
 
-  const start = ((dayOrdinal(dayKey) % QUESTIONS.length) + QUESTIONS.length) % QUESTIONS.length;
-  let chosen = null;
-  for (let i = 0; i < QUESTIONS.length; i += 1) {
-    const candidate = QUESTIONS[(start + i) % QUESTIONS.length];
-    if (!spent.has(candidate.id)) {
-      chosen = candidate;
-      break;
-    }
+  const available = QUESTIONS.filter((q) => !spent.has(q.id));
+  if (!available.length) {
+    // Should not happen after recycle; fall back to ordinal pick.
+    const start = ((dayOrdinal(dayKey) % QUESTIONS.length) + QUESTIONS.length) % QUESTIONS.length;
+    available.push(QUESTIONS[start]);
   }
-  if (!chosen) chosen = QUESTIONS[start];
+
+  // Stable pick among available for this day (not among the full bank).
+  const start = ((dayOrdinal(dayKey) % available.length) + available.length) % available.length;
+  const chosen = available[start];
 
   const batch = db.batch();
   batch.set(lockRef, {
     questionId: chosen.id,
     lockedAt: FieldValue.serverTimestamp(),
-    recycled: recycle,
+    recycled,
   });
   batch.set(db.collection('trivia_spent').doc(chosen.id), {
     questionId: chosen.id,
     usedOnDayKey: dayKey,
     usedAt: FieldValue.serverTimestamp(),
   }, { merge: true });
+  // Backfill any lock-known burns missing from spent (except when we just recycled).
+  if (!recycled) {
+    for (const id of spent) {
+      if (id === chosen.id) continue;
+      if (!questionById(id)) continue;
+      if (spentSnap.docs.some((doc) => doc.id === id)) continue;
+      batch.set(db.collection('trivia_spent').doc(id), {
+        questionId: id,
+        usedOnDayKey: 'backfill',
+        usedAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
+    }
+  }
   await batch.commit();
 
   return {

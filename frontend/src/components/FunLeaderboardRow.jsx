@@ -78,6 +78,7 @@ export default function FunLeaderboardRow({
   resultText,
   metaText = '',
 }) {
+  if (!row || typeof row !== 'object') return null;
   const isMe = row.uid === currentUserUid;
   const failed = row?.failed || row?.status === 'lost' || row?.correct === false;
   const gif = typeof row?.leaderboardGif === 'string' && row.leaderboardGif.trim()
@@ -93,7 +94,7 @@ export default function FunLeaderboardRow({
         <div className="min-w-0">
           <div className="flex items-center gap-2 min-w-0 flex-wrap">
             <span className={`truncate ${isMe ? 'text-indigo-300 font-semibold text-base' : 'text-slate-100'}`}>
-              {row.fullName}
+              {row.fullName || 'Unknown'}
               {isMe ? ' (you)' : ''}
             </span>
             <FunRankLabel row={row} />

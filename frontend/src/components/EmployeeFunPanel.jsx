@@ -10,6 +10,7 @@ import { LetterboxDailyPanel, LetterboxPracticePanel } from './LetterboxPanel';
 import { PipesDailyPanel } from './PipesPanel';
 import { ToolboxKickDailyPanel } from './ToolboxKickPanel';
 import { WantedDailyPanel } from './WantedPanel';
+import { StackWalkDailyPanel } from './StackWalkPanel';
 import AchievementsPanel from './AchievementsPanel';
 import FunDayPicker, { getLondonDayKey } from './FunDayPicker';
 import FunLeaderboardRow from './FunLeaderboardRow';
@@ -18,7 +19,9 @@ import {
   LETTERBOX_LIVE_FROM,
   PERMANENT_FUN_FROM,
   FUN_GAME_ROSTER,
+  STACK_WALK_LIVE_FROM,
   getFunRotationForDay,
+  isStackWalkPreviewDay,
 } from '../lib/funRotation';
 
 async function readJsonResponse(res) {
@@ -61,6 +64,53 @@ function TrophyIcon({ className }) {
 }
 
 const FUN_SECTION_STORAGE_KEY = 'employee-fun-open-sections';
+
+const DEFAULT_OPEN_SECTIONS = {
+  trivia: false,
+  wordle: false,
+  nonogram: false,
+  sokoban: false,
+  boggle: false,
+  connections: false,
+  enclose: true,
+  enclosePractice: true,
+  letterbox: true,
+  letterboxPractice: true,
+  pipes: true,
+  toolboxkick: true,
+  wanted: true,
+  stackwalk: true,
+  achievements: false,
+};
+
+function loadOpenSections() {
+  try {
+    const raw = localStorage.getItem(FUN_SECTION_STORAGE_KEY);
+    if (!raw) return { ...DEFAULT_OPEN_SECTIONS };
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return { ...DEFAULT_OPEN_SECTIONS };
+    }
+    return { ...DEFAULT_OPEN_SECTIONS, ...parsed };
+  } catch {
+    return { ...DEFAULT_OPEN_SECTIONS };
+  }
+}
+
+function normalizeRotation(raw, fallbackDayKey) {
+  if (!raw || typeof raw !== 'object') {
+    return getFunRotationForDay(fallbackDayKey);
+  }
+  return {
+    ...raw,
+    closed: Boolean(raw.closed),
+    games: Array.isArray(raw.games) ? raw.games.map(String) : [],
+    sitOuts: Array.isArray(raw.sitOuts)
+      ? raw.sitOuts.map(String)
+      : (raw.sitOut ? [String(raw.sitOut)] : []),
+    sitOut: raw.sitOut || null,
+  };
+}
 
 function FunSection({ title, open, onToggle, children }) {
   return (
@@ -399,39 +449,46 @@ export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
   const navigate = useNavigate();
   const todayKey = getLondonDayKey();
   const [rotation, setRotation] = useState(() => getFunRotationForDay(todayKey));
-  const [openSections, setOpenSections] = useState(() => {
-    try {
-      const raw = localStorage.getItem(FUN_SECTION_STORAGE_KEY);
-      if (raw) return JSON.parse(raw);
-    } catch {
-      // ignore
-    }
-    return {
-      trivia: false,
-      wordle: false,
-      nonogram: false,
-      sokoban: false,
-      boggle: false,
-      connections: false,
-      enclose: true,
-      enclosePractice: true,
-      letterbox: true,
-      letterboxPractice: true,
-      pipes: true,
-      toolboxkick: true,
-      wanted: true,
-      achievements: false,
-    };
-  });
+  const [openSections, setOpenSections] = useState(loadOpenSections);
   const [achievements, setAchievements] = useState([]);
+  const [stackWalkSecret, setStackWalkSecret] = useState(false);
 
   useEffect(() => {
+    if (!openSections || typeof openSections !== 'object' || Array.isArray(openSections)) {
+      setOpenSections({ ...DEFAULT_OPEN_SECTIONS });
+      return;
+    }
     try {
       localStorage.setItem(FUN_SECTION_STORAGE_KEY, JSON.stringify(openSections));
     } catch {
       // ignore
     }
   }, [openSections]);
+
+  useEffect(() => {
+    if (!isStackWalkPreviewDay(todayKey)) return undefined;
+    let presses = 0;
+    let lastAt = 0;
+    const onKeyDown = (event) => {
+      if (event.repeat) return;
+      const tag = String(event.target?.tagName || '').toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || event.target?.isContentEditable) return;
+      if (event.key !== 'o' && event.key !== 'O') {
+        presses = 0;
+        return;
+      }
+      const now = Date.now();
+      if (now - lastAt > 2500) presses = 0;
+      lastAt = now;
+      presses += 1;
+      if (presses < 5) return;
+      presses = 0;
+      setStackWalkSecret(true);
+      setOpenSections((prev) => ({ ...prev, stackwalk: true }));
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [todayKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -441,7 +498,7 @@ export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
         const payload = (await readJsonResponse(response)) || {};
         if (cancelled) return;
         if (payload.rotation && typeof payload.rotation === 'object') {
-          setRotation(payload.rotation);
+          setRotation(normalizeRotation(payload.rotation, todayKey));
         }
         if (Array.isArray(payload.achievements)) {
           setAchievements(payload.achievements);
@@ -456,7 +513,12 @@ export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
   }, []);
 
   const toggle = (id) => {
-    setOpenSections((prev) => ({ ...prev, [id]: !prev[id] }));
+    setOpenSections((prev) => {
+      const base = prev && typeof prev === 'object' && !Array.isArray(prev)
+        ? prev
+        : DEFAULT_OPEN_SECTIONS;
+      return { ...base, [id]: !base[id] };
+    });
   };
 
   const refreshAchievements = (next) => {
@@ -565,7 +627,21 @@ export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
         />
       ),
     },
-  ].filter((section) => rotation.closed || rotation.games.includes(section.id));
+    {
+      id: 'stackwalk',
+      title: "O Dell's Amazon Run",
+      render: () => (
+        <StackWalkDailyPanel
+          currentUserUid={currentUserUid}
+          onAchievements={refreshAchievements}
+          isAdmin={isAdmin}
+        />
+      ),
+    },
+  ].filter((section) => (
+    rotation.closed
+    || (Array.isArray(rotation.games) && rotation.games.includes(section.id))
+  ));
 
   const sitOutKeys = Array.isArray(rotation.sitOuts) && rotation.sitOuts.length
     ? rotation.sitOuts
@@ -576,6 +652,7 @@ export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
 
   const showEnclosePractice = Boolean(rotation.enclosePractice);
   const showLetterboxPractice = Boolean(rotation.letterboxPractice);
+  const showStackWalkSecret = isStackWalkPreviewDay(todayKey) && stackWalkSecret;
 
   return (
     <div className="space-y-3 w-full">
@@ -623,6 +700,12 @@ export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
           {rotation.games?.includes('wanted')
             ? ' Wanted: one attempt — Standard then Impossible; fastest combined time wins.'
             : ''}
+          {rotation.games?.includes('stackwalk')
+            ? " O Dell's Amazon Run: deliver parcels on foot — one more every 10 m; furthest wins."
+            : ''}
+          {showStackWalkSecret
+            ? ` O Dell's Amazon Run unlocked early — joins the rotation from ${STACK_WALK_LIVE_FROM}.`
+            : ''}
           {todayKey >= PERMANENT_FUN_FROM
             ? ' Wordle, Little Dicks Toolbox, and Daily Wanted stay in rotation every weekday.'
             : todayKey >= '2026-08-26'
@@ -633,10 +716,10 @@ export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
 
       <FunSection
         title="Trophy case"
-        open={Boolean(openSections.achievements)}
+        open={Boolean(openSections?.achievements)}
         onToggle={() => toggle('achievements')}
       >
-        {openSections.achievements ? (
+        {openSections?.achievements ? (
           <AchievementsPanel achievements={achievements} isAdmin={isAdmin} />
         ) : null}
       </FunSection>
@@ -644,20 +727,37 @@ export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
       {showEnclosePractice ? (
         <FunSection
           title="Enclose practice · new game"
-          open={openSections.enclosePractice !== false}
+          open={openSections?.enclosePractice !== false}
           onToggle={() => toggle('enclosePractice')}
         >
-          {openSections.enclosePractice !== false ? <EnclosePracticePanel /> : null}
+          {openSections?.enclosePractice !== false ? <EnclosePracticePanel /> : null}
         </FunSection>
       ) : null}
 
       {showLetterboxPractice ? (
         <FunSection
           title="Letter Box · new puzzle · try today"
-          open={openSections.letterboxPractice !== false}
+          open={openSections?.letterboxPractice !== false}
           onToggle={() => toggle('letterboxPractice')}
         >
-          {openSections.letterboxPractice !== false ? <LetterboxPracticePanel /> : null}
+          {openSections?.letterboxPractice !== false ? <LetterboxPracticePanel /> : null}
+        </FunSection>
+      ) : null}
+
+      {showStackWalkSecret ? (
+        <FunSection
+          title="O Dell's Amazon Run · early peek"
+          open={openSections?.stackwalk !== false}
+          onToggle={() => toggle('stackwalk')}
+        >
+          {openSections?.stackwalk !== false ? (
+            <StackWalkDailyPanel
+              preview
+              currentUserUid={currentUserUid}
+              onAchievements={refreshAchievements}
+              isAdmin={isAdmin}
+            />
+          ) : null}
         </FunSection>
       ) : null}
 
@@ -665,10 +765,10 @@ export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
         <FunSection
           key={section.id}
           title={section.title}
-          open={Boolean(openSections[section.id])}
+          open={Boolean(openSections?.[section.id])}
           onToggle={() => toggle(section.id)}
         >
-          {openSections[section.id] ? section.render() : null}
+          {openSections?.[section.id] ? section.render() : null}
         </FunSection>
       ))}
     </div>

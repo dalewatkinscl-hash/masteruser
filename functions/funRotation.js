@@ -31,6 +31,12 @@ const TOOLBOX_KICK_GAME = { key: 'toolboxkick', label: 'Little Dicks Toolbox' };
 const WANTED_LIVE_FROM = '2026-09-08';
 const WANTED_GAME = { key: 'wanted', label: 'Daily Wanted' };
 
+/** Soft launch / secret unlock from this day; joins weekday rotation from LIVE_FROM. */
+const STACK_WALK_PREVIEW_FROM = '2026-09-18';
+/** Joins Fun rotation (normal play) from this Europe/London day. */
+const STACK_WALK_LIVE_FROM = '2026-09-19';
+const STACK_WALK_GAME = { key: 'stackwalk', label: "O Dell's Amazon Run" };
+
 /** From this day, permanent-game enforcement applies. */
 const PERMANENT_FUN_FROM = '2026-08-27';
 
@@ -46,6 +52,7 @@ const FUN_GAMES = [
   PIPES_GAME,
   TOOLBOX_KICK_GAME,
   WANTED_GAME,
+  STACK_WALK_GAME,
 ];
 const FUN_GAME_ROSTER = FUN_GAMES;
 const ALL_ROSTER_KEYS = FUN_GAME_ROSTER.map((g) => g.key);
@@ -152,6 +159,7 @@ function getRosterForDay(dayKey) {
   if (key >= PIPES_LIVE_FROM) roster.push(PIPES_GAME);
   if (key >= TOOLBOX_KICK_LIVE_FROM) roster.push(TOOLBOX_KICK_GAME);
   if (key >= WANTED_LIVE_FROM) roster.push(WANTED_GAME);
+  if (key >= STACK_WALK_LIVE_FROM) roster.push(STACK_WALK_GAME);
   return roster;
 }
 
@@ -293,6 +301,7 @@ function getFunRotationForDay(dayKey = getLondonDayKey(), settings = getActiveRo
       pipesPractice: false,
       toolboxKickLive: key >= TOOLBOX_KICK_LIVE_FROM,
       wantedLive: key >= WANTED_LIVE_FROM,
+      stackWalkLive: key >= STACK_WALK_LIVE_FROM,
     };
   }
 
@@ -336,6 +345,7 @@ function getFunRotationForDay(dayKey = getLondonDayKey(), settings = getActiveRo
     pipesPractice: key < PIPES_LIVE_FROM && !isWeekendDayKey(key),
     toolboxKickLive: key >= TOOLBOX_KICK_LIVE_FROM,
     wantedLive: key >= WANTED_LIVE_FROM,
+    stackWalkLive: key >= STACK_WALK_LIVE_FROM,
   };
 }
 
@@ -413,6 +423,9 @@ module.exports = {
   TOOLBOX_KICK_LIVE_FROM,
   WANTED_GAME,
   WANTED_LIVE_FROM,
+  STACK_WALK_GAME,
+  STACK_WALK_LIVE_FROM,
+  STACK_WALK_PREVIEW_FROM,
   PERMANENT_FUN_FROM,
   PERMANENT_GAME_KEYS,
   DEFAULT_PERMANENT_GAME_KEYS,

@@ -55,6 +55,7 @@ function serializeToolboxKickGame(data = {}) {
   const roundComplete = data.roundComplete === false
     ? false
     : (status === 'won' ? data.roundComplete !== false : Boolean(data.roundComplete));
+  const runCount = Math.max(1, Math.floor(Number(data.runCount) || 1));
   return {
     dayKey: data.dayKey || '',
     status,
@@ -64,10 +65,14 @@ function serializeToolboxKickGame(data = {}) {
       ? data.attempts.map((n) => clampDistance(n))
       : [],
     energyDrinkUsed: Boolean(data.energyDrinkUsed),
+    // Legacy flag — no longer auto-set on reload. Admin punishment still nerfs.
     caughtCheating: Boolean(data.caughtCheating),
     punished: Boolean(data.punished),
     roundComplete,
+    runCount,
     reloadCount: Math.max(0, Math.floor(Number(data.reloadCount) || 0)),
+    extraRuns: Math.max(0, runCount - 1),
+    investigate: runCount > 3,
     forfeited: Boolean(data.forfeited),
     forfeitReason: data.forfeitReason || null,
     startedAt: data.startedAt?.toDate?.()?.toISOString?.() || data.startedAt || null,
@@ -75,9 +80,9 @@ function serializeToolboxKickGame(data = {}) {
   };
 }
 
-/** Tracked players (F5-caught or admin punishment) log each attempt as a live score. */
+/** Admin-punished players still get per-attempt live score logging. */
 function isToolboxKickTrackedGame(data = {}) {
-  return Boolean(data.caughtCheating || data.punished);
+  return Boolean(data.punished);
 }
 
 function isToolboxKickRoundFullyDone(data = {}) {
@@ -116,15 +121,37 @@ function toolboxKickResultLabel(row) {
   return formatDistanceLabel(row.distanceM);
 }
 
-/** Mark a mid-round reload as caught cheating (keep the round open, nerf speed on client). */
-function markToolboxKickCaughtCheating(existing = {}, { FieldValue, reason = 'reload' } = {}) {
-  const prev = Math.max(0, Math.floor(Number(existing.reloadCount) || 0));
+/**
+ * Record an extra start/reload without auto-punishing.
+ * Speeds stay normal; runCount > 3 is flagged for investigation.
+ */
+function markToolboxKickExtraRun(existing = {}, { FieldValue, reason = 'reload' } = {}) {
+  const prevRuns = Math.max(1, Math.floor(Number(existing.runCount) || 1));
+  const prevReloads = Math.max(0, Math.floor(Number(existing.reloadCount) || 0));
+  const runEntry = {
+    at: new Date().toISOString(),
+    reason,
+    distanceMAtTime: clampDistance(existing.distanceM),
+    attemptsAtTime: Array.isArray(existing.attempts)
+      ? existing.attempts.map((n) => clampDistance(n))
+      : [],
+  };
+  const priorRuns = Array.isArray(existing.runs) ? existing.runs.slice(-20) : [];
   return {
-    caughtCheating: true,
-    reloadCount: prev + 1,
-    cheatReason: reason,
+    runCount: prevRuns + 1,
+    reloadCount: prevReloads + 1,
+    lastRunReason: reason,
+    runs: [...priorRuns, runEntry],
+    // Clear any legacy auto-cheat flag so players are not stuck at 10% speed.
+    caughtCheating: false,
+    cheatReason: null,
     updatedAt: FieldValue ? FieldValue.serverTimestamp() : new Date().toISOString(),
   };
+}
+
+/** @deprecated — kept for older call sites; prefer markToolboxKickExtraRun. */
+function markToolboxKickCaughtCheating(existing = {}, opts = {}) {
+  return markToolboxKickExtraRun(existing, opts);
 }
 
 /** Shame score when a competitive round is abandoned (legacy). */
@@ -318,6 +345,7 @@ module.exports = {
   collectToolboxKickRecords,
   collectToolboxKickAllTimeTop,
   markToolboxKickCaughtCheating,
+  markToolboxKickExtraRun,
   buildToolboxKickForfeitPayload,
   clampDistance,
   getSuperRageStatus,

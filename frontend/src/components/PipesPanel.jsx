@@ -115,9 +115,10 @@ function PipesBoard({
   disabled = false,
   highlightConnected = true,
 }) {
-  const masks = useMemo(() => getEffectiveMasks(tiles), [tiles]);
+  const masks = useMemo(() => getEffectiveMasks(Array.isArray(tiles) ? tiles : []), [tiles]);
   const analysis = useMemo(() => analyzeBoard(size, masks), [size, masks]);
   const cellSize = size >= 10 ? 40 : size >= 7 ? 48 : 56;
+  const safeTiles = Array.isArray(tiles) ? tiles : [];
 
   return (
     <div
@@ -126,7 +127,7 @@ function PipesBoard({
       role="grid"
       aria-label={`${size} by ${size} pipes board`}
     >
-      {tiles.map((tile, index) => {
+      {safeTiles.map((tile, index) => {
         const mask = masks[index];
         const connected = highlightConnected
           ? connectedBitsForCell(size, masks, index)
@@ -238,7 +239,7 @@ export default function PipesPanel({
   }, [won]);
 
   const analysis = useMemo(
-    () => analyzeBoard(puzzle.size, getEffectiveMasks(puzzle.tiles)),
+    () => analyzeBoard(puzzle?.size, getEffectiveMasks(puzzle?.tiles)),
     [puzzle],
   );
 
@@ -485,9 +486,16 @@ export function PipesDailyPanel({ currentUserUid = null, onAchievements = null, 
           setError(payload.message || 'Pipes isn’t in today’s Fun rotation.');
           return;
         }
+        if (!payload.puzzle || !Array.isArray(payload.puzzle.tiles)) {
+          setPuzzle(null);
+          setGame(null);
+          setLeaderboard([]);
+          setError('Puzzle unavailable.');
+          return;
+        }
         setPuzzle(payload.puzzle);
         setGame(payload.game || null);
-        setLeaderboard(payload.leaderboard || []);
+        setLeaderboard(Array.isArray(payload.leaderboard) ? payload.leaderboard.filter(Boolean) : []);
       } catch (err) {
         if (!cancelled) {
           setError(err.message || 'Failed to load Pipes.');

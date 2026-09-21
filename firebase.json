@@ -477,6 +477,16 @@
         "region": "europe-west2"
       },
       {
+        "source": "/api/getDailyStackWalk",
+        "function": "getDailyStackWalk",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/submitStackWalkResult",
+        "function": "submitStackWalkResult",
+        "region": "europe-west2"
+      },
+      {
         "source": "/api/getDailyToolboxKick",
         "function": "getDailyToolboxKick",
         "region": "europe-west2"
