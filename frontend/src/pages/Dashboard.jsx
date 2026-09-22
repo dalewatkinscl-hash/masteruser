@@ -8,6 +8,7 @@ import ThemeToggle from '../components/ThemeToggle';
 import LanguageSwitcher from '../components/LanguageSwitcher';
 import DigitalClock from '../components/DigitalClock';
 import KudosWelcomeModal from '../components/KudosWelcomeModal';
+import CoinAwardToaster from '../components/CoinAwardToaster';
 import KawaiiDecor from '../components/KawaiiDecor';
 import { useTheme } from '../context/ThemeContext';
 import { useLanguage } from '../context/LanguageContext';
@@ -308,6 +309,7 @@ export default function Dashboard() {
         <Outlet />
       </main>
       <KudosWelcomeModal uid={user?.uid} />
+      <CoinAwardToaster />
     </div>
   );
 }

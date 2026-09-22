@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import PollPieChart from './PollPieChart';
 import VotersHover from './VotersHover';
 import { KudosBadgeGraphic } from './kudosGraphics';
 import { FunRankBadge } from './FunLeaderboardRow';
 import { getLondonDayKey } from './FunDayPicker';
 import { getFunRotationForDay } from '../lib/funRotation';
+import { coinReasonLabel, visibleCoinEarnActions } from '../utils/coinAwards';
+import { useAuth } from '../context/AuthContext';
 
 async function readJsonResponse(res) {
   const contentType = res.headers.get('content-type') || '';
@@ -155,12 +158,15 @@ function PollVoteWidget({ poll, votingId, onVoteAb, onVoteText, textDraft, onTex
 }
 
 export default function ProfileWidgets({ currentUserUid }) {
+  const navigate = useNavigate();
+  const { user } = useAuth();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [voteError, setVoteError] = useState('');
   const [data, setData] = useState(null);
   const [votingId, setVotingId] = useState('');
   const [textDrafts, setTextDrafts] = useState({});
+  const [earnOpen, setEarnOpen] = useState(false);
 
   const load = async () => {
     const response = await fetch('/api/getProfileWidgets', { credentials: 'include' });
@@ -191,7 +197,11 @@ export default function ProfileWidgets({ currentUserUid }) {
       load().catch(() => {});
     };
     window.addEventListener('cl-kudos-changed', onChanged);
-    return () => window.removeEventListener('cl-kudos-changed', onChanged);
+    window.addEventListener('cl-coins-awarded', onChanged);
+    return () => {
+      window.removeEventListener('cl-kudos-changed', onChanged);
+      window.removeEventListener('cl-coins-awarded', onChanged);
+    };
   }, []);
 
   const rotation = useMemo(() => {
@@ -262,9 +272,135 @@ export default function ProfileWidgets({ currentUserUid }) {
   const achievements = data?.achievements || [];
   const medals = data?.medals || { gold: 0, silver: 0, bronze: 0, label: 'No medals yet', total: 0 };
   const kudosReceived = data?.kudos?.received || [];
+  const coins = data?.coins || { balance: 0, lifetimeEarned: 0, recent: [], completed: [] };
+  const recentCoins = Array.isArray(coins.recent) ? coins.recent : [];
+  const completedEarnIds = new Set(Array.isArray(coins.completed) ? coins.completed : []);
+  const earnActions = visibleCoinEarnActions({ canIssueKudos: Boolean(user?.canIssueKudos) });
+
+  const goEarn = (action) => {
+    if (completedEarnIds.has(action.id)) {
+      // Still allow jumping to the related form, but no need to force-close.
+    }
+    if (action.href) {
+      window.open(action.href, '_blank', 'noopener,noreferrer');
+      return;
+    }
+    navigate('/dashboard/profile', {
+      state: {
+        profileTab: action.profileTab || 'profile',
+        ...(action.section ? { profileSection: action.section } : {}),
+      },
+    });
+    setEarnOpen(false);
+  };
 
   return (
     <aside className="space-y-4 w-full">
+      <WidgetShell title="Coin wallet">
+        <div className="space-y-3">
+          <div className="flex items-end justify-between gap-3">
+            <div>
+              <p className="text-2xl font-semibold tabular-nums text-amber-200">
+                {Number(coins.balance) || 0}
+              </p>
+              <p className="text-[11px] text-slate-500">coins available</p>
+            </div>
+            <p className="text-[11px] text-slate-500 tabular-nums">
+              {Number(coins.lifetimeEarned) || 0} earned lifetime
+            </p>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => setEarnOpen((open) => !open)}
+            className="w-full rounded-lg border border-amber-500/35 bg-amber-500/10 px-3 py-2 text-left text-xs font-semibold text-amber-100 transition-colors hover:bg-amber-500/15"
+          >
+            {earnOpen ? 'Hide earn options' : 'Earn more coins'}
+          </button>
+
+          {earnOpen && (
+            <ul className="space-y-1.5 border-t border-[#1a2540] pt-2">
+              {earnActions.map((action) => {
+                const done = completedEarnIds.has(action.id);
+                return (
+                  <li key={action.id}>
+                    <button
+                      type="button"
+                      onClick={() => goEarn(action)}
+                      className={`flex w-full items-start justify-between gap-2 rounded-lg border px-2.5 py-2 text-left transition-colors ${
+                        done
+                          ? 'border-emerald-500/40 bg-emerald-500/10 hover:bg-emerald-500/15'
+                          : 'border-[#1a2540] bg-[#060e1a] hover:border-amber-500/30 hover:bg-white/[0.03]'
+                      }`}
+                    >
+                      <span className="min-w-0 flex items-start gap-2">
+                        <span
+                          className={`mt-0.5 flex h-4 w-4 flex-shrink-0 items-center justify-center rounded-full border ${
+                            done
+                              ? 'border-emerald-400 bg-emerald-500 text-white'
+                              : 'border-slate-600 bg-transparent text-transparent'
+                          }`}
+                          aria-hidden="true"
+                        >
+                          {done ? (
+                            <svg className="h-2.5 w-2.5" viewBox="0 0 12 12" fill="none">
+                              <path
+                                d="M2.5 6.2 4.8 8.5 9.5 3.5"
+                                stroke="currentColor"
+                                strokeWidth="1.8"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                              />
+                            </svg>
+                          ) : null}
+                        </span>
+                        <span className="min-w-0">
+                          <span className={`block text-xs font-medium truncate ${done ? 'text-emerald-100' : 'text-slate-100'}`}>
+                            {action.label}
+                          </span>
+                          <span className={`block text-[10px] leading-snug ${done ? 'text-emerald-300/70' : 'text-slate-500'}`}>
+                            {done ? 'Completed' : action.detail}
+                          </span>
+                        </span>
+                      </span>
+                      <span
+                        className={`flex-shrink-0 text-xs font-semibold tabular-nums ${
+                          done ? 'text-emerald-300' : 'text-amber-200'
+                        }`}
+                      >
+                        {done ? '✓' : `+${action.amount}`}
+                      </span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+
+          {recentCoins.length > 0 ? (
+            <ul className="space-y-1.5 border-t border-[#1a2540] pt-2">
+              {recentCoins.slice(0, 5).map((row) => (
+                <li
+                  key={row.id}
+                  className="flex items-center justify-between gap-2 text-xs"
+                >
+                  <span className="text-slate-300 truncate">{coinReasonLabel(row.reason)}</span>
+                  <span className="flex-shrink-0 tabular-nums text-amber-200/90">
+                    +{row.amount || 0}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            !earnOpen && (
+              <p className="text-xs text-slate-500">
+                Earn coins by completing your profile, playing Fun games, voting, and more.
+              </p>
+            )
+          )}
+        </div>
+      </WidgetShell>
+
       <WidgetShell
         title="Kudos today"
         empty={!kudosReceived.length ? 'No kudos on your profile today.' : null}

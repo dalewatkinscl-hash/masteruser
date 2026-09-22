@@ -5,6 +5,7 @@ import { useState } from 'react';
 
 export default function AchievementsPanel({ achievements = [], isAdmin = false }) {
   const [backfilling, setBackfilling] = useState(false);
+  const [clawing, setClawing] = useState(false);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const list = Array.isArray(achievements) ? achievements : [];
@@ -33,22 +34,58 @@ export default function AchievementsPanel({ achievements = [], isAdmin = false }
     }
   };
 
+  const runClawback = async () => {
+    if (!isAdmin || clawing) return;
+    if (!window.confirm('Admin: remove all live “game won” coin awards? (Podium still pays at midnight.)')) return;
+    setClawing(true);
+    setError('');
+    setMessage('');
+    try {
+      const response = await fetch('/api/adminClawbackFunWinCoins', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+      const contentType = response.headers.get('content-type') || '';
+      const payload = contentType.includes('application/json') ? await response.json() : {};
+      if (!response.ok) throw new Error(payload.error || 'Clawback failed.');
+      setMessage(payload.message || `Reversed ${payload.reversed || 0} fun_win awards.`);
+    } catch (err) {
+      setError(err.message || 'Clawback failed.');
+    } finally {
+      setClawing(false);
+    }
+  };
+
+  const adminActions = isAdmin ? (
+    <div className="space-y-2">
+      <button
+        type="button"
+        disabled={backfilling || clawing}
+        onClick={runBackfill}
+        className="w-full px-3 py-2 rounded-lg text-xs border border-amber-500/40 text-amber-200 hover:bg-amber-500/10 disabled:opacity-50"
+      >
+        {backfilling ? 'Rebuilding medals…' : 'Admin: backfill medal totals'}
+      </button>
+      <button
+        type="button"
+        disabled={backfilling || clawing}
+        onClick={runClawback}
+        className="w-full px-3 py-2 rounded-lg text-xs border border-rose-500/40 text-rose-200 hover:bg-rose-500/10 disabled:opacity-50"
+      >
+        {clawing ? 'Removing win coins…' : 'Admin: remove live win coins'}
+      </button>
+    </div>
+  ) : null;
+
   if (!list.length) {
     return (
       <div className="space-y-3">
         <p className="text-sm text-slate-500 text-center py-2">
           Win weekday games to build streaks. Fails reset them; missed days don’t.
         </p>
-        {isAdmin ? (
-          <button
-            type="button"
-            disabled={backfilling}
-            onClick={runBackfill}
-            className="w-full px-3 py-2 rounded-lg text-xs border border-amber-500/40 text-amber-200 hover:bg-amber-500/10 disabled:opacity-50"
-          >
-            {backfilling ? 'Rebuilding medals…' : 'Admin: backfill medal totals'}
-          </button>
-        ) : null}
+        {adminActions}
         {message ? <p className="text-xs text-emerald-300">{message}</p> : null}
         {error ? <p className="text-xs text-rose-300">{error}</p> : null}
       </div>
@@ -58,55 +95,28 @@ export default function AchievementsPanel({ achievements = [], isAdmin = false }
   return (
     <div className="space-y-3">
       <p className="text-xs text-indigo-300/80">
-        Weekday win streaks · fails reset · missed days don’t break them. Reach 5 for a star.
+        Weekday win streaks. Fails reset; missed days don’t break the streak.
       </p>
-      <ul className="divide-y divide-[#1a2540] rounded-xl border border-[#1a2540] overflow-hidden">
+      <ul className="space-y-2">
         {list.map((item) => {
-          const best = item.best || 0;
-          const current = item.current || 0;
-          const target = item.target || 5;
-          const progress = Math.min(target, best);
-          const pct = Math.round((progress / target) * 100);
+          const unlocked = Boolean(item.unlocked);
           return (
-            <li key={item.gameKey} className="px-4 py-4 space-y-2">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="text-sm font-medium text-indigo-100">{item.label}</p>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    Best {best} · current {current}
-                    {item.doneToday ? ' · won today' : ''}
-                  </p>
-                </div>
-                <span
-                  className={`flex-shrink-0 text-[11px] font-semibold px-2 py-1 rounded-md border ${
-                    item.unlocked
-                      ? 'border-amber-500/40 bg-amber-500/15 text-amber-200'
-                      : 'border-[#1a2540] text-slate-500'
-                  }`}
-                >
-                  {item.unlocked ? '★ 5+' : `${best}/${target}`}
-                </span>
-              </div>
-              <div className="h-1.5 rounded-full bg-[#060e1a] overflow-hidden">
-                <div
-                  className={`h-full rounded-full ${item.unlocked ? 'bg-amber-400' : 'bg-indigo-500'}`}
-                  style={{ width: `${item.unlocked ? 100 : pct}%` }}
-                />
+            <li
+              key={item.gameKey}
+              className="flex items-center justify-between gap-2 rounded-lg border border-[#1a2540] bg-[#060e1a] px-3 py-2"
+            >
+              <div className="min-w-0">
+                <p className="text-sm text-slate-100 truncate">{item.label}</p>
+                <p className="text-[10px] text-slate-500">
+                  best {item.best || 0} · now {item.current || 0}
+                  {unlocked ? ' · ★5 unlocked' : ''}
+                </p>
               </div>
             </li>
           );
         })}
       </ul>
-      {isAdmin ? (
-        <button
-          type="button"
-          disabled={backfilling}
-          onClick={runBackfill}
-          className="w-full px-3 py-2 rounded-lg text-xs border border-amber-500/40 text-amber-200 hover:bg-amber-500/10 disabled:opacity-50"
-        >
-          {backfilling ? 'Rebuilding medals…' : 'Admin: backfill medal totals'}
-        </button>
-      ) : null}
+      {adminActions}
       {message ? <p className="text-xs text-emerald-300">{message}</p> : null}
       {error ? <p className="text-xs text-rose-300">{error}</p> : null}
     </div>

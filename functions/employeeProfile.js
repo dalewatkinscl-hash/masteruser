@@ -507,6 +507,7 @@ module.exports = {
   employeeNameSimilarity,
   hasPortalAccount,
   inferBusinessCommsEmail,
+  isEmptyProfileValue,
   mapHrSpreadsheetRow,
   mergeEmployeeProfiles,
   mergeEmployeeProfilesFillGaps,

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import YearsOfServiceBadge from './YearsOfServiceBadge';
 import BusinessCommsEmailSelector from './BusinessCommsEmailSelector';
 import BirthdayCelebration from './BirthdayCelebration';
@@ -57,9 +58,9 @@ function Field({ label, value, children, className = '' }) {
   );
 }
 
-function Section({ title, children }) {
+function Section({ title, children, id }) {
   return (
-    <div className="card bg-base-100 shadow-xl border border-base-300 overflow-hidden">
+    <div id={id || undefined} className="card bg-base-100 shadow-xl border border-base-300 overflow-hidden scroll-mt-24">
       <div className="px-5 py-3 border-b border-base-300 bg-base-200/40">
         <h3 className="text-[11px] font-mono font-medium text-base-content/60 uppercase tracking-widest">{title}</h3>
       </div>
@@ -281,6 +282,7 @@ export default function EmployeeProfileCard({
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const { t, locale } = useLanguage();
+  const location = useLocation();
 
   const canEditAll = permissions?.canEditAll;
   const canEditSelfService = permissions?.canEditSelfService;
@@ -362,6 +364,22 @@ export default function EmployeeProfileCard({
       cancelled = true;
     };
   }, [uid, t]);
+
+  useEffect(() => {
+    if (loading) return undefined;
+    const section = location.state?.profileSection;
+    if (!section) return undefined;
+    const id = `coin-earn-${section}`;
+    const timer = window.setTimeout(() => {
+      const el = document.getElementById(id);
+      if (el) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        el.classList.add('ring-2', 'ring-amber-400/50');
+        window.setTimeout(() => el.classList.remove('ring-2', 'ring-amber-400/50'), 1800);
+      }
+    }, 120);
+    return () => window.clearTimeout(timer);
+  }, [loading, location.state?.profileSection, location.key]);
 
   const updateField = (key, value) => {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -495,17 +513,19 @@ export default function EmployeeProfileCard({
       )}
 
       {show('summary') && (
-        <ProfileSummary
-          profile={profile}
-          employee={employee}
-          editable={editable}
-          form={form}
-          fullName={fullName}
-          onFullNameChange={setFullName}
-          onFieldChange={updateField}
-          isDriver={isDriver}
-          kudosToday={kudosToday}
-        />
+        <div id="coin-earn-contact" className="scroll-mt-24">
+          <ProfileSummary
+            profile={profile}
+            employee={employee}
+            editable={editable}
+            form={form}
+            fullName={fullName}
+            onFullNameChange={setFullName}
+            onFieldChange={updateField}
+            isDriver={isDriver}
+            kudosToday={kudosToday}
+          />
+        </div>
       )}
 
       {show('summary') && (
@@ -789,7 +809,7 @@ export default function EmployeeProfileCard({
       {(showAddress || showNextOfKin) && (
         <div className={`grid grid-cols-1 gap-4 ${showAddress && showNextOfKin ? 'xl:grid-cols-2' : ''}`}>
           {showAddress && (
-            <Section title={t('card.homeAddress')}>
+            <Section id="coin-earn-address" title={t('card.homeAddress')}>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {[
                   ['line1', t('card.line1')],
@@ -815,7 +835,7 @@ export default function EmployeeProfileCard({
           )}
 
           {showNextOfKin && (
-            <Section title={t('card.nextOfKin')}>
+            <Section id="coin-earn-next-of-kin" title={t('card.nextOfKin')}>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <Field label={t('card.name')}>
                   {editable.nextOfKin ? (

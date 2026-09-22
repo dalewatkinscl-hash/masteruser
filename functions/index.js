@@ -1,6 +1,7 @@
 const admin = require('firebase-admin');
 const cors = require('cors');
 const crypto = require('crypto');
+const { AsyncLocalStorage } = require('async_hooks');
 const { defineSecret, defineString } = require('firebase-functions/params');
 const { onRequest } = require('firebase-functions/v2/https');
 const { onSchedule } = require('firebase-functions/v2/scheduler');
@@ -28,10 +29,30 @@ const {
   mergeEmployeeProfilesFillGaps,
   normalizeBusinessCommsEmail,
   normalizeThemePreference,
+  isEmptyProfileValue,
   pickNonEmptyString,
   pickSelfEditablePatch,
   resolveBusinessContactEmail,
 } = require('./employeeProfile');
+const {
+  COIN_AMOUNTS,
+  MAX_EXTERNAL_AMOUNT,
+  MIN_EXTERNAL_AMOUNT,
+  awardCoins,
+  toCoinAward,
+  collectCoinAwards,
+  getWallet,
+  listRecentLedger,
+  getCompletedEarnIds,
+  clawbackFunWinAwards,
+  listCoinWallets,
+  maybeAwardFunAttempt,
+  maybeAwardDailyLogin,
+  settlePodiumCoinsForDay,
+  previousLondonDayKey,
+  sanitizeIdempotencyKey,
+  getLondonWeekKey,
+} = require('./coins');
 const { createPeopleCasesApi } = require('./peopleCasesApi');
 const { createRollCallListsApi } = require('./rollCallLists');
 const { canManageCases } = require('./peopleCases');
@@ -191,8 +212,8 @@ const {
   STACK_WALK_PREVIEW_FROM,
 } = require('./stackWalk');
 const {
-  recordFunStreakWin,
-  recordFunStreakFail,
+  recordFunStreakWin: recordFunStreakWinBase,
+  recordFunStreakFail: recordFunStreakFailBase,
   loadFunStreaks,
   serializeAchievements,
 } = require('./funStreaks');
@@ -269,8 +290,40 @@ const corsMiddleware = cors({
   origin: ALLOWED_ORIGINS,
   credentials: true,
   methods: ['GET', 'POST', 'OPTIONS'],
-  allowedHeaders: ['Content-Type'],
+  allowedHeaders: ['Content-Type', 'x-provision-secret'],
 });
+
+/** Per-request coin awards (Fun streaks etc.) auto-attached onto JSON responses. */
+const coinAwardStore = new AsyncLocalStorage();
+
+function pushRequestCoinAwards(awards) {
+  const store = coinAwardStore.getStore();
+  if (!store || !Array.isArray(awards) || !awards.length) return;
+  for (const row of awards) {
+    if (row && row.amount > 0 && row.reason) store.awards.push(row);
+  }
+}
+
+function takeStreakCoinAwards(streak) {
+  if (!streak || typeof streak !== 'object') return [];
+  const awards = Array.isArray(streak.coinsAwarded) ? [...streak.coinsAwarded] : [];
+  if (Object.prototype.hasOwnProperty.call(streak, 'coinsAwarded')) {
+    delete streak.coinsAwarded;
+  }
+  return awards;
+}
+
+async function recordFunStreakWin(db, opts) {
+  const streak = await recordFunStreakWinBase(db, opts);
+  pushRequestCoinAwards(takeStreakCoinAwards(streak));
+  return streak;
+}
+
+async function recordFunStreakFail(db, opts) {
+  const streak = await recordFunStreakFailBase(db, opts);
+  pushRequestCoinAwards(takeStreakCoinAwards(streak));
+  return streak;
+}
 
 // Wraps an async onRequest handler with CORS and global error catching.
 function withCors(handler) {
@@ -286,11 +339,30 @@ function withCors(handler) {
         return;
       }
 
-      handler(req, res).catch((error) => {
-        console.error('Unhandled function error', error);
-        if (!res.headersSent) {
-          res.status(500).json({ error: 'Internal server error.' });
-        }
+      coinAwardStore.run({ awards: [] }, () => {
+        const originalJson = res.json.bind(res);
+        res.json = (body) => {
+          const store = coinAwardStore.getStore();
+          const pending = store?.awards?.length ? store.awards.splice(0, store.awards.length) : [];
+          if (
+            pending.length
+            && body
+            && typeof body === 'object'
+            && !Array.isArray(body)
+            && body.error === undefined
+          ) {
+            const existing = Array.isArray(body.coinsAwarded) ? body.coinsAwarded : [];
+            body = { ...body, coinsAwarded: existing.concat(pending) };
+          }
+          return originalJson(body);
+        };
+
+        handler(req, res).catch((error) => {
+          console.error('Unhandled function error', error);
+          if (!res.headersSent) {
+            res.status(500).json({ error: 'Internal server error.' });
+          }
+        });
       });
     });
   };
@@ -456,9 +528,128 @@ function isAuthorizedPortalProvisionRequest(req) {
     process.env.MENTOR_PROVISION_SECRET,
     process.env.CPC_PROVISION_SECRET,
     process.env.COMPLIANCE_PROVISION_SECRET,
+    process.env.TRAINING_PROVISION_SECRET,
+    process.env.HOLIDAYS_PROVISION_SECRET,
   ].filter(Boolean);
 
   return secrets.includes(headerSecret);
+}
+
+/**
+ * Award Fun attempt coins only. Idempotent; ignores practice.
+ * Podium (1st/2nd/3rd) coins settle at London midnight — never on live win.
+ * @returns {Promise<Array<{amount:number, reason:string}>>}
+ */
+async function awardFunGameCoins({
+  uid,
+  fullName = '',
+  gameKey,
+  dayKey,
+  practice = false,
+}) {
+  if (practice || !uid || !gameKey || !dayKey) return [];
+  const FieldValue = admin.firestore.FieldValue;
+  const coinsAwarded = [];
+  try {
+    const attemptResult = await maybeAwardFunAttempt(db, {
+      uid,
+      gameKey,
+      dayKey,
+      FieldValue,
+      fullName,
+      practice: false,
+    });
+    const attemptAward = toCoinAward({ ...attemptResult, reason: attemptResult.reason || 'fun_attempt' });
+    if (attemptAward) coinsAwarded.push(attemptAward);
+  } catch (error) {
+    console.warn('awardFunGameCoins failed', gameKey, error?.message || error);
+  }
+  pushRequestCoinAwards(coinsAwarded);
+  return coinsAwarded;
+}
+
+/**
+ * Profile completeness coins — once per employee forever.
+ * Award whenever the field is complete after save; coin_ledger idempotency
+ * keys (profile:{reason}:{uid}) block farming via clear/re-fill.
+ * @returns {Promise<Array<{amount:number, reason:string}>>}
+ */
+async function awardProfileCompletionCoins({
+  uid,
+  fullName = '',
+  afterProfile = {},
+}) {
+  if (!uid) return [];
+  const FieldValue = admin.firestore.FieldValue;
+  const coinsAwarded = [];
+  const awards = [
+    {
+      field: 'nextOfKin',
+      reason: 'next_of_kin',
+      amount: COIN_AMOUNTS.next_of_kin,
+      key: `profile:next_of_kin:${uid}`,
+      // Name + phone required so a half-filled NOK does not pay out.
+      isComplete: (p) => {
+        const nok = p?.nextOfKin || {};
+        return Boolean(String(nok.name || '').trim() && String(nok.phoneNumber || '').trim());
+      },
+    },
+    {
+      field: 'phoneNumber',
+      reason: 'phone_number',
+      amount: COIN_AMOUNTS.phone_number,
+      key: `profile:phone_number:${uid}`,
+      isComplete: (p) => Boolean(String(p?.phoneNumber || '').trim()),
+    },
+    {
+      field: 'address',
+      reason: 'home_address',
+      amount: COIN_AMOUNTS.home_address,
+      key: `profile:home_address:${uid}`,
+      isComplete: (p) => {
+        const a = p?.address || {};
+        return Boolean(String(a.line1 || '').trim() && String(a.postcode || '').trim());
+      },
+    },
+    {
+      field: 'personalEmail',
+      reason: 'personal_email',
+      amount: COIN_AMOUNTS.personal_email,
+      key: `profile:personal_email:${uid}`,
+      isComplete: (p) => Boolean(String(p?.personalEmail || '').trim()),
+    },
+  ];
+
+  for (const row of awards) {
+    try {
+      if (!row.isComplete(afterProfile)) continue;
+      const result = await awardCoins(db, {
+        uid,
+        amount: row.amount,
+        reason: row.reason,
+        idempotencyKey: row.key,
+        FieldValue,
+        fullName,
+        meta: { refType: 'profile', refId: row.field },
+      });
+      const award = toCoinAward(result);
+      if (award) coinsAwarded.push(award);
+    } catch (error) {
+      console.warn('awardProfileCompletionCoins failed', row.reason, error?.message || error);
+    }
+  }
+  pushRequestCoinAwards(coinsAwarded);
+  return coinsAwarded;
+}
+
+function withCoinAwards(payload, ...awardLists) {
+  const coinsAwarded = awardLists
+    .flat()
+    .filter((row) => row && row.amount > 0 && row.reason);
+  if (coinsAwarded.length) {
+    return { ...payload, coinsAwarded };
+  }
+  return payload;
 }
 
 function canLookupBusinessContactEmail(caller, portal) {
@@ -2861,6 +3052,21 @@ exports.updateEmployeeProfile = onRequest(
 
       await db.collection('users').doc(targetUid).set(firestoreUpdate, { merge: true });
 
+      let coinsAwarded = [];
+      try {
+        // Use the merged profile we just wrote (not the request patch alone).
+        const afterProfile = firestoreUpdate.employeeProfile
+          || existing.employeeProfile
+          || {};
+        coinsAwarded = await awardProfileCompletionCoins({
+          uid: targetUid,
+          fullName: firestoreUpdate.fullName || existing.fullName || '',
+          afterProfile,
+        });
+      } catch (coinError) {
+        console.warn('updateEmployeeProfile coin award failed', coinError?.message || coinError);
+      }
+
       const updatedProfile = await getUserProfile(targetUid);
       const portalsAccess = sanitizePortalsAccess(updatedProfile.portalsAccess || {});
       const portalMappings = sanitizePortalMappings(updatedProfile.portalMappings || {});
@@ -2870,10 +3076,10 @@ exports.updateEmployeeProfile = onRequest(
         setSharedSessionCookie(res, session.verified.sessionCookie);
       }
 
-      res.status(200).json({
+      res.status(200).json(withCoinAwards({
         profile: buildEmployeeProfileResponse({ uid: targetUid, ...updatedProfile }),
         message: 'Employee profile updated successfully.',
-      });
+      }, coinsAwarded));
     } catch (error) {
       console.error('updateEmployeeProfile failed', error);
       res.status(500).json({ error: 'Failed to update employee profile.' });
@@ -3237,6 +3443,26 @@ exports.clearExpiredPeopleCaseWarnings = onSchedule(
       cleared += 1;
     }
     console.log('clearExpiredPeopleCaseWarnings completed', { cleared });
+  },
+);
+
+// Just after London midnight: pay 25 coins to whoever holds 1st/2nd/3rd for yesterday.
+exports.settleFunPodiumCoins = onSchedule(
+  {
+    schedule: '5 0 * * *',
+    timeZone: 'Europe/London',
+    region: 'europe-west2',
+  },
+  async () => {
+    const todayKey = getLondonDayKey();
+    const dayKey = previousLondonDayKey(todayKey);
+    const gameKeys = (FUN_GAME_ROSTER || []).map((g) => g.key).filter(Boolean);
+    const result = await settlePodiumCoinsForDay(db, {
+      dayKey,
+      FieldValue: admin.firestore.FieldValue,
+      gameKeys,
+    });
+    console.log('settleFunPodiumCoins completed', result);
   },
 );
 
@@ -4972,7 +5198,26 @@ exports.createSuggestion = onRequest(
         console.warn('createSuggestion email alert failed', mailError?.message || mailError);
       }
 
-      res.status(201).json({ suggestion: serializeSuggestion(snap) });
+      let coinsAwarded = [];
+      try {
+        const dayKey = getLondonDayKey();
+        const weekKey = getLondonWeekKey(dayKey);
+        const result = await awardCoins(db, {
+          uid: session.profile.uid,
+          amount: COIN_AMOUNTS.suggestion,
+          reason: 'suggestion',
+          idempotencyKey: `suggestion:${weekKey}:${session.profile.uid}`,
+          FieldValue: admin.firestore.FieldValue,
+          fullName: authorName,
+          meta: { refType: 'suggestion', refId: ref.id, dayKey },
+        });
+        const award = toCoinAward(result);
+        if (award) coinsAwarded = [award];
+      } catch (coinError) {
+        console.warn('createSuggestion coin award failed', coinError?.message || coinError);
+      }
+
+      res.status(201).json(withCoinAwards({ suggestion: serializeSuggestion(snap) }, coinsAwarded));
     } catch (error) {
       console.error('createSuggestion failed', error);
       res.status(500).json({ error: 'Failed to create suggestion.' });
@@ -5222,13 +5467,44 @@ exports.sendKudos = onRequest(
       });
       await batch.commit();
 
+      const FieldValue = admin.firestore.FieldValue;
+      const coinsAwarded = [];
+      // Coin reward capped once per London day for send + receive (not per kudos doc).
+      try {
+        const sendResult = await awardCoins(db, {
+          uid: session.profile.uid,
+          amount: COIN_AMOUNTS.kudos_send,
+          reason: 'kudos_send',
+          idempotencyKey: `kudos_send:${dayKey}:${session.profile.uid}`,
+          FieldValue,
+          fullName: fromName,
+          meta: { refType: 'kudos', dayKey },
+        });
+        const sendAward = toCoinAward(sendResult);
+        if (sendAward) coinsAwarded.push(sendAward);
+
+        for (const recipient of recipients) {
+          await awardCoins(db, {
+            uid: recipient.toUid,
+            amount: COIN_AMOUNTS.kudos_receive,
+            reason: 'kudos_receive',
+            idempotencyKey: `kudos_receive:${dayKey}:${recipient.toUid}`,
+            FieldValue,
+            fullName: recipient.toName,
+            meta: { refType: 'kudos', dayKey },
+          });
+        }
+      } catch (coinError) {
+        console.warn('sendKudos coin award failed', coinError?.message || coinError);
+      }
+
       const snaps = await Promise.all(refs.map((ref) => ref.get()));
       const kudosList = snaps.map(serializeKudos);
-      res.status(201).json({
+      res.status(201).json(withCoinAwards({
         kudos: kudosList.length === 1 ? kudosList[0] : kudosList,
         sent: kudosList,
         remainingToday: Math.max(0, MAX_KUDOS_PER_DAY - sentToday - kudosList.length),
-      });
+      }, coinsAwarded));
     } catch (error) {
       console.error('sendKudos failed', error);
       const messageText = String(error?.message || '');
@@ -5761,6 +6037,12 @@ exports.submitWordleGuess = onRequest(
       }
 
       await ref.set(next, { merge: true });
+      await awardFunGameCoins({
+        uid: session.profile.uid,
+        fullName: session.profile.fullName || session.profile.email || 'Colleague',
+        gameKey: 'wordle',
+        dayKey,
+      });
       let achievements = null;
       if (won) {
         await recordFunStreakWin(db, {
@@ -6304,6 +6586,13 @@ exports.submitSokobanMove = onRequest(
       }
 
       await ref.set(next, { merge: true });
+
+      await awardFunGameCoins({
+        uid: session.profile.uid,
+        fullName: session.profile.fullName || session.profile.email || '',
+        gameKey: 'sokoban',
+        dayKey,
+      });
 
       let achievements = null;
       if (applied.game.status === 'won') {
@@ -10040,6 +10329,138 @@ exports.adminBackfillFunMedals = onRequest(
   }),
 );
 
+// POST → reverse historic live fun_win coin awards (podium pays at midnight only).
+exports.adminClawbackFunWinCoins = onRequest(
+  {
+    region: 'europe-west2',
+    timeoutSeconds: 120,
+    memory: '512MiB',
+  },
+  withCors(async (req, res) => {
+    if (req.method !== 'POST') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
+
+    const session = await getVerifiedSessionUser(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+    if (!canManagePortalAccess(session.profile)) {
+      res.status(403).json({ error: 'Admin access is required.' });
+      return;
+    }
+
+    try {
+      const result = await clawbackFunWinAwards(db, {
+        FieldValue: admin.firestore.FieldValue,
+      });
+      res.status(200).json({
+        message: `Reversed ${result.reversed} fun_win award(s) (${result.amountTotal} coins).`,
+        ...result,
+      });
+    } catch (error) {
+      console.error('adminClawbackFunWinCoins failed', error);
+      res.status(500).json({ error: error.message || 'Failed to claw back fun_win coins.' });
+    }
+  }),
+);
+
+// GET → list employee coin wallets for Fun Admin.
+exports.adminListCoinWallets = onRequest(
+  {
+    region: 'europe-west2',
+    timeoutSeconds: 60,
+    memory: '512MiB',
+  },
+  withCors(async (req, res) => {
+    if (req.method !== 'GET') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
+
+    const session = await getVerifiedSessionUser(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+    if (!canManagePortalAccess(session.profile)) {
+      res.status(403).json({ error: 'Admin access is required.' });
+      return;
+    }
+
+    try {
+      const wallets = await listCoinWallets(db, { limit: 1000 });
+      res.status(200).json({ wallets, count: wallets.length });
+    } catch (error) {
+      console.error('adminListCoinWallets failed', error);
+      res.status(500).json({ error: error.message || 'Failed to load coin wallets.' });
+    }
+  }),
+);
+
+// GET ?uid= → recent coin ledger for one employee.
+exports.adminGetCoinWalletLedger = onRequest(
+  {
+    region: 'europe-west2',
+    timeoutSeconds: 60,
+  },
+  withCors(async (req, res) => {
+    if (req.method !== 'GET') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
+
+    const session = await getVerifiedSessionUser(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+    if (!canManagePortalAccess(session.profile)) {
+      res.status(403).json({ error: 'Admin access is required.' });
+      return;
+    }
+
+    const uid = String(req.query?.uid || '').trim();
+    if (!uid) {
+      res.status(400).json({ error: 'uid is required.' });
+      return;
+    }
+
+    try {
+      const [wallet, recent] = await Promise.all([
+        getWallet(db, uid),
+        listRecentLedger(db, uid, 40),
+      ]);
+      let fullName = '';
+      try {
+        const userSnap = await db.collection('users').doc(uid).get();
+        if (userSnap.exists) {
+          fullName = String(userSnap.data()?.fullName || '').trim();
+        }
+      } catch {
+        // ignore name lookup failures
+      }
+      const walletSnap = await db.collection('coin_wallets').doc(uid).get();
+      if (walletSnap.exists && walletSnap.data()?.fullName) {
+        fullName = String(walletSnap.data().fullName || fullName).trim();
+      }
+
+      res.status(200).json({
+        uid,
+        fullName: fullName || 'Employee',
+        balance: wallet.balance,
+        lifetimeEarned: wallet.lifetimeEarned,
+        recent,
+      });
+    } catch (error) {
+      console.error('adminGetCoinWalletLedger failed', error);
+      res.status(500).json({ error: error.message || 'Failed to load wallet ledger.' });
+    }
+  }),
+);
+
 function serializePoll(doc, extras = {}) {
   const data = doc.data() || {};
   return {
@@ -10294,6 +10715,24 @@ exports.submitPollVote = onRequest(
         createdAt: now,
       }, { merge: true });
 
+      let coinsAwarded = [];
+      try {
+        const voteDayKey = getLondonDayKey();
+        const result = await awardCoins(db, {
+          uid: session.profile.uid,
+          amount: COIN_AMOUNTS.poll_vote,
+          reason: 'poll_vote',
+          idempotencyKey: `poll_vote:${voteDayKey}:${session.profile.uid}`,
+          FieldValue: admin.firestore.FieldValue,
+          fullName: session.profile.fullName || session.profile.email || '',
+          meta: { refType: 'poll', refId: pollId, dayKey: voteDayKey },
+        });
+        const award = toCoinAward(result);
+        if (award) coinsAwarded = [award];
+      } catch (coinError) {
+        console.warn('submitPollVote coin award failed', coinError?.message || coinError);
+      }
+
       const canManage = canManagePolls(
         session.profile,
         canManagePortalAccess,
@@ -10305,13 +10744,13 @@ exports.submitPollVote = onRequest(
         ? aggregatePollResults(poll, votes)
         : aggregatePollResults(poll, votes); // voter can see results after voting
 
-      res.status(200).json({
+      res.status(200).json(withCoinAwards({
         poll: serializePoll(pollSnap, {
           myVote: { optionKey, optionLabel },
           results,
           canManage,
         }),
-      });
+      }, coinsAwarded));
     } catch (error) {
       console.error('submitPollVote failed', error);
       res.status(500).json({ error: 'Failed to submit vote.' });
@@ -10442,7 +10881,50 @@ exports.getProfileWidgets = onRequest(
       const achievements = serializeAchievements(streaks, dayKey);
       const medals = await loadUserMedals(db, session.profile.uid);
 
-      res.status(200).json({
+      let coinsAwarded = [];
+      try {
+        const loginResult = await maybeAwardDailyLogin(db, {
+          uid: session.profile.uid,
+          dayKey,
+          FieldValue: admin.firestore.FieldValue,
+          fullName: session.profile.fullName || session.profile.email || '',
+        });
+        const loginAward = toCoinAward({ ...loginResult, reason: loginResult.reason || 'daily_login' });
+        if (loginAward) coinsAwarded.push(loginAward);
+      } catch (coinError) {
+        console.warn('getProfileWidgets daily login coins failed', coinError?.message || coinError);
+      }
+
+      // One-shot: reverse historic live fun_win awards (podium pays at midnight only).
+      try {
+        const clawMetaRef = db.collection('coin_meta').doc('fun_win_clawback_v1');
+        const clawMeta = await clawMetaRef.get();
+        if (!clawMeta.exists) {
+          const clawResult = await clawbackFunWinAwards(db, {
+            FieldValue: admin.firestore.FieldValue,
+          });
+          await clawMetaRef.set({
+            doneAt: admin.firestore.FieldValue.serverTimestamp(),
+            triggeredByUid: session.profile.uid,
+            ...clawResult,
+          });
+          console.log('fun_win clawback completed', clawResult);
+        }
+      } catch (clawError) {
+        console.warn('getProfileWidgets fun_win clawback failed', clawError?.message || clawError);
+      }
+
+      const [wallet, recentCoins, completedEarnIds] = await Promise.all([
+        getWallet(db, session.profile.uid),
+        listRecentLedger(db, session.profile.uid, 8),
+        getCompletedEarnIds(db, {
+          uid: session.profile.uid,
+          dayKey,
+          employeeProfile: session.profile.employeeProfile || {},
+        }),
+      ]);
+
+      res.status(200).json(withCoinAwards({
         dayKey,
         rotation: getFunRotationForDay(dayKey),
         trivia: {
@@ -10481,13 +10963,102 @@ exports.getProfileWidgets = onRequest(
         },
         achievements,
         medals,
+        coins: {
+          balance: wallet.balance,
+          lifetimeEarned: wallet.lifetimeEarned,
+          recent: recentCoins,
+          completed: completedEarnIds,
+        },
         kudos: {
           received: await loadKudosForRecipient(db, session.profile.uid, dayKey),
         },
-      });
+      }, coinsAwarded));
     } catch (error) {
       console.error('getProfileWidgets failed', error);
       res.status(500).json({ error: 'Failed to load profile widgets.' });
+    }
+  }),
+);
+
+/**
+ * POST /api/awardPortalCoins
+ * Cross-portal coin awards (Assessments, Training, etc.).
+ *
+ * Headers: x-provision-secret (any configured provision secret)
+ * Body: { uid, amount, reason, idempotencyKey, source? }
+ * - amount: integer 1–500
+ * - reason: short string (e.g. training_assessment)
+ * - idempotencyKey: unique per award (e.g. assessment:{id}:{uid})
+ */
+exports.awardPortalCoins = onRequest(
+  { region: 'europe-west2' },
+  withCors(async (req, res) => {
+    if (req.method !== 'POST') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
+
+    if (!isAuthorizedPortalProvisionRequest(req)) {
+      res.status(401).json({ error: 'Unauthorized.' });
+      return;
+    }
+
+    const uid = String(req.body?.uid || '').trim();
+    const reason = String(req.body?.reason || '').trim().slice(0, 80);
+    const idempotencyKey = sanitizeIdempotencyKey(req.body?.idempotencyKey);
+    const source = String(req.body?.source || '').trim().slice(0, 80);
+    const amount = Math.floor(Number(req.body?.amount));
+
+    if (!uid) {
+      res.status(400).json({ error: 'uid is required.' });
+      return;
+    }
+    if (!reason) {
+      res.status(400).json({ error: 'reason is required.' });
+      return;
+    }
+    if (!idempotencyKey) {
+      res.status(400).json({ error: 'idempotencyKey is required.' });
+      return;
+    }
+    if (!Number.isFinite(amount) || amount < MIN_EXTERNAL_AMOUNT || amount > MAX_EXTERNAL_AMOUNT) {
+      res.status(400).json({
+        error: `amount must be an integer between ${MIN_EXTERNAL_AMOUNT} and ${MAX_EXTERNAL_AMOUNT}.`,
+      });
+      return;
+    }
+
+    try {
+      const profile = await getUserProfile(uid);
+      if (!profile || profile.isActive === false) {
+        res.status(404).json({ error: 'Employee not found.' });
+        return;
+      }
+
+      const result = await awardCoins(db, {
+        uid,
+        amount,
+        reason,
+        idempotencyKey,
+        FieldValue: admin.firestore.FieldValue,
+        fullName: profile.fullName || profile.email || '',
+        meta: {
+          source: source || 'external_portal',
+          refType: 'external',
+          refId: idempotencyKey,
+        },
+      });
+
+      res.status(200).json({
+        awarded: result.awarded,
+        amount: result.awarded ? result.amount : 0,
+        balance: result.balance,
+        uid,
+        reason,
+      });
+    } catch (error) {
+      console.error('awardPortalCoins failed', error);
+      res.status(500).json({ error: 'Failed to award coins.' });
     }
   }),
 );

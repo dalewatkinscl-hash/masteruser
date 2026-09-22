@@ -362,6 +362,7 @@ function ContentLibrary({ items, onRefresh, onDelete }) {
 
 const TABS = [
   { id: 'overview', label: 'Rotation' },
+  { id: 'coin-wallets', label: 'Coin wallets' },
   { id: 'test', label: 'Test / preview' },
   { id: 'wanted', label: 'Dev · Wanted' },
   { id: 'wordle-suspects', label: 'Wordle suspects' },
@@ -805,6 +806,214 @@ function GeoGuessrSandbox() {
   );
 }
 
+function CoinWalletsPanel() {
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [wallets, setWallets] = useState([]);
+  const [query, setQuery] = useState('');
+  const [expandedUid, setExpandedUid] = useState('');
+  const [ledgerByUid, setLedgerByUid] = useState({});
+  const [ledgerLoadingUid, setLedgerLoadingUid] = useState('');
+  const [ledgerError, setLedgerError] = useState('');
+
+  const load = async () => {
+    try {
+      setLoading(true);
+      setError('');
+      const response = await fetch('/api/adminListCoinWallets', { credentials: 'include' });
+      const payload = (await readJsonResponse(response)) || {};
+      if (!response.ok) throw new Error(payload.error || 'Failed to load wallets.');
+      setWallets(payload.wallets || []);
+    } catch (err) {
+      setError(err.message || 'Failed to load wallets.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return wallets;
+    return wallets.filter((row) => (
+      String(row.fullName || '').toLowerCase().includes(q)
+      || String(row.uid || '').toLowerCase().includes(q)
+    ));
+  }, [wallets, query]);
+
+  const toggleRow = async (uid) => {
+    if (expandedUid === uid) {
+      setExpandedUid('');
+      setLedgerError('');
+      return;
+    }
+    setExpandedUid(uid);
+    setLedgerError('');
+    if (ledgerByUid[uid]) return;
+
+    try {
+      setLedgerLoadingUid(uid);
+      const response = await fetch(`/api/adminGetCoinWalletLedger?uid=${encodeURIComponent(uid)}`, {
+        credentials: 'include',
+      });
+      const payload = (await readJsonResponse(response)) || {};
+      if (!response.ok) throw new Error(payload.error || 'Failed to load transactions.');
+      setLedgerByUid((prev) => ({
+        ...prev,
+        [uid]: Array.isArray(payload.recent) ? payload.recent : [],
+      }));
+    } catch (err) {
+      setLedgerError(err.message || 'Failed to load transactions.');
+    } finally {
+      setLedgerLoadingUid('');
+    }
+  };
+
+  const reasonLabel = (reason) => {
+    const labels = {
+      next_of_kin: 'Next of kin',
+      phone_number: 'Phone number',
+      home_address: 'Home address',
+      personal_email: 'Personal email',
+      fun_attempt: 'Fun game played',
+      fun_win: 'Fun game won',
+      podium: 'Podium finish',
+      streak_5: '5-day streak',
+      kudos_send: 'Sent kudos',
+      kudos_receive: 'Received kudos',
+      poll_vote: 'Poll vote',
+      suggestion: 'Suggestion',
+      daily_login: 'Daily login',
+      training_assessment: 'Training assessment',
+    };
+    return labels[reason] || String(reason || 'Reward').replace(/_/g, ' ');
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="rounded-xl border border-[#1a2540] p-4 space-y-2">
+        <p className="text-sm text-slate-300">
+          Employee coin wallets. Click a row to expand recent transactions.
+        </p>
+        <p className="text-xs text-slate-500">
+          Sorted by balance. Only people who have earned coins appear here.
+        </p>
+      </div>
+
+      <div className="flex flex-wrap gap-3 items-center">
+        <input
+          type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search name…"
+          className="min-w-[16rem] flex-1 bg-[#060e1a] border border-[#1a2540] rounded-lg px-3 py-2 text-sm text-slate-100"
+        />
+        <button
+          type="button"
+          onClick={load}
+          disabled={loading}
+          className="px-3 py-2 rounded-lg text-sm border border-[#1a2540] text-slate-300 hover:bg-white/[0.04] disabled:opacity-50"
+        >
+          {loading ? 'Loading…' : 'Refresh'}
+        </button>
+      </div>
+
+      {error ? <p className="text-sm text-rose-300">{error}</p> : null}
+
+      <div className="rounded-xl border border-[#1a2540] overflow-hidden">
+        <div className="px-4 py-3 border-b border-[#1a2540] flex items-center justify-between gap-3">
+          <p className="text-sm font-semibold text-indigo-200">
+            Wallets ({filtered.length}{query.trim() ? ` of ${wallets.length}` : ''})
+          </p>
+          <p className="text-[11px] text-slate-500 tabular-nums">
+            {wallets.reduce((sum, row) => sum + (Number(row.balance) || 0), 0)} coins in circulation
+          </p>
+        </div>
+
+        {loading ? (
+          <p className="px-4 py-6 text-sm text-slate-500">Loading wallets…</p>
+        ) : !filtered.length ? (
+          <p className="px-4 py-6 text-sm text-slate-500">
+            {wallets.length ? 'No matches.' : 'No coin wallets yet.'}
+          </p>
+        ) : (
+          <ul className="divide-y divide-[#1a2540]">
+            {filtered.map((row) => {
+              const open = expandedUid === row.uid;
+              const ledger = ledgerByUid[row.uid];
+              const ledgerBusy = ledgerLoadingUid === row.uid;
+              return (
+                <li key={row.uid}>
+                  <button
+                    type="button"
+                    onClick={() => toggleRow(row.uid)}
+                    className="w-full px-4 py-3 flex items-center justify-between gap-3 text-left hover:bg-white/[0.03]"
+                  >
+                    <span className="min-w-0">
+                      <span className="block text-sm font-medium text-slate-100 truncate">
+                        {row.fullName}
+                      </span>
+                      <span className="block text-[11px] text-slate-500 truncate">
+                        Lifetime earned {Number(row.lifetimeEarned) || 0}
+                      </span>
+                    </span>
+                    <span className="flex items-center gap-3 flex-shrink-0">
+                      <span className="text-sm font-semibold tabular-nums text-amber-200">
+                        {Number(row.balance) || 0}
+                      </span>
+                      <span className={`text-slate-500 text-xs transition-transform ${open ? 'rotate-90' : ''}`}>
+                        ›
+                      </span>
+                    </span>
+                  </button>
+
+                  {open ? (
+                    <div className="px-4 pb-4 bg-[#060e1a]/60">
+                      {ledgerBusy ? (
+                        <p className="text-xs text-slate-500 py-2">Loading transactions…</p>
+                      ) : ledgerError && !ledger ? (
+                        <p className="text-xs text-rose-300 py-2">{ledgerError}</p>
+                      ) : !ledger?.length ? (
+                        <p className="text-xs text-slate-500 py-2">No recent transactions.</p>
+                      ) : (
+                        <ul className="space-y-1.5 pt-1">
+                          {ledger.map((tx) => (
+                            <li
+                              key={tx.id}
+                              className="flex items-center justify-between gap-3 rounded-lg border border-[#1a2540] bg-[#0b1220] px-3 py-2 text-xs"
+                            >
+                              <span className="min-w-0">
+                                <span className="block text-slate-200 truncate">
+                                  {reasonLabel(tx.reason)}
+                                </span>
+                                <span className="block text-[10px] text-slate-500 truncate">
+                                  {[tx.dayKey, tx.gameKey, tx.createdAt ? new Date(tx.createdAt).toLocaleString() : null]
+                                    .filter(Boolean)
+                                    .join(' · ')}
+                                </span>
+                              </span>
+                              <span className="flex-shrink-0 tabular-nums text-amber-200 font-semibold">
+                                +{tx.amount || 0}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  ) : null}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function WordleSuspectsPanel() {
   const [employees, setEmployees] = useState([]);
   const [employeesLoading, setEmployeesLoading] = useState(true);
@@ -1187,7 +1396,7 @@ export default function FunAdmin() {
         {error ? <p className="text-sm text-rose-300">{error}</p> : null}
 
         {tab === 'overview' && <RotationSettingsPanel />}
-
+        {tab === 'coin-wallets' && <CoinWalletsPanel />}
         {tab === 'wanted' && <WantedSandbox />}
 
         {tab === 'test' && (

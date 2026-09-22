@@ -527,6 +527,21 @@
         "region": "europe-west2"
       },
       {
+        "source": "/api/adminClawbackFunWinCoins",
+        "function": "adminClawbackFunWinCoins",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/adminListCoinWallets",
+        "function": "adminListCoinWallets",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/adminGetCoinWalletLedger",
+        "function": "adminGetCoinWalletLedger",
+        "region": "europe-west2"
+      },
+      {
         "source": "/api/getFunRotation",
         "function": "getFunRotation",
         "region": "europe-west2"
@@ -609,6 +624,11 @@
       {
         "source": "/api/getProfileWidgets",
         "function": "getProfileWidgets",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/awardPortalCoins",
+        "function": "awardPortalCoins",
         "region": "europe-west2"
       },
       {

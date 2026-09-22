@@ -90,7 +90,7 @@ export default function Profile() {
     if (location.state?.profileTab) {
       setActiveTab(location.state.profileTab);
     }
-  }, [location.state]);
+  }, [location.state, location.key]);
 
   const handleChangePassword = async (e) => {
     e.preventDefault();

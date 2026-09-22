@@ -13,6 +13,11 @@
  */
 
 const { isWeekendDayKey } = require('./funRotation');
+const {
+  maybeAwardStreakUnlock,
+  maybeAwardFunAttempt,
+  toCoinAward,
+} = require('./coins');
 
 const STREAK_ACHIEVEMENT_DAYS = 5;
 
@@ -120,20 +125,20 @@ async function recordFunStreakWin(db, {
   if (isWeekendDayKey(dayKey)) return emptyGameStreak();
   const ref = db.collection('fun_streaks').doc(uid);
 
-  return db.runTransaction(async (tx) => {
+  const next = await db.runTransaction(async (tx) => {
     const snap = await tx.get(ref);
     const data = snap.exists ? snap.data() || {} : {};
     const previous = normalizeGameStreak(data[gameKey]);
 
     if (previous.lastDayKey === dayKey && previous.lastOutcome === 'win') {
-      return previous;
+      return { streak: previous, newlyUnlocked: [] };
     }
 
     // Missed days do not reset — only a prior fail does.
     const current = previous.lastOutcome === 'win'
       ? (previous.current || 0) + 1
       : 1;
-    const next = withUnlocks({
+    const streak = withUnlocks({
       current,
       best: Math.max(previous.best || 0, current),
       lastDayKey: dayKey,
@@ -141,17 +146,61 @@ async function recordFunStreakWin(db, {
       unlocked: previous.unlocked || [],
     });
 
+    const prevUnlocked = new Set(previous.unlocked || []);
+    const newlyUnlocked = (streak.unlocked || []).filter((key) => !prevUnlocked.has(key));
+
     tx.set(ref, {
       uid,
       fullName: fullName || data.fullName || 'Colleague',
       email: email || data.email || '',
-      [gameKey]: next,
+      [gameKey]: streak,
       streakFailAware: true,
       updatedAt: FieldValue.serverTimestamp(),
     }, { merge: true });
 
-    return next;
+    return { streak, newlyUnlocked };
   });
+
+  const coinsAwarded = [];
+
+  if (next.newlyUnlocked?.length && FieldValue) {
+    try {
+      const unlockResult = await maybeAwardStreakUnlock(db, {
+        uid,
+        gameKey,
+        dayKey,
+        FieldValue,
+        fullName,
+        newlyUnlocked: next.newlyUnlocked,
+      });
+      const award = toCoinAward({ ...unlockResult, reason: unlockResult.reason || 'streak_5' });
+      if (award) coinsAwarded.push(award);
+    } catch (error) {
+      console.warn('recordFunStreakWin coin award failed', error?.message || error);
+    }
+  }
+
+  if (FieldValue) {
+    try {
+      const attemptResult = await maybeAwardFunAttempt(db, {
+        uid,
+        gameKey,
+        dayKey,
+        FieldValue,
+        fullName,
+        practice: false,
+      });
+      const attemptAward = toCoinAward({ ...attemptResult, reason: attemptResult.reason || 'fun_attempt' });
+      if (attemptAward) coinsAwarded.push(attemptAward);
+      // Competitive podium coins (1st/2nd/3rd) settle at London midnight — not on win.
+    } catch (error) {
+      console.warn('recordFunStreakWin fun coins failed', error?.message || error);
+    }
+  }
+
+  const streak = next.streak || emptyGameStreak();
+  if (coinsAwarded.length) streak.coinsAwarded = coinsAwarded;
+  return streak;
 }
 
 async function recordFunStreakFail(db, {
@@ -166,7 +215,7 @@ async function recordFunStreakFail(db, {
   if (isWeekendDayKey(dayKey)) return emptyGameStreak();
   const ref = db.collection('fun_streaks').doc(uid);
 
-  return db.runTransaction(async (tx) => {
+  const next = await db.runTransaction(async (tx) => {
     const snap = await tx.get(ref);
     const data = snap.exists ? snap.data() || {} : {};
     const previous = normalizeGameStreak(data[gameKey]);
@@ -175,7 +224,7 @@ async function recordFunStreakFail(db, {
       return previous;
     }
 
-    const next = withUnlocks({
+    const streak = withUnlocks({
       current: 0,
       best: previous.best || 0,
       lastDayKey: dayKey,
@@ -187,13 +236,35 @@ async function recordFunStreakFail(db, {
       uid,
       fullName: fullName || data.fullName || 'Colleague',
       email: email || data.email || '',
-      [gameKey]: next,
+      [gameKey]: streak,
       streakFailAware: true,
       updatedAt: FieldValue.serverTimestamp(),
     }, { merge: true });
 
-    return next;
+    return streak;
   });
+
+  const coinsAwarded = [];
+  if (FieldValue) {
+    try {
+      const attemptResult = await maybeAwardFunAttempt(db, {
+        uid,
+        gameKey,
+        dayKey,
+        FieldValue,
+        fullName,
+        practice: false,
+      });
+      const award = toCoinAward({ ...attemptResult, reason: attemptResult.reason || 'fun_attempt' });
+      if (award) coinsAwarded.push(award);
+    } catch (error) {
+      console.warn('recordFunStreakFail fun coins failed', error?.message || error);
+    }
+  }
+
+  const streak = next || emptyGameStreak();
+  if (coinsAwarded.length) streak.coinsAwarded = coinsAwarded;
+  return streak;
 }
 
 async function collectOutcomeEvents(db, uid) {
