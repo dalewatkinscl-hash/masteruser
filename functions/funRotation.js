@@ -41,7 +41,7 @@ const STACK_WALK_GAME = { key: 'stackwalk', label: "O Dell's Amazon Run" };
 const PERMANENT_FUN_FROM = '2026-08-27';
 
 /** Hardcoded defaults — overridden by Firestore when present. */
-const DEFAULT_PERMANENT_GAME_KEYS = ['wordle', 'toolboxkick', 'wanted'];
+const DEFAULT_PERMANENT_GAME_KEYS = ['wordle', 'toolboxkick', 'wanted', 'boggle', 'connections'];
 /** How many non-permanent (rotated) games appear each weekday by default. */
 const DEFAULT_ROTATED_DAILY_COUNT = 4;
 
@@ -87,6 +87,15 @@ function normalizeRotationSettings(raw = {}) {
     : [...defaults.permanentGameKeys];
   // Unique, preserve order
   permanentGameKeys = [...new Set(permanentGameKeys)];
+
+  // Upgrade pre-stackwalk defaults so Boggle + Connections aren't dunked for days.
+  const oldDefault = permanentGameKeys.length === 3
+    && permanentGameKeys.includes('wordle')
+    && permanentGameKeys.includes('toolboxkick')
+    && permanentGameKeys.includes('wanted');
+  if (oldDefault) {
+    permanentGameKeys = [...defaults.permanentGameKeys];
+  }
 
   let rotatedDailyCount = Number(raw.rotatedDailyCount);
   if (!Number.isFinite(rotatedDailyCount)) {
@@ -218,9 +227,19 @@ function pickDailyGames(rosterKeys, ordinal, dailyCount) {
     return { games: [...rosterKeys], sitOuts: [] };
   }
   const sitOutCount = n - count;
+  // Evenly space sit-outs around the pool (offset by day) so adjacent games
+  // aren't dunked together for a whole week.
+  const used = new Set();
   const sitOuts = [];
   for (let i = 0; i < sitOutCount; i += 1) {
-    sitOuts.push(rosterKeys[(ordinal + i) % n]);
+    let idx = (Math.floor((i * n) / sitOutCount) + ordinal) % n;
+    let guard = 0;
+    while (used.has(idx) && guard < n) {
+      idx = (idx + 1) % n;
+      guard += 1;
+    }
+    used.add(idx);
+    sitOuts.push(rosterKeys[idx]);
   }
   const sitOutSet = new Set(sitOuts);
   return {

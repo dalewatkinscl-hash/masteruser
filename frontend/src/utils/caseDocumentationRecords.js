@@ -2,6 +2,7 @@ import {
   formatInterviewWhen,
   formatInterviewee,
   interviewDisplayStatus,
+  interviewIsOtherEmployee,
   interviewStatusLabel,
 } from './interviewNotes';
 import { stageLabel } from './peopleCasesAccess';
@@ -17,9 +18,11 @@ function formatUkDate(value) {
 export function interviewSummary(minute = {}, caseData = {}) {
   const name = formatInterviewee(minute, caseData) || 'employee';
   const when = formatInterviewWhen(minute);
-  if (when) return `Interview with ${name} on ${when}`;
+  const other = interviewIsOtherEmployee(minute, caseData);
+  const who = other ? `${name} (other employee)` : name;
+  if (when) return `Interview with ${who} on ${when}`;
   const created = formatUkDate(minute.createdAt);
-  return created ? `Interview with ${name} on ${created}` : `Interview with ${name}`;
+  return created ? `Interview with ${who} on ${created}` : `Interview with ${who}`;
 }
 
 export function documentSummary(doc = {}) {

@@ -73,7 +73,18 @@ export function formatInterviewee(item = {}, caseData = {}) {
   if (item.employeeUid && item.employeeUid === caseData?.employeeUid) {
     return caseData?.employeeNameSnapshot || '';
   }
-  return '';
+  // Older records / fallbacks: if this interview is for someone other than the case
+  // subject, avoid mis-labelling them as the case employee.
+  if (item.employeeUid && caseData?.employeeUid && item.employeeUid !== caseData.employeeUid) {
+    return 'Another employee';
+  }
+  return caseData?.employeeNameSnapshot || '';
+}
+
+export function interviewIsOtherEmployee(item = {}, caseData = {}) {
+  const intervieweeUid = item.employeeUid || item.intervieweeUid || '';
+  const caseUid = caseData?.employeeUid || item.caseEmployeeUid || '';
+  return Boolean(intervieweeUid && caseUid && intervieweeUid !== caseUid);
 }
 
 export function buildInterviewContent({ content, interviewAt, interviewTime, employeeName, managersLabel, stageLabelText }) {

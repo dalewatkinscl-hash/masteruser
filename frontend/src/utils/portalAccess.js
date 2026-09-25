@@ -1,4 +1,5 @@
 import { KNOWN_PORTALS } from '../config/portals';
+import { buildFeatureAccess, sanitizeFeatureAccessClient } from '../config/features';
 
 export function buildPortalsAccess(existing = {}) {
   const base = Object.fromEntries(KNOWN_PORTALS.map(({ key }) => [key, '']));
@@ -63,6 +64,7 @@ export function portalAccessFromUser(user = {}) {
     fullName: user.fullName || '',
     isActive: user.isActive ?? true,
     portalsAccess: buildPortalsAccess(user.portalsAccess || {}),
+    featureAccess: buildFeatureAccess(user.featureAccess || {}),
     mentorProfileId: getMentorProfileId(user.portalMappings || {}),
     assessmentProfileId: getAssessmentProfileId(user.portalMappings || {}),
     tyreProfileId: getTyreProfileId(user.portalMappings || {}),

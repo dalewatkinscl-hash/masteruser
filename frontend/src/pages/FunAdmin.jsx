@@ -11,6 +11,7 @@ import { EncloseSandbox } from '../components/EnclosePanel';
 import { LetterboxSandbox } from '../components/LetterboxPanel';
 import { PipesSandbox } from '../components/PipesPanel';
 import { StackWalkSandbox } from '../components/StackWalkPanel';
+import { CoachDepotSandbox } from '../components/CoachDepotPanel';
 import { CasefileSandbox } from '../components/CasefilePanel';
 import { ToolboxKickSandbox } from '../components/ToolboxKickPanel';
 import { WantedSandbox } from '../components/WantedPanel';
@@ -371,6 +372,7 @@ const TABS = [
   { id: 'letterbox', label: 'Dev · Letter Box' },
   { id: 'pipes', label: 'Dev · Pipes' },
   { id: 'stackwalk', label: "Dev · O Dell's Amazon Run" },
+  { id: 'coachdepot', label: 'Dev · Coach Depot' },
   { id: 'casefile', label: 'Dev · Casefile' },
   { id: 'toolboxkick', label: 'Dev · Little Dicks Toolbox' },
   { id: 'geoguessr', label: 'GeoGuessr' },
@@ -1363,7 +1365,7 @@ export default function FunAdmin() {
   return (
     <div className="min-h-screen bg-cl-bg text-cl-fg">
       <WorkspaceTabs />
-      <div className={`${tab === 'geoguessr' || tab === 'nonograms' || tab === 'casefile' || tab === 'wanted' ? 'max-w-6xl' : 'max-w-4xl'} mx-auto px-4 sm:px-8 py-6 space-y-5`}>
+      <div className={`${tab === 'geoguessr' || tab === 'nonograms' || tab === 'casefile' || tab === 'wanted' ? 'max-w-6xl' : tab === 'coachdepot' ? 'max-w-7xl' : 'max-w-4xl'} mx-auto px-4 sm:px-8 py-6 space-y-5`}>
         <div>
           <button
             type="button"
@@ -1492,6 +1494,7 @@ export default function FunAdmin() {
         {tab === 'letterbox' && <LetterboxSandbox />}
         {tab === 'pipes' && <PipesSandbox />}
         {tab === 'stackwalk' && <StackWalkSandbox />}
+        {tab === 'coachdepot' && <CoachDepotSandbox />}
         {tab === 'casefile' && <CasefileSandbox />}
         {tab === 'toolboxkick' && <ToolboxKickSandbox />}
         {tab === 'geoguessr' && <GeoGuessrSandbox />}

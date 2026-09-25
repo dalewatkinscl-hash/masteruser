@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { KNOWN_PORTALS } from '../config/portals';
+import { KNOWN_FEATURES } from '../config/features';
 import { readJsonResponse } from '../utils/employeeProfile';
 import { sortProfilesAtoZ } from '../utils/portalAccess';
 
@@ -19,6 +20,7 @@ export default function PortalAccessFields({
   formData,
   onChange,
   onPortalRoleChange,
+  onFeatureAccessChange,
   readOnly = false,
 }) {
   const [mentorProfiles, setMentorProfiles] = useState([]);
@@ -128,6 +130,23 @@ export default function PortalAccessFields({
   const handlePortalChange = (portal, value) => {
     if (readOnly) return;
     onPortalRoleChange(portal, value);
+  };
+
+  const handleFeatureToggle = (featureKey, enabled) => {
+    if (readOnly) return;
+    if (typeof onFeatureAccessChange === 'function') {
+      onFeatureAccessChange(featureKey, enabled);
+      return;
+    }
+    onChange?.({
+      target: {
+        name: 'featureAccess',
+        value: {
+          ...(formData.featureAccess || {}),
+          [featureKey]: Boolean(enabled),
+        },
+      },
+    });
   };
 
   return (
@@ -316,6 +335,49 @@ export default function PortalAccessFields({
           </div>
         </>
       )}
+
+      <div className="pt-4 border-t border-[#1a2540] mt-2 space-y-3">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-widest text-slate-400">
+            Feature access
+          </p>
+          <p className="text-[11px] text-slate-500 mt-1">
+            Grant individual features without a full portal role (e.g. Bonus without People Cases).
+          </p>
+        </div>
+        {KNOWN_FEATURES.map(({ key, label, description }) => {
+          const enabled = Boolean(formData.featureAccess?.[key]);
+          const coveredByCases = Boolean(
+            formData.portalsAccess?.cases_app
+            || formData.portalsAccess?.master_admin === 'admin',
+          );
+          return (
+            <label
+              key={key}
+              className={`flex items-start gap-3 rounded-lg border border-[#1a2540] bg-[#060e1a]/50 px-3 py-2.5 ${
+                readOnly ? '' : 'cursor-pointer'
+              }`}
+            >
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={enabled}
+                disabled={readOnly}
+                onChange={(e) => handleFeatureToggle(key, e.target.checked)}
+              />
+              <span className="min-w-0">
+                <span className="block text-sm text-slate-100">{label}</span>
+                <span className="block text-[11px] text-slate-500 mt-0.5">{description}</span>
+                {key === 'bonus_deductions' && coveredByCases && !enabled ? (
+                  <span className="block text-[11px] text-emerald-400/80 mt-1">
+                    Already included via People Cases / Master Admin role.
+                  </span>
+                ) : null}
+              </span>
+            </label>
+          );
+        })}
+      </div>
     </div>
   );
 }

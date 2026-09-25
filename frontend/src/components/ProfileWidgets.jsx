@@ -5,7 +5,7 @@ import VotersHover from './VotersHover';
 import { KudosBadgeGraphic } from './kudosGraphics';
 import { FunRankBadge } from './FunLeaderboardRow';
 import { getLondonDayKey } from './FunDayPicker';
-import { getFunRotationForDay } from '../lib/funRotation';
+import { getFunRotationForDay, setClientRotationSettings } from '../lib/funRotation';
 import { coinReasonLabel, visibleCoinEarnActions } from '../utils/coinAwards';
 import { useAuth } from '../context/AuthContext';
 
@@ -172,6 +172,13 @@ export default function ProfileWidgets({ currentUserUid }) {
     const response = await fetch('/api/getProfileWidgets', { credentials: 'include' });
     const payload = (await readJsonResponse(response)) || {};
     if (!response.ok) throw new Error(payload.error || 'Failed to load widgets.');
+    if (payload.settings) setClientRotationSettings(payload.settings);
+    else if (payload.rotation?.permanentGameKeys) {
+      setClientRotationSettings({
+        permanentGameKeys: payload.rotation.permanentGameKeys,
+        rotatedDailyCount: payload.rotation.rotatedDailyCount,
+      });
+    }
     setData(payload);
   };
 

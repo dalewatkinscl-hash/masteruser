@@ -130,6 +130,82 @@ async function awardCoins(db, {
   });
 }
 
+/**
+ * Debit portal coins once per idempotencyKey. Ledger amount is negative.
+ * Returns { spent, amount, balance, error? }.
+ */
+async function spendCoins(db, {
+  uid,
+  amount,
+  reason,
+  idempotencyKey,
+  FieldValue,
+  fullName = '',
+  meta = {},
+}) {
+  if (!db || !FieldValue || !uid) {
+    return { spent: false, amount: 0, balance: 0, error: 'missing_args' };
+  }
+
+  const coins = Math.floor(Number(amount));
+  if (!Number.isFinite(coins) || coins <= 0) {
+    return { spent: false, amount: 0, balance: 0, error: 'invalid_amount' };
+  }
+
+  const key = sanitizeIdempotencyKey(idempotencyKey);
+  if (!key) {
+    return { spent: false, amount: 0, balance: 0, error: 'missing_key' };
+  }
+
+  const reasonKey = String(reason || 'unknown').trim().slice(0, 80) || 'unknown';
+  const ledgerRef = db.collection('coin_ledger').doc(key);
+  const walletRef = db.collection('coin_wallets').doc(uid);
+
+  return db.runTransaction(async (tx) => {
+    const ledgerSnap = await tx.get(ledgerRef);
+    const walletSnap = await tx.get(walletRef);
+    const previous = normalizeWallet(walletSnap.exists ? walletSnap.data() : {});
+
+    if (ledgerSnap.exists) {
+      return { spent: false, amount: 0, balance: previous.balance, reason: reasonKey, duplicate: true };
+    }
+
+    if (previous.balance < coins) {
+      return {
+        spent: false,
+        amount: 0,
+        balance: previous.balance,
+        reason: reasonKey,
+        error: 'insufficient_funds',
+      };
+    }
+
+    const nextBalance = previous.balance - coins;
+    const ledgerDoc = {
+      uid,
+      amount: -coins,
+      reason: reasonKey,
+      createdAt: FieldValue.serverTimestamp(),
+    };
+    if (meta.refType) ledgerDoc.refType = String(meta.refType).slice(0, 40);
+    if (meta.refId) ledgerDoc.refId = String(meta.refId).slice(0, 200);
+    if (meta.dayKey) ledgerDoc.dayKey = String(meta.dayKey).slice(0, 20);
+    if (meta.source) ledgerDoc.source = String(meta.source).slice(0, 80);
+    if (meta.gameKey) ledgerDoc.gameKey = String(meta.gameKey).slice(0, 40);
+
+    tx.set(ledgerRef, ledgerDoc);
+    tx.set(walletRef, {
+      uid,
+      balance: nextBalance,
+      lifetimeEarned: previous.lifetimeEarned,
+      ...(fullName ? { fullName: String(fullName).slice(0, 120) } : {}),
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+
+    return { spent: true, amount: coins, balance: nextBalance, reason: reasonKey };
+  });
+}
+
 function toCoinAward(result) {
   if (!result?.awarded || !(result.amount > 0)) return null;
   return {
@@ -506,6 +582,7 @@ module.exports = {
   emptyWallet,
   normalizeWallet,
   awardCoins,
+  spendCoins,
   toCoinAward,
   collectCoinAwards,
   getWallet,

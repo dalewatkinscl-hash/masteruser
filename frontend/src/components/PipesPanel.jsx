@@ -520,6 +520,7 @@ export function PipesDailyPanel({ currentUserUid = null, onAchievements = null, 
         todayKey={todayKey}
         onChange={setDayKey}
         allowFuture={Boolean(isAdmin)}
+        gameKey="pipes"
       />
       <PipesPanel
         key={`${puzzle.id}-${game?.status || 'play'}`}

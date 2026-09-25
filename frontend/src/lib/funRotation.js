@@ -36,7 +36,7 @@ export const STACK_WALK_GAME = { key: 'stackwalk', label: "O Dell's Amazon Run" 
 
 export const PERMANENT_FUN_FROM = '2026-08-27';
 
-export const DEFAULT_PERMANENT_GAME_KEYS = ['wordle', 'toolboxkick', 'wanted'];
+export const DEFAULT_PERMANENT_GAME_KEYS = ['wordle', 'toolboxkick', 'wanted', 'boggle', 'connections'];
 export const DEFAULT_ROTATED_DAILY_COUNT = 4;
 
 /** @deprecated Prefer DEFAULT_PERMANENT_GAME_KEYS. */
@@ -61,12 +61,31 @@ export const DAILY_GAME_COUNT = DEFAULT_PERMANENT_GAME_KEYS.length + DEFAULT_ROT
 const DAY_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const ALL_ROSTER_KEYS = FUN_GAME_ROSTER.map((g) => g.key);
 
+/** Live settings from /api/getFunRotation — keeps FunDayPicker in sync with the server. */
+let clientRotationSettings = null;
+
 export function getDefaultRotationSettings() {
   return {
     permanentGameKeys: [...DEFAULT_PERMANENT_GAME_KEYS],
     rotatedDailyCount: DEFAULT_ROTATED_DAILY_COUNT,
     source: 'default',
   };
+}
+
+export function setClientRotationSettings(raw) {
+  if (!raw || typeof raw !== 'object') {
+    clientRotationSettings = null;
+    return null;
+  }
+  clientRotationSettings = normalizeRotationSettings({
+    ...raw,
+    source: raw.source || 'api',
+  });
+  return clientRotationSettings;
+}
+
+export function getClientRotationSettings() {
+  return clientRotationSettings || getDefaultRotationSettings();
 }
 
 export function normalizeRotationSettings(raw = {}) {
@@ -76,6 +95,15 @@ export function normalizeRotationSettings(raw = {}) {
     ? raw.permanentGameKeys.map((k) => String(k || '').trim()).filter((k) => allowed.has(k))
     : [...defaults.permanentGameKeys];
   permanentGameKeys = [...new Set(permanentGameKeys)];
+
+  // Upgrade pre-stackwalk defaults so Boggle + Connections aren't dunked for days.
+  const oldDefault = permanentGameKeys.length === 3
+    && permanentGameKeys.includes('wordle')
+    && permanentGameKeys.includes('toolboxkick')
+    && permanentGameKeys.includes('wanted');
+  if (oldDefault) {
+    permanentGameKeys = [...defaults.permanentGameKeys];
+  }
 
   let rotatedDailyCount = Number(raw.rotatedDailyCount);
   if (!Number.isFinite(rotatedDailyCount)) {
@@ -192,9 +220,19 @@ function pickDailyGames(rosterKeys, ordinal, dailyCount) {
     return { games: [...rosterKeys], sitOuts: [] };
   }
   const sitOutCount = n - count;
+  // Evenly space sit-outs around the pool (offset by day) so adjacent games
+  // aren't dunked together for a whole week.
+  const used = new Set();
   const sitOuts = [];
   for (let i = 0; i < sitOutCount; i += 1) {
-    sitOuts.push(rosterKeys[(ordinal + i) % n]);
+    let idx = (Math.floor((i * n) / sitOutCount) + ordinal) % n;
+    let guard = 0;
+    while (used.has(idx) && guard < n) {
+      idx = (idx + 1) % n;
+      guard += 1;
+    }
+    used.add(idx);
+    sitOuts.push(rosterKeys[idx]);
   }
   const sitOutSet = new Set(sitOuts);
   return {
@@ -244,7 +282,9 @@ function countWordFor(n) {
 
 export function getFunRotationForDay(dayKey, settingsInput = null) {
   const key = DAY_KEY_RE.test(String(dayKey || '')) ? dayKey : '';
-  const settings = normalizeRotationSettings(settingsInput || getDefaultRotationSettings());
+  const settings = normalizeRotationSettings(
+    settingsInput || clientRotationSettings || getDefaultRotationSettings(),
+  );
 
   if (!key || isWeekendDayKey(key)) {
     const monday = nextMondayDayKey(key || '2026-08-03');

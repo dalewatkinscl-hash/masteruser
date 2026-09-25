@@ -1092,6 +1092,7 @@ export function StackWalkDailyPanel({
           todayKey={todayKey}
           onChange={setDayKey}
           allowFuture={Boolean(isAdmin)}
+          gameKey="stackwalk"
         />
       )}
       <StackWalkPlay

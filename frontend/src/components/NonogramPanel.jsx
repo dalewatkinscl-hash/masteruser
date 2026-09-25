@@ -669,6 +669,7 @@ export default function NonogramPanel({
             todayKey={todayKey}
             onChange={setDayKey}
             allowFuture={isAdmin || isSandbox}
+            gameKey="nonogram"
           />
         </div>
       </div>

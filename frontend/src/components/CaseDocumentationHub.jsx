@@ -318,10 +318,12 @@ export default function CaseDocumentationHub({
                   <button
                     type="button"
                     className="block w-full text-left px-4 py-2 text-sm text-slate-200 hover:bg-[#060e1a]"
-                    onClick={() => {
+                    onPointerDown={(e) => {
+                      e.preventDefault();
                       setInterviewForm(freshInterviewForm(defaultIntervieweeUid));
                       setShowInterviewForm(true);
                       setShowTemplates(false);
+                      setDismissedInitialInterview(false);
                       setMenuOpen(false);
                     }}
                   >
@@ -402,6 +404,11 @@ export default function CaseDocumentationHub({
                 emptyLabel="Select employee interviewed"
                 disabled={saving}
               />
+              <p className="text-[11px] text-slate-500 leading-relaxed">
+                Defaults to the case employee. Click <span className="text-slate-300">Change</span> to
+                interview someone else first (for example a witness) — notes are sent to that person
+                for confirmation.
+              </p>
             </label>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <label className="block space-y-1">
@@ -464,7 +471,10 @@ export default function CaseDocumentationHub({
               }
               onClick={submitInterview}
             >
-              Send notes to employee for confirmation
+              {interviewForm.intervieweeUid
+                && interviewForm.intervieweeUid !== defaultIntervieweeUid
+                ? 'Send notes for confirmation'
+                : 'Send notes to employee for confirmation'}
             </button>
           </div>
         )}

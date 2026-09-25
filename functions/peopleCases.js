@@ -2,7 +2,7 @@ const { wrapWithLetterhead } = require('./letterTemplate');
 const { formatSignatureBlock } = require('./fileNoteForImprovement');
 
 /**
- * People Cases — disciplinary, grievance, vehicle-accident, and Samsara coaching workflows.
+ * People Cases — disciplinary, grievance, vehicle-accident, Samsara coaching, and record workflows.
  * Guide/ACAS copy is data-driven so HR can update without code changes later.
  */
 
@@ -15,6 +15,7 @@ const PROCESS_FAMILIES = new Set([
   'grievance',
   'vehicle_accident',
   'samsara_coaching',
+  'record',
 ]);
 
 const DISCIPLINARY_STAGES = [
@@ -47,6 +48,12 @@ const SAMSARA_STAGES = [
   'closed',
 ];
 
+/** Neutral personnel record — documents / interviews without disciplinary or grievance process. */
+const RECORD_STAGES = [
+  'open',
+  'closed',
+];
+
 function toTrimmedString(value) {
   if (value === undefined || value === null) return '';
   return String(value).trim();
@@ -66,6 +73,9 @@ function normalizeStage(processFamily, stage) {
   if (processFamily === 'samsara_coaching') {
     return 'closed';
   }
+  if (processFamily === 'record') {
+    return RECORD_STAGES.includes(raw) ? raw : 'open';
+  }
   // disciplinary
   if (raw === 'intake' || raw === 'investigation' || raw === 'minutes_signoff') return 'fact_finding';
   return DISCIPLINARY_STAGES.includes(raw) ? raw : 'fact_finding';
@@ -78,21 +88,24 @@ function mapStageForFamilyChange(fromFamily, toFamily, currentStage) {
   const stage = normalizeStage(from, currentStage);
   if (from === to) return stage;
   if (to === 'samsara_coaching') return 'closed';
+  if (to === 'record') {
+    return stage === 'closed' ? 'closed' : 'open';
+  }
   if (['outcome_pack', 'closed', 'appeal'].includes(stage) && stagesForFamily(to).includes(stage)) {
     return stage;
   }
   if (to === 'grievance') {
     if (stage === 'hearing_invite' || stage === 'hearing') return 'meeting';
-    if (stage === 'fact_finding') return 'acknowledged';
+    if (stage === 'fact_finding' || stage === 'open') return 'acknowledged';
     return 'acknowledged';
   }
   if (to === 'disciplinary') {
     if (stage === 'meeting') return 'hearing';
-    if (stage === 'acknowledged' || stage === 'investigation') return 'fact_finding';
+    if (stage === 'acknowledged' || stage === 'investigation' || stage === 'open') return 'fact_finding';
     return 'fact_finding';
   }
   if (to === 'vehicle_accident') {
-    if (stage === 'investigation' || stage === 'fact_finding') return 'investigation';
+    if (stage === 'investigation' || stage === 'fact_finding' || stage === 'open') return 'investigation';
     return 'triage';
   }
   return normalizeStage(to, '');
@@ -107,6 +120,7 @@ const CASE_TYPES = new Set([
   'grievance',
   'vehicle_accident',
   'samsara_coaching',
+  'record',
   'other',
 ]);
 
@@ -353,6 +367,28 @@ const STAGE_GUIDES = {
       checklist: ['processed_on_samsara'],
     },
   },
+  record: {
+    open: {
+      title: 'Personnel record',
+      howTo: [
+        'Add documents or interviews to this employee’s record.',
+        'This is not a disciplinary or grievance process — use those families if formal procedure applies.',
+        'When finished, close the record.',
+      ],
+      doNext: 'Upload documents and/or record interviews, then close when complete.',
+      acasTip: null,
+      checklist: [],
+    },
+    closed: {
+      title: 'Record closed',
+      howTo: [
+        'This record entry is closed. Documents and interviews remain on the case for reference.',
+      ],
+      doNext: 'Export if needed, or open a new record entry for further items.',
+      acasTip: null,
+      checklist: [],
+    },
+  },
 };
 
 /** People Cases hub access requires an explicit cases_app role (or master admin). Headcount/HR does not grant it. */
@@ -377,6 +413,7 @@ function stagesForFamily(processFamily) {
   if (processFamily === 'grievance') return GRIEVANCE_STAGES;
   if (processFamily === 'vehicle_accident') return ACCIDENT_STAGES;
   if (processFamily === 'samsara_coaching') return SAMSARA_STAGES;
+  if (processFamily === 'record') return RECORD_STAGES;
   return DISCIPLINARY_STAGES;
 }
 
@@ -384,6 +421,7 @@ function defaultCaseTypeForFamily(processFamily) {
   if (processFamily === 'grievance') return 'grievance';
   if (processFamily === 'vehicle_accident') return 'vehicle_accident';
   if (processFamily === 'samsara_coaching') return 'samsara_coaching';
+  if (processFamily === 'record') return 'record';
   return 'other';
 }
 
@@ -838,6 +876,7 @@ module.exports = {
   GRIEVANCE_STAGES,
   ACCIDENT_STAGES,
   SAMSARA_STAGES,
+  RECORD_STAGES,
   CASE_TYPES,
   OUTCOME_PRESETS,
   RESTRICTION_OPTIONS,

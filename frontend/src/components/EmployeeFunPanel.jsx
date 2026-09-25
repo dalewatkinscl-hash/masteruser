@@ -11,6 +11,7 @@ import { PipesDailyPanel } from './PipesPanel';
 import { ToolboxKickDailyPanel } from './ToolboxKickPanel';
 import { WantedDailyPanel } from './WantedPanel';
 import { StackWalkDailyPanel } from './StackWalkPanel';
+import CoachDepotPanel from './CoachDepotPanel';
 import AchievementsPanel from './AchievementsPanel';
 import FunDayPicker, { getLondonDayKey } from './FunDayPicker';
 import FunLeaderboardRow from './FunLeaderboardRow';
@@ -21,6 +22,7 @@ import {
   FUN_GAME_ROSTER,
   STACK_WALK_LIVE_FROM,
   getFunRotationForDay,
+  setClientRotationSettings,
   isStackWalkPreviewDay,
 } from '../lib/funRotation';
 
@@ -80,6 +82,7 @@ const DEFAULT_OPEN_SECTIONS = {
   toolboxkick: true,
   wanted: true,
   stackwalk: true,
+  coachdepot: true,
   achievements: false,
 };
 
@@ -305,7 +308,7 @@ function TriviaContent({ currentUserUid, onAchievements }) {
           {' · '}
           {data?.dayKey || dayKey}
         </p>
-        <FunDayPicker dayKey={dayKey} todayKey={todayKey} onChange={setDayKey} />
+        <FunDayPicker dayKey={dayKey} todayKey={todayKey} onChange={setDayKey} gameKey="trivia" />
       </div>
 
       <div className="space-y-4">
@@ -448,7 +451,13 @@ function TriviaContent({ currentUserUid, onAchievements }) {
 export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
   const navigate = useNavigate();
   const todayKey = getLondonDayKey();
-  const [rotation, setRotation] = useState(() => getFunRotationForDay(todayKey));
+  const [rotation, setRotation] = useState(() => ({
+    ...getFunRotationForDay(todayKey),
+    // Hide game accordions until /api/getFunRotation confirms today's list —
+    // client defaults can disagree with live Fun Admin settings.
+    games: [],
+  }));
+  const [rotationReady, setRotationReady] = useState(false);
   const [openSections, setOpenSections] = useState(loadOpenSections);
   const [achievements, setAchievements] = useState([]);
   const [stackWalkSecret, setStackWalkSecret] = useState(false);
@@ -497,20 +506,28 @@ export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
         const response = await fetch('/api/getFunRotation', { credentials: 'include' });
         const payload = (await readJsonResponse(response)) || {};
         if (cancelled) return;
+        if (payload.settings) {
+          setClientRotationSettings(payload.settings);
+        }
         if (payload.rotation && typeof payload.rotation === 'object') {
           setRotation(normalizeRotation(payload.rotation, todayKey));
+        } else {
+          setRotation(getFunRotationForDay(todayKey, payload.settings || null));
         }
         if (Array.isArray(payload.achievements)) {
           setAchievements(payload.achievements);
         }
       } catch {
-        // soft-fail — keep local rotation estimate
+        // soft-fail — fall back to local estimate (after applying any cached settings)
+        if (!cancelled) setRotation(getFunRotationForDay(todayKey));
+      } finally {
+        if (!cancelled) setRotationReady(true);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [todayKey]);
 
   const toggle = (id) => {
     setOpenSections((prev) => {
@@ -639,8 +656,11 @@ export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
       ),
     },
   ].filter((section) => (
-    rotation.closed
-    || (Array.isArray(rotation.games) && rotation.games.includes(section.id))
+    rotationReady
+    && !rotation.closed
+    && Array.isArray(rotation.games)
+    && rotation.games.includes(section.id)
+    && !(Array.isArray(rotation.sitOuts) && rotation.sitOuts.includes(section.id))
   ));
 
   const sitOutKeys = Array.isArray(rotation.sitOuts) && rotation.sitOuts.length
@@ -650,9 +670,14 @@ export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
     .map((key) => FUN_GAME_ROSTER.find((g) => g.key === key)?.label || key)
     .join(', ') || null;
 
-  const showEnclosePractice = Boolean(rotation.enclosePractice);
-  const showLetterboxPractice = Boolean(rotation.letterboxPractice);
-  const showStackWalkSecret = isStackWalkPreviewDay(todayKey) && stackWalkSecret;
+  const showEnclosePractice = Boolean(rotationReady && rotation.enclosePractice);
+  const showLetterboxPractice = Boolean(rotationReady && rotation.letterboxPractice);
+  const showStackWalkSecret = Boolean(
+    rotationReady
+    && isStackWalkPreviewDay(todayKey)
+    && stackWalkSecret
+    && !rotation.games?.includes('stackwalk'),
+  );
 
   return (
     <div className="space-y-3 w-full">
@@ -677,6 +702,8 @@ export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
             Streaks skip Saturday and Sunday, so a Friday win can continue on Monday.
           </p>
         </div>
+      ) : !rotationReady ? (
+        <p className="text-sm text-slate-400 px-1">Loading today’s Fun games…</p>
       ) : (
         <p className="text-sm text-slate-400 px-1">
           {rotation.rotationActive
@@ -707,7 +734,7 @@ export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
             ? ` O Dell's Amazon Run unlocked early — joins the rotation from ${STACK_WALK_LIVE_FROM}.`
             : ''}
           {todayKey >= PERMANENT_FUN_FROM
-            ? ' Wordle, Little Dicks Toolbox, and Daily Wanted stay in rotation every weekday.'
+            ? ' Wordle, Boggle, Connections, Little Dicks Toolbox, and Daily Wanted stay in rotation every weekday.'
             : todayKey >= '2026-08-26'
               ? ` From ${PERMANENT_FUN_FROM}, Wordle and Little Dicks Toolbox stay in rotation every weekday.`
               : ''}
@@ -723,6 +750,18 @@ export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
           <AchievementsPanel achievements={achievements} isAdmin={isAdmin} />
         ) : null}
       </FunSection>
+
+      {isAdmin ? (
+        <FunSection
+          title="Coach Depot · admin preview"
+          open={openSections?.coachdepot !== false}
+          onToggle={() => toggle('coachdepot')}
+        >
+          {openSections?.coachdepot !== false ? (
+            <CoachDepotPanel currentUserUid={currentUserUid} />
+          ) : null}
+        </FunSection>
+      ) : null}
 
       {showEnclosePractice ? (
         <FunSection

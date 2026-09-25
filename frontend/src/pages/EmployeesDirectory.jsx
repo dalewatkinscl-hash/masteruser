@@ -20,6 +20,7 @@ import {
 } from '../utils/employeeDirectory';
 import { canManagePortalAccess } from '../utils/portalAccess';
 import { canManagePeopleCases } from '../utils/peopleCasesAccess';
+import { canAccessBonusAdmin } from '../utils/featureAccess';
 import { useAuth } from '../context/AuthContext';
 
 function PlusIcon({ className }) {
@@ -348,6 +349,7 @@ export default function EmployeesDirectory() {
   const navigate = useNavigate();
   const isAdmin = canManagePortalAccess(user);
   const canViewDisciplinaryMeasures = canManagePeopleCases(user);
+  const canViewBonusDeductions = canAccessBonusAdmin(user);
   const [employees, setEmployees] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -572,22 +574,22 @@ export default function EmployeesDirectory() {
             Birthdays and anniversaries
           </button>
           {canViewDisciplinaryMeasures && (
-            <>
-              <button
-                type="button"
-                onClick={() => navigate('/dashboard/hr/active-disciplinary-measures')}
-                className="px-4 py-2.5 rounded-lg border border-[#1a2540] text-slate-200 text-sm font-medium hover:bg-[#0b1220] transition-colors"
-              >
-                Active disciplinary measures
-              </button>
-              <button
-                type="button"
-                onClick={() => navigate('/dashboard/hr/bonus-deductions')}
-                className="px-4 py-2.5 rounded-lg border border-[#1a2540] text-slate-200 text-sm font-medium hover:bg-[#0b1220] transition-colors"
-              >
-                Bonus deductions
-              </button>
-            </>
+            <button
+              type="button"
+              onClick={() => navigate('/dashboard/hr/active-disciplinary-measures')}
+              className="px-4 py-2.5 rounded-lg border border-[#1a2540] text-slate-200 text-sm font-medium hover:bg-[#0b1220] transition-colors"
+            >
+              Active disciplinary measures
+            </button>
+          )}
+          {canViewBonusDeductions && (
+            <button
+              type="button"
+              onClick={() => navigate('/dashboard/hr/bonus-deductions')}
+              className="px-4 py-2.5 rounded-lg border border-[#1a2540] text-slate-200 text-sm font-medium hover:bg-[#0b1220] transition-colors"
+            >
+              Bonus deductions
+            </button>
           )}
           <button
             type="button"

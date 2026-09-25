@@ -414,6 +414,7 @@ function LetterboxPlayArea({
           todayKey={todayKey}
           onChange={onDayKeyChange}
           allowFuture={allowFuture}
+          gameKey="letterbox"
         />
       ) : null}
 

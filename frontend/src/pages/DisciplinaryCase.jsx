@@ -49,11 +49,16 @@ function defaultCaseTypeForFamily(processFamily) {
   if (processFamily === 'grievance') return 'grievance';
   if (processFamily === 'vehicle_accident') return 'vehicle_accident';
   if (processFamily === 'samsara_coaching') return 'samsara_coaching';
+  if (processFamily === 'record') return 'record';
   return 'conduct';
 }
 
 function isSamsaraCreateForm(form = {}) {
   return form.processFamily === 'samsara_coaching' || form.caseType === 'samsara_coaching';
+}
+
+function isRecordCreateForm(form = {}) {
+  return form.processFamily === 'record' || form.caseType === 'record';
 }
 
 function formatHistoryDate(value) {
@@ -266,8 +271,8 @@ export default function DisciplinaryCase() {
     eventDate: new Date().toISOString().slice(0, 10),
   });
   const family = caseData?.processFamily || form.processFamily || 'disciplinary';
-  const isSamsaraFamily = family === 'samsara_coaching';
   const isSamsaraCreate = isNew && isSamsaraCreateForm(form);
+  const isRecordCreate = isNew && isRecordCreateForm(form);
 
   useEffect(() => {
     if (!isNew || !user?.uid) return;
@@ -340,6 +345,7 @@ export default function DisciplinaryCase() {
   );
 
   const meetingTypeForStage = useMemo(() => {
+    if (family === 'record') return 'interview';
     if (family === 'grievance') {
       if (currentStage === 'meeting') return 'grievance_meeting';
       return 'grievance_investigation';
@@ -407,6 +413,9 @@ export default function DisciplinaryCase() {
       : new Date().toLocaleDateString('en-GB');
     if (isSamsaraCreateForm(form)) {
       return `${name} - ${issue} Samsara Coaching ${dateLabel}`;
+    }
+    if (isRecordCreateForm(form)) {
+      return `${name} - ${issue} - Record - ${dateLabel}`;
     }
     return `${name} - ${issue} - ${dateLabel}`;
   }, [selectedEmployeeName, form.issue, form.processFamily, form.caseType, form.eventDate]);
@@ -517,6 +526,9 @@ export default function DisciplinaryCase() {
         if (value === 'samsara_coaching') {
           next.informalResolutionPath = '';
           if (!next.eventDate) next.eventDate = new Date().toISOString().slice(0, 10);
+        } else if (value === 'record') {
+          next.informalResolutionPath = '';
+          next.eventDate = '';
         } else if (!next.informalResolutionPath) {
           next.informalResolutionPath = 'resolve_informally';
         }
@@ -525,6 +537,10 @@ export default function DisciplinaryCase() {
         next.processFamily = 'samsara_coaching';
         next.informalResolutionPath = '';
         if (!next.eventDate) next.eventDate = new Date().toISOString().slice(0, 10);
+      }
+      if (name === 'caseType' && value === 'record') {
+        next.processFamily = 'record';
+        next.informalResolutionPath = '';
       }
       return next;
     });
@@ -800,12 +816,17 @@ export default function DisciplinaryCase() {
       return;
     }
     const isSamsara = isSamsaraCreateForm(form);
+    const isRecord = isRecordCreateForm(form);
     const issue = String(form.issue || '').trim();
     if (!issue) {
-      setError(isSamsara ? 'Enter the issue before logging coaching.' : 'Enter the issue before opening the case.');
+      setError(isSamsara
+        ? 'Enter the issue before logging coaching.'
+        : isRecord
+          ? 'Enter a subject before opening the record.'
+          : 'Enter the issue before opening the case.');
       return;
     }
-    if (!isSamsara && (form.processFamily === 'disciplinary' || form.processFamily === 'grievance') && !form.informalResolutionPath) {
+    if (!isSamsara && !isRecord && (form.processFamily === 'disciplinary' || form.processFamily === 'grievance') && !form.informalResolutionPath) {
       setError('Choose how you are starting the case before opening it.');
       return;
     }
@@ -822,9 +843,10 @@ export default function DisciplinaryCase() {
         body: JSON.stringify({
           ...form,
           issue,
-          caseType: isSamsara ? 'samsara_coaching' : form.caseType,
+          caseType: isSamsara ? 'samsara_coaching' : (isRecord ? 'record' : form.caseType),
           title: composedCaseTitle,
           informalTried: form.informalResolutionPath === 'proceed_formal',
+          informalResolutionPath: (isSamsara || isRecord) ? '' : form.informalResolutionPath,
           eventDate,
         }),
       });
@@ -981,7 +1003,12 @@ export default function DisciplinaryCase() {
       });
       const data = (await readJsonResponse(response)) || {};
       if (!response.ok) throw new Error(data.error || 'Failed to send interview notes.');
-      setMessage(data.message || 'Interview notes sent to employee for confirmation.');
+      const sentTo = data.intervieweeNameSnapshot || data.intervieweeName || '';
+      setMessage(
+        sentTo
+          ? `Interview notes sent to ${sentTo} for confirmation.`
+          : (data.message || 'Interview notes sent for confirmation.'),
+      );
       await reload();
     } catch (err) {
       setError(err.message || 'Failed to send interview notes.');
@@ -2751,6 +2778,55 @@ export default function DisciplinaryCase() {
       );
     }
 
+    if (family === 'record') {
+      if (viewingPastStage || currentStage === 'closed') {
+        return (
+          <div className="space-y-6">
+            <StepCard title={currentStage === 'closed' ? 'Record closed' : `Viewing — ${stageLabel(displayStage)}`}>
+              <p className="text-sm text-slate-400">
+                {currentStage === 'closed'
+                  ? 'This personnel record is closed. Documents and interviews remain available below.'
+                  : 'Historical view of this stage. Documentation and interviews for this stage are listed below.'}
+              </p>
+              {caseData?.closeNotes ? (
+                <p className="text-sm text-slate-300 mt-2">{caseData.closeNotes}</p>
+              ) : null}
+            </StepCard>
+            {documentationHub}
+          </div>
+        );
+      }
+      return (
+        <div className="space-y-6">
+          <StepCard
+            title="Personnel record"
+            footer={(
+              <button
+                type="button"
+                className={btnPrimary}
+                disabled={saving}
+                onClick={() => apiUpdate({
+                  closeWithNotes: true,
+                  closeNotes: 'Personnel record closed.',
+                  outcomePreset: 'no_further_action',
+                })}
+              >
+                Close record
+              </button>
+            )}
+          >
+            <p className="text-sm text-slate-300">
+              Add documents or interviews to this employee’s file. This is not a disciplinary or grievance process.
+            </p>
+            <p className="text-sm text-slate-400">
+              Use the documentation section below, then close the record when finished.
+            </p>
+          </StepCard>
+          {documentationHub}
+        </div>
+      );
+    }
+
     const step = viewingPastStage ? (
       <StepCard title={`Viewing — ${stageLabel(displayStage)}`}>
         <p className="text-sm text-slate-400">
@@ -2971,12 +3047,16 @@ export default function DisciplinaryCase() {
               <p className="text-sm font-medium text-white">
                 {isSamsaraCreate
                   ? 'Log Samsara coaching'
-                  : 'Step 0 — Open the case'}
+                  : isRecordCreate
+                    ? 'Open a personnel record'
+                    : 'Step 0 — Open the case'}
               </p>
               <p className="text-sm text-slate-400 mt-1">
                 {isSamsaraCreate
                   ? 'Record that coaching was processed on Samsara. No portal interview is required.'
-                  : 'Record the concern and open the case. You can hold interviews, upload notes, and decide later whether it resolves informally or goes formal.'}
+                  : isRecordCreate
+                    ? 'Add documents or interviews to someone’s file without starting a disciplinary or grievance process.'
+                    : 'Record the concern and open the case. You can hold interviews, upload notes, and decide later whether it resolves informally or goes formal.'}
               </p>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -2987,7 +3067,7 @@ export default function DisciplinaryCase() {
                   ))}
                 </select>
               </Field>
-              {!isSamsaraCreate && (
+              {!isSamsaraCreate && !isRecordCreate && (
                 <Field label="Case type">
                   <select name="caseType" value={form.caseType} onChange={handleChange} className={inputClass}>
                     {CASE_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
@@ -3016,7 +3096,7 @@ export default function DisciplinaryCase() {
               </Field>
             </div>
 
-            <Field label="Issue">
+            <Field label={isRecordCreate ? 'Subject' : 'Issue'}>
               <input
                 name="issue"
                 value={form.issue}
@@ -3024,7 +3104,9 @@ export default function DisciplinaryCase() {
                 className={inputClass}
                 placeholder={isSamsaraCreate
                   ? 'Short description of the coaching event'
-                  : 'Short description of the issue'}
+                  : isRecordCreate
+                    ? 'Short description of what this record covers'
+                    : 'Short description of the issue'}
                 autoComplete="off"
               />
             </Field>
@@ -3038,7 +3120,9 @@ export default function DisciplinaryCase() {
               <span className="block text-xs text-slate-500 mt-1">
                 {isSamsaraCreate
                   ? 'Built as Name — Issue Samsara Coaching Date'
-                  : 'Built as Employee name — Issue — Date'}
+                  : isRecordCreate
+                    ? 'Built as Employee name — Subject — Record — Date'
+                    : 'Built as Employee name — Issue — Date'}
               </span>
             </Field>
             {!isSamsaraCreate && (
@@ -3115,7 +3199,7 @@ export default function DisciplinaryCase() {
               </div>
             )}
 
-            {!isSamsaraCreate && (form.processFamily === 'disciplinary' || form.processFamily === 'grievance') && (
+            {!isSamsaraCreate && !isRecordCreate && (form.processFamily === 'disciplinary' || form.processFamily === 'grievance') && (
               <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-4 space-y-4">
                 <div>
                   <p className="text-sm font-medium text-amber-100">How are you starting?</p>
@@ -3169,7 +3253,7 @@ export default function DisciplinaryCase() {
               </div>
             )}
 
-            {!isSamsaraCreate && form.processFamily === 'grievance' && (
+            {!isSamsaraCreate && !isRecordCreate && form.processFamily === 'grievance' && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <Field label="Off-portal raise date">
                   <input type="date" name="offPortalRaiseDate" value={form.offPortalRaiseDate} onChange={handleChange} className={inputClass} />
@@ -3187,7 +3271,7 @@ export default function DisciplinaryCase() {
                 saving
                 || !form.employeeUid
                 || !String(form.issue || '').trim()
-                || (!isSamsaraCreate && (form.processFamily === 'disciplinary' || form.processFamily === 'grievance') && !form.informalResolutionPath)
+                || (!isSamsaraCreate && !isRecordCreate && (form.processFamily === 'disciplinary' || form.processFamily === 'grievance') && !form.informalResolutionPath)
               }
               className={btnPrimary}
             >
@@ -3195,7 +3279,9 @@ export default function DisciplinaryCase() {
                 ? 'Saving…'
                 : isSamsaraCreate
                   ? 'Log coaching'
-                  : 'Open case — start fact-finding'}
+                  : isRecordCreate
+                    ? 'Open record'
+                    : 'Open case — start fact-finding'}
             </button>
             {!form.employeeUid && (
               <p className="text-xs text-amber-300">
@@ -3206,7 +3292,9 @@ export default function DisciplinaryCase() {
               <p className="text-xs text-amber-300">
                 {isSamsaraCreate
                   ? 'Enter the issue — the title is built as Name — Issue Samsara Coaching Date.'
-                  : 'Enter the issue — the case title is built from the employee name, issue, and today’s date.'}
+                  : isRecordCreate
+                    ? 'Enter a subject — the title is built as Name — Subject — Record — Date.'
+                    : 'Enter the issue — the case title is built from the employee name, issue, and today’s date.'}
               </p>
             )}
           </div>

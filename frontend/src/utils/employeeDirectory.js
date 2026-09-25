@@ -1,6 +1,15 @@
+import { resolveContractDisplayLabel } from './contractModes';
+
 export function getEmployeeStatusLabel(employee) {
   if (employee?.hasPortalAccount === false) return 'HR only';
   return employee?.isActive ? 'Active' : 'Inactive';
+}
+
+function getEmployeeContractLabel(employee) {
+  return resolveContractDisplayLabel({
+    bonusHoursMode: employee?.employeeProfile?.bonusHoursMode,
+    contractType: employee?.employeeProfile?.contractType,
+  });
 }
 
 export function formatEmployeeDate(value) {
@@ -45,6 +54,8 @@ export const CORE_COLUMNS = [
 export const OPTIONAL_COLUMNS = [
   { id: 'dateOfBirth', label: 'D.O.B', filterPlaceholder: 'Filter D.O.B…' },
   { id: 'startDate', label: 'Start date', filterPlaceholder: 'Filter start…' },
+  { id: 'contract', label: 'Contract', filterPlaceholder: 'Filter contract…' },
+  { id: 'contractedHours', label: 'Contracted hours', filterPlaceholder: 'Filter hours…' },
   { id: 'computerUser', label: 'Computer user', filterPlaceholder: 'Yes / No…' },
   { id: 'emergencyPhoneCover', label: 'Emergency phone cover', filterPlaceholder: 'Yes / No…' },
 ];
@@ -200,6 +211,12 @@ function getSortValue(employee, column) {
       return employee.employeeProfile?.computerUser ? '1' : '0';
     case 'emergencyPhoneCover':
       return employee.employeeProfile?.emergencyPhoneCover ? '1' : '0';
+    case 'contract':
+      return getEmployeeContractLabel(employee).toLowerCase();
+    case 'contractedHours': {
+      const hours = Number(employee.employeeProfile?.annualContractedHours) || 0;
+      return hours > 0 ? String(hours).padStart(6, '0') : EMPTY_SORT_VALUE;
+    }
     default:
       return '';
   }
@@ -225,6 +242,12 @@ export function getDisplayValue(employee, column) {
       return yesNoLabel(Boolean(employee.employeeProfile?.computerUser));
     case 'emergencyPhoneCover':
       return yesNoLabel(Boolean(employee.employeeProfile?.emergencyPhoneCover));
+    case 'contract':
+      return getEmployeeContractLabel(employee);
+    case 'contractedHours': {
+      const hours = Number(employee.employeeProfile?.annualContractedHours) || 0;
+      return hours > 0 ? String(hours) : '—';
+    }
     default:
       return '—';
   }
@@ -264,6 +287,8 @@ export function filterEmployees(employees, { search, columnFilters }) {
         yesNoLabel(Boolean(employee.employeeProfile?.drivingStaff)),
         yesNoLabel(Boolean(employee.employeeProfile?.computerUser)),
         yesNoLabel(Boolean(employee.employeeProfile?.emergencyPhoneCover)),
+        getEmployeeContractLabel(employee),
+        employee.employeeProfile?.annualContractedHours,
         getEmployeeStatusLabel(employee),
       ]
         .filter(Boolean)

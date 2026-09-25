@@ -297,6 +297,46 @@
         "region": "europe-west2"
       },
       {
+        "source": "/api/getBonusPaymentRuns",
+        "function": "getBonusPaymentRuns",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/saveBonusPaymentRun",
+        "function": "saveBonusPaymentRun",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/deleteBonusPaymentRun",
+        "function": "deleteBonusPaymentRun",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/saveBonusPeriod",
+        "function": "saveBonusPeriod",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/syncBonusAbsenceDeductions",
+        "function": "syncBonusAbsenceDeductions",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/mapBonusSharePointEmployee",
+        "function": "mapBonusSharePointEmployee",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/saveBonusManualAdjustment",
+        "function": "saveBonusManualAdjustment",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/deleteBonusManualAdjustment",
+        "function": "deleteBonusManualAdjustment",
+        "region": "europe-west2"
+      },
+      {
         "source": "/api/getSharePointDisciplinaryPath",
         "function": "getSharePointDisciplinaryPath",
         "region": "europe-west2"
@@ -487,6 +527,56 @@
         "region": "europe-west2"
       },
       {
+        "source": "/api/getCoachDepot",
+        "function": "getCoachDepot",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/dispatchCoachDepotJob",
+        "function": "dispatchCoachDepotJob",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/claimCoachDepotJob",
+        "function": "claimCoachDepotJob",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/buyCoachDepotUpgrade",
+        "function": "buyCoachDepotUpgrade",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/adminForceCoachDepotJob",
+        "function": "adminForceCoachDepotJob",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/adminGrantCoachDepotCoins",
+        "function": "adminGrantCoachDepotCoins",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/adminResetCoachDepot",
+        "function": "adminResetCoachDepot",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getCoachDepotMapConfig",
+        "function": "getCoachDepotMapConfig",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/saveCoachDepotMapConfig",
+        "function": "saveCoachDepotMapConfig",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/saveCoachDepotSpriteAnchors",
+        "function": "saveCoachDepotSpriteAnchors",
+        "region": "europe-west2"
+      },
+      {
         "source": "/api/getDailyToolboxKick",
         "function": "getDailyToolboxKick",
         "region": "europe-west2"
@@ -499,6 +589,11 @@
       {
         "source": "/api/submitToolboxKickResult",
         "function": "submitToolboxKickResult",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/claimToolboxKickFlightCoin",
+        "function": "claimToolboxKickFlightCoin",
         "region": "europe-west2"
       },
       {

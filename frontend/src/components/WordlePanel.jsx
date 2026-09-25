@@ -260,6 +260,7 @@ export default function WordlePanel({
             todayKey={todayKey}
             onChange={setDayKey}
             allowFuture={isAdmin || isSandbox}
+            gameKey="wordle"
           />
         </div>
       </div>

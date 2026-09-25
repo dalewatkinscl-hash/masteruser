@@ -406,6 +406,7 @@ export default function SokobanPanel({
             onChange={setDayKey}
             allowFuture={canPreviewFuture || isSandbox}
             maxFutureDays={60}
+            gameKey="sokoban"
           />
         </div>
       </div>

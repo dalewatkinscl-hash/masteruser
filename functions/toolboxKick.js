@@ -8,7 +8,7 @@
 const TOOLBOX_KICK_LIVE_FROM = '2026-08-26';
 /** Cap high enough for solar-system milestones; stay within Number.MAX_SAFE_INTEGER. */
 const MAX_DISTANCE_M = 9_000_000_000_000_000;
-const SUPER_RAGE_BOOST_PCT = 40;
+const SUPER_RAGE_BOOST_PCT = 80;
 const SUPER_RAGE_COLLECTION = 'toolbox_kick_powerups';
 
 function getLondonDayKey(date = new Date()) {

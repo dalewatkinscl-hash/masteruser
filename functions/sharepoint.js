@@ -14,6 +14,21 @@ const INVALID_FILE_CHARS = /[\\/:*?"<>|]/g;
 let tokenCache = { token: '', expiresAt: 0 };
 let siteIdCache = '';
 let driveIdCache = '';
+let userInfoListIdCache = '';
+const siteUserCache = new Map();
+
+const DISCIPLINARY_PROCESS_LOG_LIST_NAME = 'Disciplinary Process Log';
+const DISCIPLINARY_PROCESS_LOG_LIST_ID = '13465763-fd01-4ada-9a99-f4bf74d18387';
+const ABSENCE_TYPE_VALUE = 'Record of Absence';
+const LATENESS_TYPE_VALUE = 'Record of Lateness';
+const DISCIPLINARY_TYPE_FIELD = 'Disciplinary_x0020_or_x0020_Meet';
+const DATE_FIELD = 'Date_x0020_of_x0020_Disciplinary';
+const LOYALTY_DEDUCTION_FIELD = 'Is_x0020_a_x0020_loyalty_x0020_b';
+const EMPLOYEE_LOOKUP_FIELD = 'Employee_x0020_Name_x003f_LookupId';
+const OUTCOME_FIELD = 'Disciplinary_x002f_Meeting_x0020';
+const REASON_FIELD = 'Reason_x0020_for_x0020_Disciplin';
+const LATENESS_TYPE_FIELD = 'LatenessType';
+const BONUS_LOG_TYPES = [ABSENCE_TYPE_VALUE, LATENESS_TYPE_VALUE];
 
 function sanitizeFileName(fileName) {
   return String(fileName || 'document')
@@ -171,6 +186,170 @@ async function getSiteId(config) {
   );
   siteIdCache = site.id;
   return siteIdCache;
+}
+
+async function getSiteUserInfoListId(config) {
+  if (userInfoListIdCache) return userInfoListIdCache;
+  const siteId = await getSiteId(config);
+  const lists = await graphRequest(
+    config,
+    'GET',
+    `/sites/${encodeURIComponent(siteId)}/lists?$filter=${encodeURIComponent("displayName eq 'User Information List'")}`,
+  );
+  const list = (lists.value || [])[0];
+  if (!list?.id) {
+    throw new Error('SharePoint User Information List was not found on the HR site.');
+  }
+  userInfoListIdCache = list.id;
+  return userInfoListIdCache;
+}
+
+async function resolveSharePointSiteUser(config, lookupId) {
+  const id = String(lookupId || '').trim();
+  if (!id) return null;
+  if (siteUserCache.has(id)) return siteUserCache.get(id);
+
+  const siteId = await getSiteId(config);
+  const userListId = await getSiteUserInfoListId(config);
+  try {
+    const item = await graphRequest(
+      config,
+      'GET',
+      `/sites/${encodeURIComponent(siteId)}/lists/${encodeURIComponent(userListId)}/items/${encodeURIComponent(id)}?$expand=fields`,
+    );
+    const fields = item?.fields || {};
+    const person = {
+      lookupId: id,
+      name: String(fields.Title || '').trim() || null,
+      email: String(fields.EMail || fields.Email || fields.UserName || '').trim().toLowerCase() || null,
+    };
+    siteUserCache.set(id, person);
+    return person;
+  } catch (error) {
+    if (error.status === 404) {
+      siteUserCache.set(id, null);
+      return null;
+    }
+    throw error;
+  }
+}
+
+function toIsoDateFromSharePoint(value) {
+  if (!value) return '';
+  const text = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(text)) return text.slice(0, 10);
+  const parsed = new Date(text);
+  if (Number.isNaN(parsed.getTime())) return '';
+  return parsed.toISOString().slice(0, 10);
+}
+
+/**
+ * Read bonus-relevant rows from Disciplinary Process Log
+ * (Record of Absence + Record of Lateness).
+ * Skips Loyalty Deduction <= 0. Optionally filters by inclusive ISO date range
+ * and/or items modified on/after modifiedSince (UTC ISO).
+ */
+async function listDisciplinaryProcessLogBonusItems(config, {
+  fromDate = '',
+  toDate = '',
+  modifiedSince = '',
+  types = BONUS_LOG_TYPES,
+  maxPages = 40,
+} = {}) {
+  const siteId = await getSiteId(config);
+  const preferHeaders = { Prefer: 'HonorNonIndexedQueriesWarningMayFailRandomly' };
+  const typeList = (Array.isArray(types) && types.length ? types : BONUS_LOG_TYPES)
+    .map((value) => String(value || '').trim())
+    .filter(Boolean);
+  const typeFilter = typeList
+    .map((value) => `fields/${DISCIPLINARY_TYPE_FIELD} eq '${value.replace(/'/g, "''")}'`)
+    .join(' or ');
+  const filterParts = [`(${typeFilter})`];
+  const modifiedIso = toIsoDateFromSharePoint(modifiedSince)
+    || (String(modifiedSince || '').match(/^\d{4}-\d{2}-\d{2}T/)
+      ? String(modifiedSince).trim()
+      : '');
+  if (modifiedIso) {
+    const modifiedDateTime = modifiedIso.includes('T')
+      ? modifiedIso
+      : `${modifiedIso}T00:00:00Z`;
+    filterParts.push(`fields/Modified ge '${modifiedDateTime.replace(/'/g, "''")}'`);
+  }
+  const filter = filterParts.join(' and ');
+  let nextPath = `/sites/${encodeURIComponent(siteId)}/lists/${encodeURIComponent(DISCIPLINARY_PROCESS_LOG_LIST_ID)}`
+    + `/items?$expand=fields&$top=200&$filter=${encodeURIComponent(filter)}`;
+
+  const fromIso = toIsoDateFromSharePoint(fromDate);
+  const toIso = toIsoDateFromSharePoint(toDate);
+  const rows = [];
+  let skippedZeroLoyalty = 0;
+  let pages = 0;
+
+  while (nextPath && pages < maxPages) {
+    pages += 1;
+    const page = await graphRequest(config, 'GET', nextPath, { headers: preferHeaders });
+    for (const item of page.value || []) {
+      const fields = item.fields || {};
+      const amount = Number(fields[LOYALTY_DEDUCTION_FIELD]);
+      if (!Number.isFinite(amount) || amount <= 0) {
+        skippedZeroLoyalty += 1;
+        continue;
+      }
+      const eventDate = toIsoDateFromSharePoint(fields[DATE_FIELD]);
+      if (fromIso && (!eventDate || eventDate < fromIso)) continue;
+      if (toIso && (!eventDate || eventDate > toIso)) continue;
+
+      const lookupId = String(fields[EMPLOYEE_LOOKUP_FIELD] || '').trim();
+      const person = lookupId ? await resolveSharePointSiteUser(config, lookupId) : null;
+      const disciplinaryType = String(fields[DISCIPLINARY_TYPE_FIELD] || '').trim();
+      const isLateness = disciplinaryType === LATENESS_TYPE_VALUE;
+      const disciplinaryReason = String(fields[REASON_FIELD] || '').trim();
+      const latenessType = String(fields[LATENESS_TYPE_FIELD] || '').trim();
+      const absenceReason = String(fields.AbsenceReason || '').trim();
+
+      rows.push({
+        sharePointItemId: String(item.id),
+        recordType: isLateness ? 'lateness' : 'absence',
+        disciplinaryType,
+        eventDate,
+        absenceDate: eventDate,
+        amount,
+        currency: 'GBP',
+        disciplinaryReason,
+        latenessType,
+        absenceReason,
+        outcome: String(fields[OUTCOME_FIELD] || '').trim() || '',
+        sharePointLookupId: lookupId || '',
+        sharePointName: person?.name || '',
+        sharePointEmail: person?.email || '',
+        modifiedAt: toIsoDateFromSharePoint(fields.Modified) || item.lastModifiedDateTime || '',
+        webUrl: item.webUrl || null,
+      });
+    }
+
+    const nextLink = page['@odata.nextLink'] || '';
+    nextPath = nextLink
+      ? nextLink.replace('https://graph.microsoft.com/v1.0', '')
+      : '';
+  }
+
+  rows.sort((left, right) => String(left.eventDate).localeCompare(String(right.eventDate)));
+  return {
+    listId: DISCIPLINARY_PROCESS_LOG_LIST_ID,
+    listName: DISCIPLINARY_PROCESS_LOG_LIST_NAME,
+    count: rows.length,
+    skippedZeroLoyalty,
+    modifiedSince: modifiedIso || '',
+    rows,
+  };
+}
+
+/** @deprecated use listDisciplinaryProcessLogBonusItems */
+async function listDisciplinaryProcessLogAbsences(config, options = {}) {
+  return listDisciplinaryProcessLogBonusItems(config, {
+    ...options,
+    types: [ABSENCE_TYPE_VALUE],
+  });
 }
 
 async function getDocumentLibraryDriveId(config) {
@@ -467,6 +646,8 @@ function clearSharePointCaches() {
   tokenCache = { token: '', expiresAt: 0 };
   siteIdCache = '';
   driveIdCache = '';
+  userInfoListIdCache = '';
+  siteUserCache.clear();
 }
 
 function normalizeTemplateName(value) {
@@ -821,6 +1002,9 @@ module.exports = {
   buildDisciplinaryFolderPath,
   buildEmployeeFolderName,
   buildEmployeeRootName,
+  listDisciplinaryProcessLogAbsences,
+  listDisciplinaryProcessLogBonusItems,
+  resolveSharePointSiteUser,
   isSharePointConfigured,
   clearSharePointCaches,
   listDisciplinaryDocuments,

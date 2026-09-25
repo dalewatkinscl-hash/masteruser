@@ -2,6 +2,14 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import FunDayPicker, { getLondonDayKey } from './FunDayPicker';
 import FunLeaderboardRow from './FunLeaderboardRow';
 import { TOOLBOX_KICK_LIVE_FROM } from '../lib/funRotation';
+import {
+  TOOLBOX_V2_FEATURE_LIST,
+  FLIGHT_COIN_AMOUNT,
+  buildFlightCoinPlan,
+  buildRecordMarkers,
+  sampleWind,
+  windProfileForAttempt,
+} from '../utils/toolboxKickV2';
 
 /**
  * Toolbox Kick — Kitten Cannon–style.
@@ -29,10 +37,44 @@ const RUNUP_FRAMES = 52;
 const KICK_FRAME = 54;
 const LAUNCH_FRAME = 58;
 const PX_PER_METRE = 2.2;
+/** Gameplay is authored at 60 Hz — lock sim to this so 120/144 Hz screens don’t run faster. */
+const TOOLBOX_SIM_HZ = 60;
+const TOOLBOX_SIM_DT = 1 / TOOLBOX_SIM_HZ;
+const TOOLBOX_MAX_SIM_STEPS = 5;
+
+function captureToolboxRenderPose(st) {
+  const box = st?.box || {};
+  return {
+    boxX: Number(box.x) || 0,
+    boxY: Number(box.y) || GROUND_Y - 12,
+    boxRot: Number(box.rot) || 0,
+    camX: Number(st?.camX) || 0,
+    zoom: Number(st?.zoom) || 1,
+    mechX: Number(st?.mechX) || MECH_START_X,
+  };
+}
+
+function lerpToolboxRenderPose(prev, curr, alpha) {
+  if (!prev) return curr;
+  if (!curr) return prev;
+  const t = clamp(alpha, 0, 1);
+  return {
+    boxX: prev.boxX + (curr.boxX - prev.boxX) * t,
+    boxY: prev.boxY + (curr.boxY - prev.boxY) * t,
+    boxRot: prev.boxRot + (curr.boxRot - prev.boxRot) * t,
+    camX: prev.camX + (curr.camX - prev.camX) * t,
+    zoom: prev.zoom + (curr.zoom - prev.zoom) * t,
+    mechX: prev.mechX + (curr.mechX - prev.mechX) * t,
+  };
+}
+
 const CHUNK_SIZE = 4000;
 const AHEAD_BUFFER = 2800;
 const INTRO_STORAGE_KEY = 'toolbox-kick-intro-seen-v4';
 const MAX_ATTEMPTS = 3;
+/** Fun Admin sandbox + Toolbox 2.0: extra 4th go dedicated to Little Dick QTE practice. */
+const MAX_ATTEMPTS_DEV_V2 = 4;
+const DEV_QTE_PRACTICE_ATTEMPT = 4;
 const TOOLBOX_PENDING_SCORE_KEY = 'toolbox-kick-pending-score';
 
 function readPendingToolboxScore() {
@@ -92,6 +134,11 @@ export const TOOLBOX_NEW_PROPS_LIVE = true;
  * Chelle natural world spawns — bold lady with a book (softkey C still works in Fun Admin).
  */
 export const CHELLE_NATURAL_SPAWN = true;
+/**
+ * Dick's Toolbox 2.0 — live for Fun Admin sandbox and daily Fun.
+ */
+export const TOOLBOX_V2_DEV = true;
+export const TOOLBOX_V2_LIVE = true;
 /** Caught mid-round reload → keep only 10% of toolbox speed. */
 const CAUGHT_CHEAT_SPEED_FACTOR = 0.1;
 /** Punishment: wait this long after landing (Nelson GIF) before Little Dick walks in. */
@@ -155,18 +202,31 @@ export const DEFAULT_TUNING = {
   launchSpeedMin: 5,
   sackBounce: 14,
   sackBoost: 1.28,
-  groundDrag: 0.98,
-  friction: 0.9975,
-  /** After oil coating — slides much further on the ground. */
-  oilGroundDrag: 0.994,
-  oilFriction: 0.9994,
-  bounceDamp: 0.82,
+  groundDrag: 0.935,
+  friction: 0.985,
+  /** After oil coating — slides further, but still settles. */
+  oilGroundDrag: 0.972,
+  oilFriction: 0.992,
+  /** Dry grass rebound — turf, not a trampoline. */
+  bounceDamp: 0.36,
+  /** Need this much downward speed (px/tick) to leave the grass again. */
+  grassBounceMinVy: 2.35,
+  /** Storm / wet grass — dead thump, kills hop and forward speed. */
+  wetGrassBounceDamp: 0.1,
+  wetGrassFriction: 0.62,
+  wetGrassGroundDrag: 0.82,
+  wetGrassBounceMinVy: 4.2,
   gravity: 0.2,
   airDrag: 0.9994,
-  stopSpeed: 0.08,
+  stopSpeed: 0.18,
+  /** Tailwind / wind push while scraping the ground (keeps floor slides finite). */
+  groundWindScale: 0.06,
   coachSlow: 0.84,
   coachDrag: 0.985,
   birdSlow: 0.93,
+  /** Hot-air balloon envelope — chunky speed tax. */
+  balloonSlow: 0.68,
+  balloonVyDamp: 0.55,
 };
 
 /**
@@ -259,11 +319,13 @@ const HIT_TALLY_ORDER = [
   'cone',
   'drum',
   'bird',
+  'balloon',
   'smoker',
   'macan',
   'chelle',
   'littleDick',
   'oilSpill',
+  'flightCoin',
 ];
 
 const HIT_TALLY_LABELS = {
@@ -272,11 +334,13 @@ const HIT_TALLY_LABELS = {
   cone: 'Cone',
   drum: 'Drum',
   bird: 'Bird',
+  balloon: 'Balloon',
   smoker: 'Smoker',
   macan: 'Julies Car',
   chelle: 'Chelle',
   littleDick: 'Little Dick',
   oilSpill: 'Oil',
+  flightCoin: 'Coin',
 };
 
 function bumpHitTally(st, type) {
@@ -517,6 +581,239 @@ function drawHitTally(ctx, st) {
   ctx.restore();
 }
 
+/** Windsock HUD — speed + direction for Toolbox 2.0. */
+function drawWindSock(ctx, wind, frame = 0) {
+  if (!wind) return;
+  const x = W - 78;
+  const y = STAT_BAR_H + 36;
+  const speed = Number(wind.speed) || 0;
+  const angleDeg = Number(wind.angleDeg) || 0;
+  const flap = Math.sin(frame * 0.18) * Math.min(0.35, 0.08 + speed * 0.12);
+
+  ctx.save();
+  ctx.translate(x, y);
+
+  // Pole
+  ctx.strokeStyle = 'rgba(226,232,240,0.85)';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(0, -28);
+  ctx.lineTo(0, 22);
+  ctx.stroke();
+  ctx.fillStyle = '#94a3b8';
+  ctx.beginPath();
+  ctx.arc(0, -28, 3.5, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Sock cone pointed with the wind (0° = +x / downrange)
+  const rad = ((angleDeg + flap * 25) * Math.PI) / 180;
+  ctx.save();
+  ctx.rotate(rad);
+  const sockLen = 22 + Math.min(18, speed * 14);
+  const grad = ctx.createLinearGradient(0, 0, sockLen, 0);
+  if (wind.mode === 'storm') {
+    grad.addColorStop(0, '#f87171');
+    grad.addColorStop(1, '#fbbf24');
+  } else if (wind.mode === 'steady') {
+    grad.addColorStop(0, '#38bdf8');
+    grad.addColorStop(1, '#a5f3fc');
+  } else {
+    grad.addColorStop(0, '#94a3b8');
+    grad.addColorStop(1, '#cbd5e1');
+  }
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  ctx.moveTo(2, -7);
+  ctx.lineTo(sockLen, -3 + flap * 4);
+  ctx.lineTo(sockLen, 3 + flap * 4);
+  ctx.lineTo(2, 7);
+  ctx.closePath();
+  ctx.fill();
+  ctx.restore();
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.font = '800 10px system-ui, Segoe UI, sans-serif';
+  ctx.fillStyle = 'rgba(226,232,240,0.9)';
+  ctx.fillText((wind.label || 'Wind').toUpperCase(), 0, 26);
+  ctx.font = '900 12px system-ui, Segoe UI, sans-serif';
+  ctx.fillStyle = wind.mode === 'storm' ? '#fbbf24' : '#e2e8f0';
+  const mphApprox = Math.round(speed * 28);
+  ctx.fillText(wind.mode === 'calm' ? '0 mph' : `${mphApprox} mph`, 0, 38);
+  ctx.restore();
+}
+
+function drawRecordFlag(ctx, sx, marker) {
+  const poleH = 58;
+  ctx.save();
+  ctx.strokeStyle = 'rgba(226,232,240,0.85)';
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.moveTo(sx, GROUND_Y);
+  ctx.lineTo(sx, GROUND_Y - poleH);
+  ctx.stroke();
+  ctx.fillStyle = marker.color || '#fbbf24';
+  ctx.beginPath();
+  ctx.moveTo(sx, GROUND_Y - poleH);
+  ctx.lineTo(sx + 34, GROUND_Y - poleH + 10);
+  ctx.lineTo(sx, GROUND_Y - poleH + 20);
+  ctx.closePath();
+  ctx.fill();
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'bottom';
+  ctx.font = '800 11px system-ui, Segoe UI, sans-serif';
+  ctx.lineWidth = 3;
+  ctx.strokeStyle = 'rgba(11,18,32,0.85)';
+  ctx.strokeText(marker.title || 'Record', sx + 8, GROUND_Y - poleH - 6);
+  ctx.fillStyle = '#f8fafc';
+  ctx.fillText(marker.title || 'Record', sx + 8, GROUND_Y - poleH - 6);
+  if (marker.sub) {
+    ctx.font = '700 10px system-ui, Segoe UI, sans-serif';
+    ctx.fillStyle = 'rgba(226,232,240,0.85)';
+    ctx.fillText(marker.sub, sx + 8, GROUND_Y - poleH - 18);
+  }
+  ctx.font = '800 10px system-ui, Segoe UI, sans-serif';
+  ctx.fillStyle = marker.color || '#fbbf24';
+  ctx.fillText(formatDistance(marker.distanceM), sx + 8, GROUND_Y - 4);
+  ctx.restore();
+}
+
+function drawFlightCoin(ctx, sx, frame = 0) {
+  const bob = Math.sin(frame * 0.12) * 4;
+  const y = GROUND_Y - 52 + bob;
+  ctx.save();
+  ctx.translate(sx, y);
+  ctx.rotate(Math.sin(frame * 0.08) * 0.25);
+  ctx.shadowColor = '#f59e0b';
+  ctx.shadowBlur = 12;
+  ctx.fillStyle = '#fbbf24';
+  ctx.beginPath();
+  ctx.arc(0, 0, 14, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  ctx.strokeStyle = '#b45309';
+  ctx.lineWidth = 2.5;
+  ctx.stroke();
+  ctx.fillStyle = '#78350f';
+  ctx.font = '900 14px system-ui, Segoe UI, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('£', 0, 1);
+  ctx.restore();
+}
+
+function drawComboHud(ctx, combo, frame = 0) {
+  if (!(combo >= 2)) return;
+  const pulse = combo >= 3 ? 1 + 0.06 * Math.sin(frame * 0.25) : 1;
+  ctx.save();
+  ctx.translate(W * 0.5, STAT_BAR_H + 28);
+  ctx.scale(pulse, pulse);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = '900 22px system-ui, Segoe UI, sans-serif';
+  ctx.lineWidth = 4;
+  ctx.strokeStyle = 'rgba(11,18,32,0.85)';
+  const label = combo >= 3 ? `COMBO ×${combo}` : `HIT ×${combo}`;
+  ctx.strokeText(label, 0, 0);
+  ctx.fillStyle = combo >= 3 ? '#fbbf24' : '#e2e8f0';
+  ctx.shadowColor = combo >= 3 ? '#f59e0b' : '#64748b';
+  ctx.shadowBlur = combo >= 3 ? 14 : 6;
+  ctx.fillText(label, 0, 0);
+  ctx.restore();
+}
+
+/** Little Dick kickback QTE — sim frames @ 60 Hz (~1.1s tap window). */
+const DICK_QTE_READY_UNTIL = 12;
+const DICK_QTE_OPEN = 12;
+const DICK_QTE_CLOSE = 78;
+const DICK_QTE_TURN = 82;
+const DICK_QTE_FLASH = 88;
+const DICK_QTE_BOOT = 94;
+
+function dickQteEnabled(st) {
+  return Boolean(st && (st.v2 || st.qtePractice));
+}
+
+function dickQteWindowOpen(catchSt) {
+  if (!catchSt || catchSt.qteResolved) return false;
+  const f = catchSt.frame || 0;
+  return f >= DICK_QTE_OPEN && f <= DICK_QTE_CLOSE;
+}
+
+function drawDickQtePrompt(ctx, catchSt, frame = 0) {
+  if (!catchSt || catchSt.qteResolved) return;
+  const f = catchSt.frame || 0;
+  const open = dickQteWindowOpen(catchSt);
+  const pulse = 1 + 0.08 * Math.sin(frame * 0.35);
+  ctx.save();
+  ctx.translate(W * 0.5, H * 0.42);
+  ctx.scale(pulse, pulse);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = '900 28px system-ui, Segoe UI, sans-serif';
+  ctx.lineWidth = 5;
+  ctx.strokeStyle = 'rgba(11,18,32,0.9)';
+  const text = open ? 'TAP NOW!' : (f < DICK_QTE_READY_UNTIL ? 'Get ready…' : 'Too late!');
+  ctx.strokeText(text, 0, 0);
+  ctx.fillStyle = open ? '#fbbf24' : '#94a3b8';
+  ctx.shadowColor = open ? '#f59e0b' : 'transparent';
+  ctx.shadowBlur = open ? 18 : 0;
+  ctx.fillText(text, 0, 0);
+  ctx.shadowBlur = 0;
+  ctx.font = '800 13px system-ui, Segoe UI, sans-serif';
+  ctx.fillStyle = 'rgba(226,232,240,0.9)';
+  ctx.fillText('Stop the kickback — boost forward!', 0, 28);
+  ctx.restore();
+}
+
+function registerAirCombo(st, box, popupFn) {
+  if (!st?.v2 || !box || box.onGround) return;
+  st.airCombo = (st.airCombo || 0) + 1;
+  st.maxAirCombo = Math.max(st.maxAirCombo || 0, st.airCombo);
+  if (st.airCombo >= 3) {
+    const boost = 1 + Math.min(0.12, 0.03 + (st.airCombo - 3) * 0.015);
+    box.vx *= boost;
+    if (box.vy > -2) box.vy -= 1.2;
+    if (st.airCombo === 3 || st.airCombo === 5 || st.airCombo === 8 || st.airCombo % 10 === 0) {
+      popupFn?.({
+        label: `COMBO ×${st.airCombo}!`,
+        sub: 'Airborne chain',
+        gold: true,
+        color: '#fbbf24',
+        glow: '#f59e0b',
+      }, 1100);
+    }
+  }
+}
+
+function applyDickQteBoost(box, speedFactor = 1) {
+  const f = Number.isFinite(speedFactor) ? speedFactor : 1;
+  box.vy = -36 * (0.95 + Math.random() * 0.12) * f;
+  box.vx = Math.max(Math.abs(box.vx) * 2.4, 38) * f;
+  box.spin = (Math.random() > 0.5 ? 1 : -1) * 1.05;
+  box.onGround = false;
+}
+
+function dickQteSuccessGrade() {
+  return {
+    label: 'DODGED!',
+    sub: 'Little Dick misfires — forward boost!',
+    gold: true,
+    color: '#fbbf24',
+    glow: '#f59e0b',
+  };
+}
+
+function flightCoinGrade(amount) {
+  return {
+    label: `+${amount} COINS`,
+    sub: 'Flight pickup → wallet',
+    gold: true,
+    color: '#fde68a',
+    glow: '#f59e0b',
+  };
+}
+
 function clamp(n, lo, hi) {
   return Math.max(lo, Math.min(hi, n));
 }
@@ -529,13 +826,51 @@ function makeRng(seed) {
   };
 }
 
+/** World-X → kilometres past kick-off (for density scaling). */
+function kmAtWorldX(x) {
+  return Math.max(0, (Number(x) - BOX_REST_X) / PX_PER_METRE / 1000);
+}
+
+/**
+ * Every full km past kick-off, slowdown hazards get denser (capped).
+ * Hot-air balloons only from 1,000 km onward.
+ */
+function slowdownDensityAtKm(km) {
+  const rawKm = Math.max(0, Math.floor(Number(km) || 0));
+  const tier = Math.min(200, rawKm);
+  const balloonTier = rawKm >= 1000 ? Math.min(120, rawKm - 999) : 0;
+  return {
+    tier,
+    // Fewer empty gaps as distance grows
+    skipChance: Math.max(0.04, 0.2 - Math.min(80, tier) * 0.0025),
+    // Balloons from 1,000 km; denser every km after that
+    balloonChance: balloonTier < 1
+      ? 0
+      : Math.min(0.32, 0.02 + (balloonTier - 1) * 0.0075),
+    // More birds / coaches in the regular roll mix
+    birdBias: Math.min(0.22, 0.1 + Math.min(80, tier) * 0.002),
+    coachBias: Math.min(0.42, 0.28 + Math.min(80, tier) * 0.0025),
+  };
+}
+
+const BALLOON_COLORS = [
+  ['#ef4444', '#b91c1c'],
+  ['#3b82f6', '#1d4ed8'],
+  ['#f59e0b', '#b45309'],
+  ['#22c55e', '#15803d'],
+  ['#a855f7', '#7e22ce'],
+  ['#ec4899', '#be185d'],
+  ['#06b6d4', '#0e7490'],
+];
+
 /** Append randomised props from `fromX` up to `toX`. Returns new cursor x. */
 function appendProps(items, fromX, toX, next, features = {}) {
   const newProps = Boolean(features.newProps);
   const skipRare = Boolean(features.skipRare);
   let x = Math.max(fromX, 0);
   while (x < toX) {
-    if (next() < 0.2) {
+    const dens = slowdownDensityAtKm(kmAtWorldX(x));
+    if (next() < dens.skipChance) {
       x += 140 + next() * 480;
       continue;
     }
@@ -549,13 +884,13 @@ function appendProps(items, fromX, toX, next, features = {}) {
       x += 600 + next() * 1000;
       continue;
     }
-    // Ultra-rare Chelle — bold lady with a book (gated while softkey-testing)
+    // Ultra-rare Chelle — bold lady with a book (2× prior spawn rate)
     if (
       !skipRare
       && newProps
       && CHELLE_NATURAL_SPAWN
       && x >= CHELLE_FROM_X
-      && next() < 0.0012
+      && next() < 0.0024
     ) {
       items.push({
         type: 'chelle',
@@ -585,8 +920,26 @@ function appendProps(items, fromX, toX, next, features = {}) {
       x += 400 + next() * 700;
       continue;
     }
+    // Hot-air balloons — airborne slowdown from 1,000 km; denser thereafter
+    if (newProps && dens.balloonChance > 0 && next() < dens.balloonChance) {
+      const palette = BALLOON_COLORS[Math.floor(next() * BALLOON_COLORS.length)] || BALLOON_COLORS[0];
+      items.push({
+        type: 'balloon',
+        x,
+        y: GROUND_Y - (90 + next() * 140),
+        bobPhase: next() * Math.PI * 2,
+        color: palette[0],
+        colorDark: palette[1],
+        scale: 0.85 + next() * 0.45,
+        id: `balloon-${items.length}-${x | 0}`,
+      });
+      // Pack tighter at higher tiers
+      const gapScale = Math.max(0.45, 1 - dens.tier * 0.008);
+      x += (160 + next() * 280) * gapScale;
+      continue;
+    }
     const roll = next();
-    if (newProps && roll < 0.1) {
+    if (newProps && roll < dens.birdBias) {
       // Airborne birds — small speed tax if hit
       items.push({
         type: 'bird',
@@ -596,7 +949,7 @@ function appendProps(items, fromX, toX, next, features = {}) {
         id: `bird-${items.length}-${x | 0}`,
       });
       x += 90 + next() * 180;
-    } else if (roll < 0.28) {
+    } else if (roll < dens.coachBias) {
       items.push({
         type: 'coach',
         x,
@@ -605,7 +958,7 @@ function appendProps(items, fromX, toX, next, features = {}) {
         id: `coach-${items.length}-${x | 0}`,
       });
       x += 140 + next() * 200;
-    } else if (roll < 0.52) {
+    } else if (roll < dens.coachBias + 0.24) {
       items.push({
         type: 'sack',
         x,
@@ -613,10 +966,10 @@ function appendProps(items, fromX, toX, next, features = {}) {
         id: `sack-${items.length}-${x | 0}`,
       });
       x += 70 + next() * 160;
-    } else if (roll < 0.72) {
+    } else if (roll < dens.coachBias + 0.44) {
       items.push({ type: 'cone', x, id: `cone-${items.length}-${x | 0}` });
       x += 50 + next() * 110;
-    } else if (roll < 0.88) {
+    } else if (roll < dens.coachBias + 0.6) {
       items.push({
         type: 'drum',
         x,
@@ -678,12 +1031,38 @@ function cullDistantProps(st, box) {
     : st.camX - 800;
   const keepMax = x + AHEAD_BUFFER + 600;
   if (st.items.length > 100) {
-    st.items = st.items.filter((it) => it.x >= keepMin && it.x <= keepMax);
+    st.items = st.items.filter((it) => {
+      if (it.type === 'recordFlag') return true;
+      if (it.type === 'flightCoin') {
+        return it.x >= keepMin - 200 && it.x <= keepMax + 2400;
+      }
+      return it.x >= keepMin && it.x <= keepMax;
+    });
+  }
+}
+
+function ensureFlightCoinsNear(st, boxX) {
+  if (!st?.v2 || !Array.isArray(st.flightCoinPlan)) return;
+  if (!st.collectedCoinSlots) st.collectedCoinSlots = new Set();
+  for (const coin of st.flightCoinPlan) {
+    if (st.collectedCoinSlots.has(coin.slot)) continue;
+    const x = BOX_REST_X + coin.km * 1000 * PX_PER_METRE;
+    if (x < boxX - 500 || x > boxX + AHEAD_BUFFER + 800) continue;
+    const id = `flight-coin-${coin.slot}`;
+    if (st.items.some((it) => it.id === id)) continue;
+    st.items.push({
+      type: 'flightCoin',
+      x,
+      amount: coin.amount || FLIGHT_COIN_AMOUNT,
+      slot: coin.slot,
+      id,
+    });
   }
 }
 
 function ensurePropsAround(st, box) {
   ensurePropsAhead(st, box.x + AHEAD_BUFFER);
+  if (st.v2) ensureFlightCoinsNear(st, box.x);
   if ((box.vx || 0) < -0.5) {
     ensureReturnPathProps(st, box.x);
   }
@@ -704,6 +1083,22 @@ function spawnDevPropAhead(st, type) {
   else if (type === 'chelle') st.message = 'CHEAT · Chelle spawned ahead';
   else if (type === 'littleDick') st.message = 'CHEAT · Little Dick spawned ahead';
   else st.message = `CHEAT · ${type} spawned ahead`;
+}
+
+/** Sandbox run 4 — place Little Dicks close so you can practice the kickback QTE. */
+function spawnQtePracticeDicks(st) {
+  if (!st) return;
+  st.items = (st.items || []).filter((it) => !String(it.id || '').startsWith('qte-practice-dick'));
+  // Several short-range spots so soft or strong kicks still land on him
+  const offsets = [360, 560, 820, 1120];
+  for (let i = 0; i < offsets.length; i += 1) {
+    st.items.push({
+      type: 'littleDick',
+      x: BOX_REST_X + offsets[i],
+      id: `qte-practice-dick-${i}`,
+    });
+  }
+  st.items.sort((a, b) => a.x - b.x);
 }
 
 /** Punishment: flood the flight path with coaches so the toolbox keeps getting slowed. */
@@ -787,8 +1182,8 @@ function isPerfectAngle(deg) {
 
 /** Combined perfect power + angle → launch flash + speed multiplier. */
 const PERFECT_LAUNCH_BOOST = 1.25;
-/** Weekly power-up: +40% launch speed for one kick. */
-const SUPER_RAGE_BOOST = 1.4;
+/** Weekly power-up: +80% launch speed for one kick. */
+const SUPER_RAGE_BOOST = 1.8;
 
 function perfectLaunchGrade() {
   return {
@@ -804,7 +1199,7 @@ function perfectLaunchGrade() {
 function superRageGrade() {
   return {
     label: 'ENERGY DRINK!!!',
-    sub: 'Dick chugged it · +40% launch speed',
+    sub: 'Dick chugged it · +80% launch speed',
     gold: true,
     epic: true,
     color: '#fecaca',
@@ -817,31 +1212,137 @@ function launchSpeedForPower(power01, tuning) {
   return tuning.launchSpeedMin + p * (tuning.launchSpeed100 - tuning.launchSpeedMin);
 }
 
-function drawSky(ctx, camX) {
+function drawSky(ctx, camX, weather = 'calm') {
   const g = ctx.createLinearGradient(0, 0, 0, H);
-  g.addColorStop(0, '#7eb6d9');
-  g.addColorStop(0.55, '#c5dce8');
-  g.addColorStop(1, '#e8dcc8');
+  if (weather === 'storm') {
+    g.addColorStop(0, '#1e293b');
+    g.addColorStop(0.45, '#334155');
+    g.addColorStop(0.75, '#475569');
+    g.addColorStop(1, '#64748b');
+  } else if (weather === 'steady') {
+    g.addColorStop(0, '#5b8fb8');
+    g.addColorStop(0.55, '#a8c5d6');
+    g.addColorStop(1, '#d4c9b4');
+  } else {
+    g.addColorStop(0, '#7eb6d9');
+    g.addColorStop(0.55, '#c5dce8');
+    g.addColorStop(1, '#e8dcc8');
+  }
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, W, H);
 
-  ctx.fillStyle = 'rgba(255,255,255,0.55)';
-  for (let i = 0; i < 5; i += 1) {
-    const cx = ((i * 220 - camX * 0.15) % (W + 200)) - 40;
-    ctx.beginPath();
-    ctx.ellipse(cx, 48 + (i % 3) * 12, 42, 16, 0, 0, Math.PI * 2);
-    ctx.ellipse(cx + 28, 52, 34, 14, 0, 0, Math.PI * 2);
-    ctx.fill();
+  if (weather === 'storm') {
+    // Heavy overcast banks
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.55)';
+    for (let i = 0; i < 7; i += 1) {
+      const cx = ((i * 170 - camX * 0.22) % (W + 260)) - 60;
+      const cy = 28 + (i % 4) * 14;
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, 58, 22, 0, 0, Math.PI * 2);
+      ctx.ellipse(cx + 36, cy + 6, 48, 18, 0, 0, Math.PI * 2);
+      ctx.ellipse(cx - 30, cy + 4, 40, 16, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  } else {
+    ctx.fillStyle = weather === 'steady' ? 'rgba(255,255,255,0.4)' : 'rgba(255,255,255,0.55)';
+    for (let i = 0; i < 5; i += 1) {
+      const cx = ((i * 220 - camX * 0.15) % (W + 200)) - 40;
+      ctx.beginPath();
+      ctx.ellipse(cx, 48 + (i % 3) * 12, 42, 16, 0, 0, Math.PI * 2);
+      ctx.ellipse(cx + 28, 52, 34, 14, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 }
 
-function drawGround(ctx, camX) {
-  ctx.fillStyle = '#3d5c3a';
+/** Screen-space rain + lightning for storm attempt (drawn after world, before HUD). */
+function drawStormWeather(ctx, frame = 0, wind = null) {
+  const gust = Number(wind?.angleDeg) || 0;
+  const shear = Math.sin((gust * Math.PI) / 180) * 10 + Math.cos(frame * 0.07) * 4;
+
+  // Dim veil
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.18)';
+  ctx.fillRect(0, 0, W, GROUND_Y);
+
+  // Rain streaks
+  ctx.save();
+  ctx.strokeStyle = 'rgba(186, 230, 253, 0.55)';
+  ctx.lineWidth = 1.25;
+  ctx.lineCap = 'round';
+  const cols = 56;
+  for (let i = 0; i < cols; i += 1) {
+    const seed = i * 97.13;
+    const xBase = ((i / cols) * W + frame * (3.2 + (i % 5) * 0.35) + seed) % (W + 40) - 20;
+    const yOff = (frame * (14 + (i % 7)) + seed * 3) % (GROUND_Y + 60);
+    const len = 10 + (i % 5) * 3;
+    ctx.globalAlpha = 0.35 + (i % 4) * 0.12;
+    ctx.beginPath();
+    ctx.moveTo(xBase, yOff - len);
+    ctx.lineTo(xBase + shear, yOff);
+    ctx.stroke();
+  }
+  ctx.restore();
+
+  // Occasional lightning flash + bolt
+  const flashCycle = frame % 180;
+  const boltOn = flashCycle === 12 || flashCycle === 14 || flashCycle === 92 || flashCycle === 94;
+  const afterglow = flashCycle === 13 || flashCycle === 15 || flashCycle === 93 || flashCycle === 95;
+  if (boltOn || afterglow) {
+    ctx.fillStyle = boltOn ? 'rgba(255,255,255,0.42)' : 'rgba(186,230,253,0.18)';
+    ctx.fillRect(0, 0, W, H);
+
+    if (boltOn) {
+      const bx = 120 + ((Math.floor(frame / 180) * 137) % (W - 240));
+      ctx.save();
+      ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+      ctx.lineWidth = 2.5;
+      ctx.shadowColor = '#93c5fd';
+      ctx.shadowBlur = 18;
+      ctx.beginPath();
+      ctx.moveTo(bx, 0);
+      ctx.lineTo(bx + 18, 55);
+      ctx.lineTo(bx - 8, 95);
+      ctx.lineTo(bx + 22, 150);
+      ctx.lineTo(bx + 4, 210);
+      ctx.stroke();
+      // fork
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(bx - 8, 95);
+      ctx.lineTo(bx - 36, 140);
+      ctx.stroke();
+      ctx.restore();
+    }
+  }
+
+  // Distant thunder rumble bar (subtle vignette pulse)
+  if (flashCycle > 12 && flashCycle < 40) {
+    const fade = 1 - (flashCycle - 12) / 28;
+    ctx.fillStyle = `rgba(30, 41, 59, ${0.12 * fade})`;
+    ctx.fillRect(0, 0, W, H);
+  }
+}
+
+function drawGround(ctx, camX, weather = 'calm') {
+  const wet = weather === 'storm';
+  ctx.fillStyle = wet ? '#243528' : '#3d5c3a';
   ctx.fillRect(0, GROUND_Y, W, H - GROUND_Y);
-  ctx.fillStyle = '#4a6b45';
+  ctx.fillStyle = wet ? '#2f4a36' : '#4a6b45';
   ctx.fillRect(0, GROUND_Y, W, 8);
 
-  ctx.strokeStyle = 'rgba(0,0,0,0.12)';
+  if (wet) {
+    // Slick patches — wet grass sheen
+    ctx.fillStyle = 'rgba(148, 163, 184, 0.14)';
+    for (let x = -((camX * 0.45) % 56); x < W; x += 56) {
+      ctx.beginPath();
+      ctx.ellipse(x + 18, GROUND_Y + 14, 22, 5, -0.15, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.28)';
+    ctx.fillRect(0, GROUND_Y, W, 3);
+  }
+
+  ctx.strokeStyle = wet ? 'rgba(0,0,0,0.22)' : 'rgba(0,0,0,0.12)';
   ctx.lineWidth = 1;
   for (let x = -((camX * 0.5) % 40); x < W; x += 40) {
     ctx.beginPath();
@@ -850,7 +1351,7 @@ function drawGround(ctx, camX) {
     ctx.stroke();
   }
 
-  ctx.fillStyle = '#5a5a5a';
+  ctx.fillStyle = wet ? '#3f3f46' : '#5a5a5a';
   ctx.fillRect(0, GROUND_Y - 2, W, 4);
 }
 
@@ -1273,6 +1774,79 @@ function drawBird(ctx, x, y, frame = 0, dir = 1) {
   ctx.restore();
 }
 
+function drawHotAirBalloon(ctx, x, y, frame = 0, opts = {}) {
+  const scale = Number(opts.scale) || 1;
+  const color = opts.color || '#ef4444';
+  const colorDark = opts.colorDark || '#b91c1c';
+  const bob = Math.sin(frame * 0.08 + (opts.bobPhase || 0)) * 3;
+  const deflated = Boolean(opts.hit);
+
+  ctx.save();
+  ctx.translate(x, y + bob);
+  ctx.scale(scale, scale);
+
+  if (!deflated) {
+    // Envelope
+    const grad = ctx.createRadialGradient(-6, -38, 4, 0, -28, 28);
+    grad.addColorStop(0, color);
+    grad.addColorStop(1, colorDark);
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.ellipse(0, -32, 22, 26, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(15,23,42,0.35)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+
+    // Panels
+    ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, -56);
+    ctx.lineTo(0, -8);
+    ctx.moveTo(-16, -44);
+    ctx.lineTo(0, -8);
+    ctx.moveTo(16, -44);
+    ctx.lineTo(0, -8);
+    ctx.stroke();
+
+    // Rigging
+    ctx.strokeStyle = '#78716c';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(-10, -10);
+    ctx.lineTo(-6, 6);
+    ctx.moveTo(10, -10);
+    ctx.lineTo(6, 6);
+    ctx.moveTo(0, -8);
+    ctx.lineTo(0, 6);
+    ctx.stroke();
+
+    // Basket
+    ctx.fillStyle = '#a16207';
+    ctx.strokeStyle = '#713f12';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.roundRect(-7, 4, 14, 10, 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = '#854d0e';
+    ctx.fillRect(-7, 7, 14, 2);
+  } else {
+    // Popped — limp envelope
+    ctx.fillStyle = colorDark;
+    ctx.globalAlpha = 0.55;
+    ctx.beginPath();
+    ctx.ellipse(0, -8, 16, 8, 0.3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#a16207';
+    ctx.fillRect(-5, 4, 10, 7);
+  }
+
+  ctx.restore();
+}
+
 /** Ultra-rare black Porsche Macan — canvas silhouette. */
 function drawMacan(ctx, x, y, frame = 0) {
   ctx.save();
@@ -1664,6 +2238,16 @@ function birdHitGrade() {
   };
 }
 
+function balloonHitGrade() {
+  return {
+    label: 'Balloon!',
+    sub: 'Envelope burst — big slowdown',
+    gold: false,
+    color: '#f87171',
+    glow: '#ef4444',
+  };
+}
+
 function milestoneGrade(m) {
   const space = m.km >= 20000;
   const big = m.km >= 110;
@@ -1747,7 +2331,7 @@ function EnergyDrinkBanner({ practice = false, superRage = null, alreadyDone = f
         <p className="text-sm font-semibold text-lime-100">Dick’s energy drink · practice</p>
         <p className="text-xs text-slate-300 leading-relaxed">
           Free to try here. In the real daily game you get <span className="text-white font-medium">one drink per week</span>
-          {' '}(+40% launch speed on one kick). Everyone’s fridge refills on Monday.
+          {' '}(+80% launch speed on one kick). Everyone’s fridge refills on Monday.
         </p>
       </div>
     );
@@ -1771,7 +2355,7 @@ function EnergyDrinkBanner({ practice = false, superRage = null, alreadyDone = f
         {ready ? (
           <>
             One can this week. Tap <span className="text-white font-medium">Drink energy drink</span> before a kick
-            for <span className="text-white font-medium">+40% speed</span> on that kick only.
+            for <span className="text-white font-medium">+80% speed</span> on that kick only.
             After that it’s gone until Monday — same for everyone.
           </>
         ) : (
@@ -1797,6 +2381,11 @@ function ToolboxKickGame({
   onActivateSuperRage = null,
   caughtCheating = false,
   punished = false,
+  /** Toolbox 2.0 — sandbox / preview only when TOOLBOX_V2_DEV && (devCheats or forceV2). */
+  forceV2 = false,
+  dayKey = null,
+  recordMarkers = null,
+  onFlightCoin = null,
 }) {
   const canvasRef = useRef(null);
   const stageRef = useRef(null);
@@ -1805,6 +2394,10 @@ function ToolboxKickGame({
   const modeRef = useRef(mode);
   const competitiveRef = useRef(competitive);
   const devCheatsRef = useRef(devCheats);
+  const v2Ref = useRef(Boolean(TOOLBOX_V2_LIVE || (TOOLBOX_V2_DEV && (devCheats || forceV2))));
+  const dayKeyRef = useRef(dayKey || getLondonDayKey());
+  const markersRef = useRef(Array.isArray(recordMarkers) ? recordMarkers : []);
+  const onFlightCoinRef = useRef(onFlightCoin);
   const caughtCheatingRef = useRef(caughtCheating);
   const punishedRef = useRef(punished);
   const onRoundCompleteRef = useRef(onRoundComplete);
@@ -1818,12 +2411,16 @@ function ToolboxKickGame({
     best: Number(localStorage.getItem('toolbox-kick-best') || 0),
     attempt: 1,
     roundBest: 0,
+    airCombo: 0,
+    windLabel: 'Calm',
     message: mode === 'allOrNothing'
       ? 'All or nothing — one shot. Tap to set POWER'
       : `Attempt 1/${MAX_ATTEMPTS} — tap to set POWER`,
   });
   const [popup, setPopup] = useState(null);
   const [haHaFlash, setHaHaFlash] = useState(false);
+  /** Little Dick QTE HUD: null | 'ready' | 'go' */
+  const [qteFlash, setQteFlash] = useState(null);
   const [cheatPunished, setCheatPunished] = useState(false);
   const [roundDone, setRoundDone] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
@@ -1842,7 +2439,20 @@ function ToolboxKickGame({
 
   useEffect(() => {
     devCheatsRef.current = devCheats;
-  }, [devCheats]);
+    v2Ref.current = Boolean(TOOLBOX_V2_LIVE || (TOOLBOX_V2_DEV && (devCheats || forceV2)));
+  }, [devCheats, forceV2]);
+
+  useEffect(() => {
+    dayKeyRef.current = dayKey || getLondonDayKey();
+  }, [dayKey]);
+
+  useEffect(() => {
+    markersRef.current = Array.isArray(recordMarkers) ? recordMarkers : [];
+  }, [recordMarkers]);
+
+  useEffect(() => {
+    onFlightCoinRef.current = onFlightCoin;
+  }, [onFlightCoin]);
 
   useEffect(() => {
     caughtCheatingRef.current = Boolean(caughtCheating);
@@ -1930,10 +2540,37 @@ function ToolboxKickGame({
     const startX = 380 + rng() * 220;
     const newProps = TOOLBOX_NEW_PROPS_LIVE;
     const propCursor = appendProps(items, startX, startX + CHUNK_SIZE, rng, { newProps });
-    const attempts = modeRef.current === 'allOrNothing' ? 1 : MAX_ATTEMPTS;
+    const sandboxV2 = Boolean(v2Ref.current && devCheatsRef.current);
+    const attempts = modeRef.current === 'allOrNothing'
+      ? 1
+      : (sandboxV2 ? MAX_ATTEMPTS_DEV_V2 : MAX_ATTEMPTS);
+    const v2 = Boolean(v2Ref.current);
+    const windDayKey = dayKeyRef.current || getLondonDayKey();
+    const qtePractice = sandboxV2 && attempt === DEV_QTE_PRACTICE_ATTEMPT;
+    const windProfile = v2
+      ? windProfileForAttempt({ dayKey: windDayKey, attempt, maxAttempts: attempts })
+      : { mode: 'calm', label: 'Calm', angleDeg: 0, speed: 0 };
+    if (v2) {
+      // Coins spawn lazily near the toolbox (see ensureFlightCoinsNear).
+      const markers = markersRef.current || [];
+      for (const marker of markers) {
+        items.push({
+          type: 'recordFlag',
+          x: BOX_REST_X + marker.distanceM * PX_PER_METRE,
+          marker,
+          id: `flag-${marker.kind}-${marker.distanceM}`,
+        });
+      }
+      items.sort((a, b) => a.x - b.x);
+    }
+    const windHint = qtePractice
+      ? ' · QTE PRACTICE — land on Little Dick & TAP!'
+      : (v2 && windProfile.mode !== 'calm'
+        ? ` · ${windProfile.label}`
+        : (v2 ? ' · calm skies' : ''));
     const message = attempts === 1
-      ? 'All or nothing — one shot. Tap to set POWER'
-      : `Attempt ${attempt}/${attempts} — tap to set POWER`;
+      ? `All or nothing — one shot. Tap to set POWER${windHint}`
+      : `Attempt ${attempt}/${attempts} — tap to set POWER${windHint}`;
     stateRef.current = {
       phase: PHASE.READY,
       frame: 0,
@@ -1988,6 +2625,17 @@ function ToolboxKickGame({
         ? false
         : Boolean(opts.roundBestUsedEnergyDrink
           ?? (stateRef.current && stateRef.current.roundBestUsedEnergyDrink)),
+      landThump: 0,
+      _wetThumpNoted: false,
+      v2,
+      windProfile,
+      windNow: sampleWind(windProfile, 0),
+      airCombo: 0,
+      maxAirCombo: 0,
+      coinsGrabbed: 0,
+      flightCoinPlan: v2 ? buildFlightCoinPlan(windDayKey) : null,
+      collectedCoinSlots: new Set(),
+      qtePractice: Boolean(qtePractice),
     };
     setHud({
       phase: PHASE.READY,
@@ -1997,14 +2645,42 @@ function ToolboxKickGame({
       best,
       attempt,
       roundBest,
+      airCombo: 0,
+      windLabel: windProfile.label || 'Calm',
       message,
     });
+    setQteFlash(null);
   }, []);
 
   const doSpace = useCallback(() => {
     const st = stateRef.current;
     if (!st) return;
     const attempts = st.maxAttempts || (modeRef.current === 'allOrNothing' ? 1 : MAX_ATTEMPTS);
+
+    // Toolbox 2.0 — Little Dick kickback QTE (Space / tap / overlay button)
+    if (dickQteEnabled(st) && st.phase === PHASE.FLIGHT && st.dickCatch && !st.dickCatch.qteResolved) {
+      const f = st.dickCatch.frame || 0;
+      if (f >= DICK_QTE_OPEN && f <= DICK_QTE_CLOSE) {
+        st.dickCatch.qteResolved = true;
+        st.dickCatch.qteSuccess = true;
+        st.message = 'Nice! You broke free — boost incoming…';
+        setQteFlash(null);
+        showRpgPopup(dickQteSuccessGrade(), 1600);
+        setHud((h) => ({ ...h, message: st.message }));
+        return;
+      }
+      if (f < DICK_QTE_OPEN) {
+        st.message = 'Too early — wait for TAP NOW!';
+        setHud((h) => ({ ...h, message: st.message }));
+        return;
+      }
+      st.dickCatch.qteResolved = true;
+      st.dickCatch.qteSuccess = false;
+      setQteFlash(null);
+      st.message = 'Missed the QTE — here comes the boot-back…';
+      setHud((h) => ({ ...h, message: st.message }));
+      return;
+    }
 
     if (st.phase === PHASE.READY) {
       st.phase = PHASE.POWER;
@@ -2145,6 +2821,7 @@ function ToolboxKickGame({
     const ctx = canvas.getContext('2d');
     let raf = 0;
     let lastTs = 0;
+    let simAccum = 0;
 
     const syncHud = (st) => {
       setHud({
@@ -2155,6 +2832,8 @@ function ToolboxKickGame({
         best: st.best,
         attempt: st.attempt || 1,
         roundBest: st.roundBest || 0,
+        airCombo: st.airCombo || 0,
+        windLabel: st.windNow?.label || st.windProfile?.label || 'Calm',
         message: st.message,
       });
     };
@@ -2167,19 +2846,30 @@ function ToolboxKickGame({
         raf = requestAnimationFrame(step);
         return;
       }
-      const rawDt = lastTs ? (ts - lastTs) / 1000 : 1 / 60;
+      const rawDt = lastTs ? (ts - lastTs) / 1000 : TOOLBOX_SIM_DT;
       lastTs = ts;
-      // Cap so a backgrounded tab doesn't jump the meter
+      // Cap so a backgrounded tab doesn't spiral when it returns
       const dt = Math.min(0.05, Math.max(0, rawDt));
-      st.frame += 1;
 
+      // Power / angle meters are already wall-clock (Hz-independent).
       if (st.phase === PHASE.POWER) {
         st.powerT += bar.power * dt;
         st.power = meterValue(st.powerT);
       } else if (st.phase === PHASE.ANGLE) {
         st.angleT += bar.angle * dt;
         st.angleDeg = 15 + meterValue(st.angleT) * 60;
-      } else if (st.phase === PHASE.RUNUP) {
+      }
+
+      // Fixed-timestep gameplay @ 60 Hz; display still paints every monitor refresh.
+      simAccum += dt;
+      let simSteps = 0;
+      while (simAccum >= TOOLBOX_SIM_DT && simSteps < TOOLBOX_MAX_SIM_STEPS) {
+        st._renderPrev = captureToolboxRenderPose(st);
+        simAccum -= TOOLBOX_SIM_DT;
+        simSteps += 1;
+        st.frame += 1;
+
+        if (st.phase === PHASE.RUNUP) {
         st.runup += 1;
         const t = Math.min(1, st.runup / RUNUP_FRAMES);
         const eased = t * t;
@@ -2214,22 +2904,29 @@ function ToolboxKickGame({
           st.dickCatch = null;
           st.chelleReact = null;
           if (st.punished) spawnPunishmentCoachSwarm(st);
+          if (st.qtePractice) {
+            spawnQtePracticeDicks(st);
+            st.message = 'QTE PRACTICE — land on Little Dick, then TAP NOW!';
+          }
           st.phase = PHASE.FLIGHT;
-          st.message = st.punished
-            ? 'Punishment — coaches everywhere!'
-            : st.caughtCheating
-              ? 'Caught cheating — toolbox is sluggish…'
-              : st.perfectLaunch
-                ? 'Perfect launch!!! Fly, toolbox, fly…'
-                : 'Fly, toolbox, fly…';
+          if (!st.qtePractice) {
+            st.message = st.punished
+              ? 'Punishment — coaches everywhere!'
+              : st.caughtCheating
+                ? 'Caught cheating — toolbox is sluggish…'
+                : st.perfectLaunch
+                  ? 'Perfect launch!!! Fly, toolbox, fly…'
+                  : 'Fly, toolbox, fly…';
+          }
           syncHud(st);
         }
       } else if (st.phase === PHASE.FLIGHT && st.dickCatch) {
         const box = st.box;
         const catchSt = st.dickCatch;
+        const qteOn = dickQteEnabled(st);
         catchSt.frame += 1;
         const f = catchSt.frame;
-        // Hold toolbox while he catches / winds up / boots BACK toward start
+        // Hold toolbox while he catches / winds up / boots
         box.vx = 0;
         box.vy = 0;
         box.onGround = false;
@@ -2239,34 +2936,70 @@ function ToolboxKickGame({
         box.spin = 0;
 
         if (f === 1) {
-          st.message = 'Little Dick caught the toolbox!';
-          popupFnRef.current?.(littleDickRebootGrade(), 2000);
+          st.message = qteOn
+            ? 'Little Dick caught the toolbox — get ready to TAP!'
+            : 'Little Dick caught the toolbox!';
+          // Short popup so it doesn’t cover the whole QTE window
+          popupFnRef.current?.(littleDickRebootGrade(), qteOn ? 900 : 2000);
+          if (qteOn) setQteFlash('ready');
           syncHud(st);
         }
-        if (f === 16) {
-          catchSt.facing = -1; // betrayal — turns and boots BACK toward the start
-          st.message = 'Oh no — he boots it BACK toward the start!';
+        if (qteOn && !catchSt.qteResolved) {
+          if (f === DICK_QTE_OPEN) {
+            setQteFlash('go');
+            st.message = 'TAP NOW — Space / tap the screen!';
+            syncHud(st);
+          }
+          if (f === DICK_QTE_CLOSE + 1) {
+            catchSt.qteResolved = true;
+            catchSt.qteSuccess = false;
+            setQteFlash(null);
+            st.message = 'Missed the QTE — here comes the boot-back…';
+            syncHud(st);
+          }
+        }
+        if (f === DICK_QTE_TURN) {
+          if (qteOn && catchSt.qteSuccess) {
+            catchSt.facing = 1;
+            st.message = 'He winds up… but you wriggle free!';
+          } else {
+            catchSt.facing = -1; // betrayal — turns and boots BACK toward the start
+            st.message = 'Oh no — he boots it BACK toward the start!';
+          }
           syncHud(st);
         }
-        if (f === 34) {
+        if (f === DICK_QTE_FLASH) {
           st.kickFlash = 10;
         }
-        if (f >= 40) {
+        if (f >= DICK_QTE_BOOT) {
           const rad = ((st.launchAngleDeg || 45) * Math.PI) / 180;
           const speedFactor = (st.caughtCheating || st.punished) ? CAUGHT_CHEAT_SPEED_FACTOR : 1;
           const speed = (st.launchSpeed || launchSpeedForPower(st.power, tun)) * speedFactor;
-          box.x = catchSt.x - 12;
-          box.y = GROUND_Y - 14;
-          // Same launch force, opposite direction (back toward kick-off)
-          box.vx = -Math.cos(rad) * speed;
-          box.vy = -Math.sin(rad) * speed;
-          box.spin = -(0.2 + (st.power || 0.5) * 0.3);
-          box.onGround = false;
-          st.dickCatch = null;
-          st.hitIds = new Set(); // re-collide with obstacles on the way back
-          ensureReturnPathProps(st, box.x);
-          st.message = 'Little Dick sent it BACK — distance plunging!';
-          syncHud(st);
+          setQteFlash(null);
+          if (qteOn && catchSt.qteSuccess) {
+            box.x = catchSt.x + 14;
+            box.y = GROUND_Y - 18;
+            applyDickQteBoost(box, speedFactor);
+            st.kickFlash = 12;
+            st.dickCatch = null;
+            st.hitIds = new Set();
+            st.message = 'QTE! Little Dick whiffs — toolbox rockets onward!';
+            popupFnRef.current?.(dickQteSuccessGrade(), 1800);
+            syncHud(st);
+          } else {
+            box.x = catchSt.x - 12;
+            box.y = GROUND_Y - 14;
+            // Same launch force, opposite direction (back toward kick-off)
+            box.vx = -Math.cos(rad) * speed;
+            box.vy = -Math.sin(rad) * speed;
+            box.spin = -(0.2 + (st.power || 0.5) * 0.3);
+            box.onGround = false;
+            st.dickCatch = null;
+            st.hitIds = new Set(); // re-collide with obstacles on the way back
+            ensureReturnPathProps(st, box.x);
+            st.message = 'Little Dick sent it BACK — distance plunging!';
+            syncHud(st);
+          }
         }
         st.distance = (box.x - BOX_REST_X) / PX_PER_METRE;
         st.camX = box.x - W * 0.35;
@@ -2314,6 +3047,20 @@ function ToolboxKickGame({
         if (st.frame % 6 === 0) syncHud(st);
       } else if (st.phase === PHASE.FLIGHT) {
         const box = st.box;
+        const nearGround = box.y >= GROUND_Y - 14 || box.onGround;
+        if (st.v2 && st.windProfile) {
+          const wind = sampleWind(st.windProfile, st.frame);
+          st.windNow = wind;
+          if (nearGround) {
+            // Ground contact kills most wind push so a tailwind can't perpetual-slide.
+            const gScale = tun.groundWindScale ?? 0.06;
+            box.vx += wind.ax * gScale;
+            // No vertical loft while scraping asphalt
+          } else {
+            box.vx += wind.ax;
+            box.vy += wind.ay;
+          }
+        }
         box.vy += tun.gravity;
         box.vx *= tun.airDrag;
         box.vy *= tun.airDrag;
@@ -2335,11 +3082,14 @@ function ToolboxKickGame({
 
         ensurePropsAround(st, box);
 
-        // Birds drift slowly while you're in flight
+        // Birds + balloons drift slowly while you're in flight
         for (let i = 0; i < st.items.length; i += 1) {
           const it = st.items[i];
           if (it.type === 'bird' && !it.hit) {
             it.x += (it.dir || 1) * 0.35;
+          } else if (it.type === 'balloon' && !it.hit) {
+            it.x += 0.12;
+            it.y += Math.sin(st.frame * 0.05 + (it.bobPhase || 0)) * 0.15;
           }
         }
 
@@ -2359,6 +3109,7 @@ function ToolboxKickGame({
               if (!st.hitIds.has(id)) {
                 st.hitIds.add(id);
                 bumpHitTally(st, 'coach');
+                registerAirCombo(st, box, popupFnRef.current);
                 box.vx *= tun.coachSlow;
                 box.vy *= tun.coachSlow;
                 box.spin *= 0.55;
@@ -2380,6 +3131,7 @@ function ToolboxKickGame({
               if (!st.hitIds.has(bounceId)) {
                 st.hitIds.add(bounceId);
                 bumpHitTally(st, 'sack');
+                registerAirCombo(st, box, popupFnRef.current);
                 box.vy = -tun.sackBounce * (0.9 + Math.random() * 0.35);
                 box.vx *= tun.sackBoost;
                 box.spin = -box.spin * 1.15;
@@ -2394,6 +3146,7 @@ function ToolboxKickGame({
               if (!st.hitIds.has(id)) {
                 st.hitIds.add(id);
                 bumpHitTally(st, 'smoker');
+                registerAirCombo(st, box, popupFnRef.current);
                 applySmokerBoost(box, (st.caughtCheating || st.punished) ? CAUGHT_CHEAT_SPEED_FACTOR : 1);
                 st.message = 'Driver on a ciggy break — sent flying!';
                 popupFnRef.current?.(smokerBoostGrade(false), 1600);
@@ -2407,6 +3160,7 @@ function ToolboxKickGame({
               if (!st.hitIds.has(id)) {
                 st.hitIds.add(id);
                 bumpHitTally(st, 'macan');
+                registerAirCombo(st, box, popupFnRef.current);
                 applyMacanBoost(box, (st.caughtCheating || st.punished) ? CAUGHT_CHEAT_SPEED_FACTOR : 1);
                 st.message = 'JULIES CAR!';
                 popupFnRef.current?.(macanBoostGrade(), 2000);
@@ -2420,6 +3174,7 @@ function ToolboxKickGame({
             if (dx * dx + dy * dy < 38 ** 2 && box.vy > 0 && !st.hitIds.has(id)) {
               st.hitIds.add(id);
               bumpHitTally(st, 'chelle');
+              registerAirCombo(st, box, popupFnRef.current);
               st.chelleReact = { x: it.x, frame: 0 };
               box.vx = 0;
               box.vy = 0;
@@ -2439,6 +3194,8 @@ function ToolboxKickGame({
                 x: it.x,
                 frame: 0,
                 facing: 1, // pretends he'll boot you onward…
+                qteResolved: false,
+                qteSuccess: false,
               };
               box.vx = 0;
               box.vy = 0;
@@ -2454,12 +3211,31 @@ function ToolboxKickGame({
             if (dx * dx + dy * dy < 22 ** 2 && !st.hitIds.has(id)) {
               st.hitIds.add(id);
               bumpHitTally(st, 'bird');
+              registerAirCombo(st, box, popupFnRef.current);
               it.hit = true;
               box.vx *= tun.birdSlow;
               box.vy *= 0.96;
               box.spin *= -0.8;
               st.message = 'Bird strike — feathers everywhere!';
               popupFnRef.current?.(birdHitGrade(), 900);
+              syncHud(st);
+            }
+          } else if (it.type === 'balloon') {
+            const by = it.y ?? (GROUND_Y - 120);
+            const scale = Number(it.scale) || 1;
+            const hitR = 26 * scale;
+            const dx = box.x - it.x;
+            const dy = box.y - (by - 18 * scale);
+            if (dx * dx + dy * dy < hitR * hitR && !st.hitIds.has(id)) {
+              st.hitIds.add(id);
+              bumpHitTally(st, 'balloon');
+              registerAirCombo(st, box, popupFnRef.current);
+              it.hit = true;
+              box.vx *= tun.balloonSlow ?? 0.68;
+              box.vy *= tun.balloonVyDamp ?? 0.55;
+              box.spin *= -0.7;
+              st.message = 'Hot-air balloon — slowed right down!';
+              popupFnRef.current?.(balloonHitGrade(), 1100);
               syncHud(st);
             }
           } else if (it.type === 'oilSpill') {
@@ -2480,6 +3256,7 @@ function ToolboxKickGame({
             if (dx * dx + dy * dy < 18 ** 2 && !st.hitIds.has(id)) {
               st.hitIds.add(id);
               bumpHitTally(st, it.type === 'drum' ? 'drum' : 'cone');
+              registerAirCombo(st, box, popupFnRef.current);
               if (it.type === 'drum' && st.newProps) {
                 it.spilled = true;
                 box.oiled = true;
@@ -2500,21 +3277,68 @@ function ToolboxKickGame({
               }
               syncHud(st);
             }
+          } else if (it.type === 'flightCoin' && st.v2 && !it.collected) {
+            const dx = box.x - it.x;
+            const dy = box.y - (GROUND_Y - 52);
+            if (dx * dx + dy * dy < 28 ** 2) {
+              it.collected = true;
+              st.hitIds.add(id);
+              bumpHitTally(st, 'flightCoin');
+              if (!st.collectedCoinSlots) st.collectedCoinSlots = new Set();
+              st.collectedCoinSlots.add(it.slot);
+              st.coinsGrabbed = (st.coinsGrabbed || 0) + 1;
+              const amount = it.amount || FLIGHT_COIN_AMOUNT;
+              st.message = `Flight coin! +${amount} to your wallet`;
+              popupFnRef.current?.(flightCoinGrade(amount), 1200);
+              onFlightCoinRef.current?.({
+                slot: it.slot,
+                amount,
+                dayKey: dayKeyRef.current,
+              });
+              syncHud(st);
+            }
           }
         }
 
         if (box.y >= GROUND_Y - 10) {
           box.y = GROUND_Y - 10;
-          const bounceFric = box.oiled ? tun.oilFriction : tun.friction;
-          const slideDrag = box.oiled ? tun.oilGroundDrag : tun.groundDrag;
-          if (Math.abs(box.vy) > 1.6) {
-            box.vy = -box.vy * tun.bounceDamp;
+          if (st.v2 && st.airCombo) {
+            st.airCombo = 0;
+          }
+          const wetGrass = Boolean(st.v2 && st.windProfile?.mode === 'storm');
+          const bounceDamp = wetGrass
+            ? (tun.wetGrassBounceDamp ?? 0.1)
+            : (tun.bounceDamp ?? 0.36);
+          const bounceFric = wetGrass
+            ? (tun.wetGrassFriction ?? 0.62)
+            : (box.oiled ? tun.oilFriction : tun.friction);
+          const slideDrag = wetGrass
+            ? (tun.wetGrassGroundDrag ?? 0.82)
+            : (box.oiled ? tun.oilGroundDrag : tun.groundDrag);
+          const bounceMinVy = wetGrass
+            ? (tun.wetGrassBounceMinVy ?? 4.2)
+            : (tun.grassBounceMinVy ?? 2.35);
+          const impactVy = Math.abs(box.vy);
+          if (impactVy > bounceMinVy) {
+            box.vy = -box.vy * bounceDamp;
             box.vx *= bounceFric;
-            box.spin *= 0.92;
+            box.spin *= wetGrass ? 0.55 : 0.92;
+            if (wetGrass && impactVy > 3.2) {
+              st.landThump = Math.max(st.landThump || 0, Math.min(14, 6 + Math.floor(impactVy)));
+              if (!st._wetThumpNoted) {
+                st._wetThumpNoted = true;
+                st.message = 'Wet grass — THUMP!';
+                syncHud(st);
+              }
+            }
           } else {
             box.vy = 0;
             box.vx *= slideDrag;
-            box.spin *= box.oiled ? 0.985 : 0.96;
+            // Extra bite once it's truly sliding (kills leftover tailwind crawl)
+            if (Math.abs(box.vx) > 0) {
+              box.vx *= wetGrass ? 0.96 : (box.oiled ? 0.995 : 0.988);
+            }
+            box.spin *= wetGrass ? 0.85 : (box.oiled ? 0.97 : 0.94);
             box.onGround = true;
             if (Math.abs(box.vx) < tun.stopSpeed) {
               box.vx = 0;
@@ -2678,16 +3502,46 @@ function ToolboxKickGame({
 
       if (st.kickFlash > 0) st.kickFlash -= 1;
 
-      // Camera pulls out as the toolbox speeds up
+      // Camera pulls out as the toolbox speeds up (per sim tick @ 60 Hz)
       const zoomTarget = st.phase === PHASE.FLIGHT
         ? clamp(Math.sqrt(30 / Math.max(8, Math.hypot(st.box.vx, st.box.vy))), MIN_ZOOM, 1)
         : 1;
       st.zoom = (st.zoom || 1) + (zoomTarget - (st.zoom || 1)) * 0.06;
-      const zoom = st.zoom;
+      } // end fixed-timestep while
+      if (simSteps >= TOOLBOX_MAX_SIM_STEPS) simAccum = 0;
 
-      const cam = st.camX;
-      drawSky(ctx, cam);
-      drawGround(ctx, cam);
+      // Interpolate between sim ticks so high-Hz monitors stay butter-smooth
+      // while gameplay speed stays locked at 60 Hz.
+      if (!st._renderPrev) st._renderPrev = captureToolboxRenderPose(st);
+      const poseNow = captureToolboxRenderPose(st);
+      const renderAlpha = simSteps >= TOOLBOX_MAX_SIM_STEPS
+        ? 1
+        : (simAccum / TOOLBOX_SIM_DT);
+      const pose = lerpToolboxRenderPose(st._renderPrev, poseNow, renderAlpha);
+      const zoom = pose.zoom || 1;
+      const cam = pose.camX;
+      const boxDrawX = pose.boxX;
+      const boxDrawY = pose.boxY;
+      const boxDrawRot = pose.boxRot;
+      const mechDrawX = pose.mechX;
+      // Sub-frame for decorative animation (wings, sock flap) on high-Hz displays
+      const animFrame = st.frame + (Number.isFinite(renderAlpha) ? renderAlpha : 0);
+      const weatherMode = st.v2 && st.windProfile?.mode === 'storm'
+        ? 'storm'
+        : (st.v2 && st.windProfile?.mode === 'steady' ? 'steady' : 'calm');
+      drawSky(ctx, cam, weatherMode);
+      drawGround(ctx, cam, weatherMode);
+
+      const thump = Math.max(0, st.landThump || 0);
+      if (thump > 0) {
+        st.landThump = thump - 1;
+        const mag = Math.min(7, thump * 0.55);
+        ctx.save();
+        ctx.translate(
+          (Math.random() - 0.5) * mag * 2,
+          mag * 0.85 + (Math.random() - 0.5) * mag,
+        );
+      }
 
       const pivotX = W * 0.35;
       const visMinSx = pivotX + (-200 - pivotX) / zoom;
@@ -2719,16 +3573,16 @@ function ToolboxKickGame({
         else if (it.type === 'sack') drawSack(ctx, sx, GROUND_Y, it.r);
         else if (it.type === 'cone') drawCone(ctx, sx, GROUND_Y);
         else if (it.type === 'drum') drawDrum(ctx, sx, GROUND_Y, Boolean(it.spilled));
-        else if (it.type === 'oilSpill') drawOilSpill(ctx, sx, GROUND_Y, st.frame);
-        else if (it.type === 'smoker') drawSmoker(ctx, sx, GROUND_Y, st.frame);
-        else if (it.type === 'macan') drawMacan(ctx, sx, GROUND_Y, st.frame);
+        else if (it.type === 'oilSpill') drawOilSpill(ctx, sx, GROUND_Y, animFrame);
+        else if (it.type === 'smoker') drawSmoker(ctx, sx, GROUND_Y, animFrame);
+        else if (it.type === 'macan') drawMacan(ctx, sx, GROUND_Y, animFrame);
         else if (it.type === 'chelle') {
           const reacting = st.chelleReact && st.chelleReact.x === it.x;
-          let pose = 'reading';
+          let poseChelle = 'reading';
           if (reacting) {
-            pose = st.chelleReact.frame < 18 ? 'startled' : 'launch';
+            poseChelle = st.chelleReact.frame < 18 ? 'startled' : 'launch';
           }
-          drawChelle(ctx, sx, GROUND_Y, st.frame, pose);
+          drawChelle(ctx, sx, GROUND_Y, animFrame, poseChelle);
           if (reacting && st.chelleReact.frame < 22) {
             ctx.save();
             ctx.fillStyle = 'rgba(255,255,255,0.95)';
@@ -2768,7 +3622,7 @@ function ToolboxKickGame({
         else if (it.type === 'littleDick') {
           const catching = st.dickCatch && st.dickCatch.x === it.x;
           const face = catching ? (st.dickCatch.facing || 1) : 1;
-          const kicking = catching && st.dickCatch.frame >= 30 && st.dickCatch.frame < 42;
+          const kicking = catching && st.dickCatch.frame >= DICK_QTE_FLASH && st.dickCatch.frame < DICK_QTE_BOOT + 8;
           ctx.save();
           ctx.translate(sx, GROUND_Y);
           ctx.scale(face < 0 ? -1 : 1, 1);
@@ -2786,14 +3640,29 @@ function ToolboxKickGame({
           }
         }
         else if (it.type === 'bird' && !it.hit) {
-          drawBird(ctx, sx, it.y ?? (GROUND_Y - 80), st.frame, it.dir || 1);
+          drawBird(ctx, sx, it.y ?? (GROUND_Y - 80), animFrame, it.dir || 1);
+        }
+        else if (it.type === 'balloon') {
+          drawHotAirBalloon(ctx, sx, it.y ?? (GROUND_Y - 120), animFrame, {
+            scale: it.scale,
+            color: it.color,
+            colorDark: it.colorDark,
+            bobPhase: it.bobPhase,
+            hit: Boolean(it.hit),
+          });
+        }
+        else if (it.type === 'flightCoin' && !it.collected) {
+          drawFlightCoin(ctx, sx, animFrame);
+        }
+        else if (it.type === 'recordFlag' && it.marker) {
+          drawRecordFlag(ctx, sx, it.marker);
         }
       }
 
       const running = st.phase === PHASE.RUNUP && st.runup < KICK_FRAME;
       const kicking = st.phase === PHASE.RUNUP && st.runup >= KICK_FRAME;
-      if (st.mechX - cam > visMinSx && st.mechX - cam < visMaxSx) {
-        drawMechanic(ctx, st.mechX - cam, GROUND_Y, st.frame, { kicking, running });
+      if (mechDrawX - cam > visMinSx && mechDrawX - cam < visMaxSx) {
+        drawMechanic(ctx, mechDrawX - cam, GROUND_Y, animFrame, { kicking, running });
       }
 
       // Punishment revenge: Little Dick walks in / grabs / boots Mach 2
@@ -2862,11 +3731,11 @@ function ToolboxKickGame({
 
       const oiled = Boolean(st.box.oiled);
       if (st.phase === PHASE.READY || st.phase === PHASE.POWER || st.phase === PHASE.ANGLE) {
-        drawToolbox(ctx, st.box.x - cam, st.box.y, -0.15, false, oiled);
+        drawToolbox(ctx, boxDrawX - cam, boxDrawY, -0.15, false, oiled);
       } else if (st.phase === PHASE.RUNUP && st.runup < LAUNCH_FRAME) {
         drawToolbox(ctx, BOX_REST_X - cam, GROUND_Y - 12, -0.2, false, oiled);
       } else {
-        drawToolbox(ctx, st.box.x - cam, st.box.y, st.box.rot, st.phase === PHASE.FLIGHT, oiled);
+        drawToolbox(ctx, boxDrawX - cam, boxDrawY, boxDrawRot, st.phase === PHASE.FLIGHT, oiled);
       }
 
       if (st.kickFlash > 0) {
@@ -2885,8 +3754,27 @@ function ToolboxKickGame({
 
       ctx.restore();
 
+      if (thump > 0) {
+        ctx.restore();
+      }
+
+      if (weatherMode === 'storm') {
+        drawStormWeather(ctx, animFrame, st.windNow || st.windProfile);
+      }
+
+      if (st.v2 && (st.phase === PHASE.READY || st.phase === PHASE.POWER || st.phase === PHASE.ANGLE)) {
+        drawWindSock(ctx, st.windNow || sampleWind(st.windProfile, animFrame), animFrame);
+      }
+
       if (st.phase === PHASE.FLIGHT || st.phase === PHASE.LANDED) {
         drawTopStatsBar(ctx, st);
+        if (st.v2) {
+          drawWindSock(ctx, st.windNow || sampleWind(st.windProfile, animFrame), animFrame);
+          drawComboHud(ctx, st.airCombo || 0, animFrame);
+        }
+        if (st.phase === PHASE.FLIGHT && dickQteEnabled(st) && st.dickCatch) {
+          drawDickQtePrompt(ctx, st.dickCatch, animFrame);
+        }
         if (st.phase === PHASE.LANDED) {
           const dist = Math.floor(st.distance);
           const parts = formatDistanceParts(dist);
@@ -3073,7 +3961,7 @@ function ToolboxKickGame({
           <span>
             Attempt{' '}
             <span className="text-orange-200 font-semibold tabular-nums">
-              {hud.attempt || 1}/{mode === 'allOrNothing' ? 1 : MAX_ATTEMPTS}
+              {hud.attempt || 1}/{mode === 'allOrNothing' ? 1 : (TOOLBOX_V2_DEV && (devCheats || forceV2) ? MAX_ATTEMPTS_DEV_V2 : MAX_ATTEMPTS)}
             </span>
           </span>
           <span>
@@ -3088,6 +3976,20 @@ function ToolboxKickGame({
               {formatDistance(hud.best)}
             </span>
           </span>
+          {TOOLBOX_V2_LIVE || (TOOLBOX_V2_DEV && (devCheats || forceV2)) ? (
+            <>
+              <span>
+                Wind{' '}
+                <span className="text-sky-200 font-semibold">{hud.windLabel || 'Calm'}</span>
+              </span>
+              {(hud.airCombo || 0) >= 2 ? (
+                <span>
+                  Combo{' '}
+                  <span className="text-amber-200 font-semibold tabular-nums">×{hud.airCombo}</span>
+                </span>
+              ) : null}
+            </>
+          ) : null}
         </div>
       </div>
 
@@ -3104,6 +4006,33 @@ function ToolboxKickGame({
               className="max-h-[85%] max-w-[90%] object-contain drop-shadow-2xl"
             />
           </div>
+        ) : null}
+        {qteFlash ? (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              doSpace();
+            }}
+            className={`absolute inset-0 z-40 flex flex-col items-center justify-center gap-2 cursor-pointer border-0 ${
+              qteFlash === 'go'
+                ? 'bg-amber-500/25 animate-pulse'
+                : 'bg-black/40'
+            }`}
+          >
+            <span
+              className={`text-4xl sm:text-5xl font-black tracking-tight drop-shadow-lg ${
+                qteFlash === 'go' ? 'text-amber-200' : 'text-slate-200'
+              }`}
+            >
+              {qteFlash === 'go' ? 'TAP NOW!' : 'Get ready…'}
+            </span>
+            <span className="text-sm font-semibold text-slate-100/90 px-4 text-center">
+              {qteFlash === 'go'
+                ? 'Space / tap here — stop the kickback!'
+                : 'Little Dick has the toolbox…'}
+            </span>
+          </button>
         ) : null}
         <button
           type="button"
@@ -3158,7 +4087,7 @@ function ToolboxKickGame({
               ? 'Chugging…'
               : rageArmed
                 ? 'Energy drink active · next kick'
-                : 'Drink energy drink (+40%)'}
+                : 'Drink energy drink (+80%)'}
           </button>
         ) : null}
         {!competitive ? (
@@ -3190,7 +4119,7 @@ function ToolboxKickGame({
       {rageError ? <p className="text-xs text-rose-300">{rageError}</p> : null}
       {rageArmed ? (
         <p className="text-xs text-rose-200/90">
-          Energy drink active — next kick gets +40% speed. One drink per week; everyone refills Monday.
+          Energy drink active — next kick gets +80% speed. One drink per week; everyone refills Monday.
         </p>
       ) : null}
     </div>
@@ -3228,7 +4157,7 @@ function IntroBubble({ open, onClose }) {
               his toolbox — see how far it can go!
             </p>
             <p className="text-sm text-rose-200/90 leading-relaxed mt-2">
-              Once a week he can chug an energy drink for Super Rage (+40% speed on one kick).
+              Once a week he can chug an energy drink for Super Rage (+80% speed on one kick).
               Everyone&apos;s fridge refills on Monday.
             </p>
           </div>
@@ -3302,13 +4231,75 @@ export function ToolboxKickSandbox() {
   const [mode, setMode] = useState(null);
   /** Preview what staff see in Fun daily (not practice). */
   const [drinkPreview, setDrinkPreview] = useState('ready'); // ready | empty
+  const todayKey = getLondonDayKey();
   const previewRage = drinkPreview === 'ready'
-    ? { available: true, refillDayKey: '2026-09-14', boostPct: 40 }
-    : { available: false, usedThisWeek: true, refillDayKey: '2026-09-14', boostPct: 40 };
+    ? { available: true, refillDayKey: '2026-09-14', boostPct: 80 }
+    : { available: false, usedThisWeek: true, refillDayKey: '2026-09-14', boostPct: 80 };
+
+  const sandboxMarkers = useCallback(() => {
+    const pr = Math.max(0, Math.floor(Number(localStorage.getItem('toolbox-kick-best') || 0)));
+    const today = Math.max(pr, Math.floor(pr * 1.08) || 2500);
+    const allTime = Math.max(today + 1800, 12000);
+    return buildRecordMarkers({
+      personalBestM: pr || 1800,
+      personalBestLabel: 'Your PR',
+      todayBestM: today || 4200,
+      todayBestName: 'Today’s board leader',
+      allTimeBestM: allTime,
+      allTimeBestName: 'Wall of fame #1',
+    });
+  }, []);
+
+  const claimFlightCoin = useCallback(async ({ slot, amount, dayKey }) => {
+    try {
+      const response = await fetch('/api/claimToolboxKickFlightCoin', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          slot,
+          amount: amount || FLIGHT_COIN_AMOUNT,
+          dayKey: dayKey || todayKey,
+        }),
+      });
+      await readJsonResponse(response);
+    } catch {
+      /* sandbox still shows the pickup FX even if wallet call fails */
+    }
+  }, [todayKey]);
 
   return (
     <div className="space-y-4">
       <IntroBubble open={introOpen} onClose={() => setIntroOpen(false)} />
+
+      {TOOLBOX_V2_DEV ? (
+        <div className="rounded-xl border border-amber-500/40 bg-gradient-to-br from-amber-500/15 via-[#0b1220] to-orange-500/10 px-4 py-4 space-y-3">
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <h3 className="text-lg font-semibold text-amber-100 tracking-tight">
+              Dick&apos;s Toolbox 2.0
+            </h3>
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-amber-200/80">
+              Dev preview
+            </span>
+          </div>
+          <p className="text-xs text-slate-300 leading-relaxed">
+            New features below are live in Fun Admin sandbox and on daily Fun.
+          </p>
+          <ul className="space-y-2.5">
+            {TOOLBOX_V2_FEATURE_LIST.map((feat) => (
+              <li key={feat.id} className="text-sm">
+                <p className="font-semibold text-amber-50">{feat.title}</p>
+                <p className="text-xs text-slate-400 leading-relaxed">{feat.blurb}</p>
+              </li>
+            ))}
+          </ul>
+          <p className="text-[11px] text-slate-500">
+            Tip: pick <span className="text-slate-300">3 goes</span> — run 1 calm · 2 wind · 3 storm ·
+            {' '}<span className="text-amber-200/90">run 4 QTE practice</span> (Little Dicks spawned close — land & tap).
+            Softkey L still works any time.
+          </p>
+        </div>
+      ) : null}
 
       <div className="rounded-xl border border-sky-500/35 bg-sky-500/10 px-4 py-3 space-y-2">
         <p className="text-sm font-semibold text-sky-100">Daily Fun preview</p>
@@ -3364,10 +4355,14 @@ export function ToolboxKickSandbox() {
         <ModeSelect competitive onPick={setMode} />
       ) : (
         <ToolboxKickGame
-          key={`${mode}-${drinkPreview}`}
+          key={`${mode}-${drinkPreview}-v2`}
           mode={mode}
           competitive={false}
           devCheats
+          forceV2
+          dayKey={todayKey}
+          recordMarkers={sandboxMarkers()}
+          onFlightCoin={claimFlightCoin}
           superRageAvailable={drinkPreview === 'ready'}
           onChangeMode={() => setMode(null)}
         />
@@ -3651,6 +4646,41 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
     if (payload.superRage) setSuperRage(payload.superRage);
   }, [practice]);
 
+  const claimFlightCoin = useCallback(async ({ slot, amount, dayKey: coinDay }) => {
+    if (practice) return;
+    try {
+      await fetch('/api/claimToolboxKickFlightCoin', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          slot,
+          amount: amount || FLIGHT_COIN_AMOUNT,
+          dayKey: coinDay || dayKey,
+        }),
+      });
+    } catch {
+      /* pickup FX still shows; wallet claim is best-effort */
+    }
+  }, [practice, dayKey]);
+
+  const v2Markers = (() => {
+    const pr = Math.max(
+      0,
+      Math.floor(Number(localStorage.getItem('toolbox-kick-best') || 0)),
+      Math.floor(Number(game?.distanceM) || 0),
+    );
+    const todayBest = leaderboard[0];
+    return buildRecordMarkers({
+      personalBestM: pr,
+      personalBestLabel: 'Your PR',
+      todayBestM: todayBest?.distanceM || 0,
+      todayBestName: todayBest?.fullName || '',
+      allTimeBestM: allTimeRecord?.distanceM || 0,
+      allTimeBestName: allTimeRecord?.fullName || '',
+    });
+  })();
+
   if (loading) return <p className="text-sm text-slate-400">Loading Little Dicks Toolbox…</p>;
   if (error && !game) return <p className="text-sm text-rose-300">{error}</p>;
 
@@ -3670,6 +4700,7 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
         todayKey={todayKey}
         onChange={setDayKey}
         allowFuture={Boolean(isAdmin)}
+        gameKey="toolboxkick"
       />
 
       {practice ? (
@@ -3753,6 +4784,10 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
           onActivateSuperRage={practice ? null : activateSuperRage}
           caughtCheating={false}
           punished={punished}
+          forceV2
+          dayKey={dayKey}
+          recordMarkers={v2Markers}
+          onFlightCoin={practice ? null : claimFlightCoin}
         />
       ) : null}
 

@@ -2,6 +2,7 @@ import { Link, Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { canAccessHrDirectory } from '../utils/employeeProfile';
 import { canAccessHrCases, canAccessHrPortal } from '../utils/peopleCasesAccess';
+import { canAccessBonusAdmin } from '../utils/featureAccess';
 
 /**
  * Sub-nav for the in-app HR portal (directory + People Cases surfaces).
@@ -11,6 +12,7 @@ export default function HrPortalNav() {
   const { pathname } = useLocation();
   const canDirectory = canAccessHrDirectory(user);
   const canCases = canAccessHrCases(user);
+  const canBonus = canAccessBonusAdmin(user);
 
   const items = [
     canDirectory && {
@@ -50,11 +52,17 @@ export default function HrPortalNav() {
       to: '/dashboard/hr/active-disciplinary-measures',
       active: pathname.includes('/active-disciplinary-measures'),
     },
-    canCases && {
+    canBonus && {
       id: 'bonus',
       label: 'Bonus deductions',
       to: '/dashboard/hr/bonus-deductions',
-      active: pathname.includes('/bonus-deductions'),
+      active: pathname.includes('/bonus-deductions') && !pathname.includes('/bonus-payments'),
+    },
+    canBonus && {
+      id: 'bonus-payments',
+      label: 'Bonus payments',
+      to: '/dashboard/hr/bonus-payments',
+      active: pathname.includes('/bonus-payments'),
     },
   ].filter(Boolean);
 
@@ -72,11 +80,9 @@ export default function HrPortalNav() {
             }`}
           >
             {item.label}
-            <span
-              className={`absolute left-2 right-2 bottom-0 h-0.5 rounded-full transition-colors ${
-                item.active ? 'bg-indigo-500' : 'bg-transparent'
-              }`}
-            />
+            {item.active ? (
+              <span className="absolute inset-x-4 bottom-0 h-0.5 rounded-full bg-cl-accent" />
+            ) : null}
           </Link>
         ))}
       </nav>
@@ -93,5 +99,11 @@ export function HrPortalLanding() {
   if (canAccessHrDirectory(user)) {
     return <Navigate to="/dashboard/hr/employees" replace />;
   }
-  return <Navigate to="/dashboard/hr/cases" replace />;
+  if (canAccessHrCases(user)) {
+    return <Navigate to="/dashboard/hr/cases" replace />;
+  }
+  if (canAccessBonusAdmin(user)) {
+    return <Navigate to="/dashboard/hr/bonus-deductions" replace />;
+  }
+  return <Navigate to="/dashboard/profile" replace />;
 }

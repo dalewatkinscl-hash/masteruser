@@ -6,6 +6,7 @@ import {
   defaultRoleForPortal,
   matrixRowFromUser,
 } from '../config/portals';
+import { KNOWN_FEATURES, buildFeatureAccess, sanitizeFeatureAccessClient } from '../config/features';
 import { getComplianceProfileId } from '../utils/portalAccess';
 import WorkspaceTabs from '../components/WorkspaceTabs';
 
@@ -56,10 +57,16 @@ function normalizeInitials(value) {
     .slice(0, 6);
 }
 
+function featuresEqual(a = {}, b = {}) {
+  return KNOWN_FEATURES.every(({ key }) => Boolean(a[key]) === Boolean(b[key]));
+}
+
 export default function PortalAccessMatrix() {
   const [users, setUsers] = useState([]);
   const [accessByUid, setAccessByUid] = useState({});
   const [initialByUid, setInitialByUid] = useState({});
+  const [featureByUid, setFeatureByUid] = useState({});
+  const [initialFeatureByUid, setInitialFeatureByUid] = useState({});
   const [complianceInitialsByUid, setComplianceInitialsByUid] = useState({});
   const [initialComplianceInitialsByUid, setInitialComplianceInitialsByUid] = useState({});
   const [columnDefaults, setColumnDefaults] = useState(() =>
@@ -86,14 +93,18 @@ export default function PortalAccessMatrix() {
         if (!response.ok) throw new Error(data.error || 'Failed to load users.');
         const list = data.users ?? [];
         const matrix = {};
+        const features = {};
         const initials = {};
         list.forEach((user) => {
           matrix[user.uid] = matrixRowFromUser(user);
+          features[user.uid] = buildFeatureAccess(user.featureAccess || {});
           initials[user.uid] = getComplianceProfileId(user.portalMappings || {});
         });
         setUsers(list);
         setAccessByUid(matrix);
         setInitialByUid(matrix);
+        setFeatureByUid(features);
+        setInitialFeatureByUid(features);
         setComplianceInitialsByUid(initials);
         setInitialComplianceInitialsByUid(initials);
       } catch (err) {
@@ -130,16 +141,38 @@ export default function PortalAccessMatrix() {
   const dirtyUids = useMemo(() => {
     const uids = new Set([
       ...Object.keys(accessByUid),
+      ...Object.keys(featureByUid),
       ...Object.keys(complianceInitialsByUid),
     ]);
     return [...uids].filter((uid) => {
       const accessDirty =
         initialByUid[uid] && !rowsEqual(accessByUid[uid] || {}, initialByUid[uid] || {});
+      const featureDirty = !featuresEqual(
+        featureByUid[uid] || {},
+        initialFeatureByUid[uid] || {},
+      );
       const initialsDirty =
         (complianceInitialsByUid[uid] || '') !== (initialComplianceInitialsByUid[uid] || '');
-      return accessDirty || initialsDirty;
+      return accessDirty || featureDirty || initialsDirty;
     });
-  }, [accessByUid, initialByUid, complianceInitialsByUid, initialComplianceInitialsByUid]);
+  }, [
+    accessByUid,
+    initialByUid,
+    featureByUid,
+    initialFeatureByUid,
+    complianceInitialsByUid,
+    initialComplianceInitialsByUid,
+  ]);
+
+  function setUserFeature(uid, featureKey, enabled) {
+    setFeatureByUid((prev) => ({
+      ...prev,
+      [uid]: {
+        ...(prev[uid] || buildFeatureAccess()),
+        [featureKey]: Boolean(enabled),
+      },
+    }));
+  }
 
   function setUserPortalRole(uid, portalKey, role) {
     setAccessByUid((prev) => ({
@@ -264,6 +297,7 @@ export default function PortalAccessMatrix() {
 
   function resetChanges() {
     setAccessByUid(initialByUid);
+    setFeatureByUid(initialFeatureByUid);
     setComplianceInitialsByUid(initialComplianceInitialsByUid);
     setSuccess('');
     setError('');
@@ -279,8 +313,11 @@ export default function PortalAccessMatrix() {
         const portalsAccess = buildPortalsAccessFromMatrixRow(
           accessByUid[uid] || initialByUid[uid] || {},
         );
+        const featureAccess = sanitizeFeatureAccessClient(
+          featureByUid[uid] || initialFeatureByUid[uid] || {},
+        );
         const initials = normalizeInitials(complianceInitialsByUid[uid]);
-        const update = { uid, portalsAccess };
+        const update = { uid, portalsAccess, featureAccess };
         if (initials || initialComplianceInitialsByUid[uid]) {
           update.portalMappings = {
             compliance_app: { profileId: initials },
@@ -299,12 +336,15 @@ export default function PortalAccessMatrix() {
       if (!response.ok) throw new Error(data.error || 'Failed to save portal access.');
 
       const nextInitialAccess = { ...initialByUid };
+      const nextInitialFeatures = { ...initialFeatureByUid };
       const nextInitialInitials = { ...initialComplianceInitialsByUid };
       dirtyUids.forEach((uid) => {
         nextInitialAccess[uid] = { ...(accessByUid[uid] || {}) };
+        nextInitialFeatures[uid] = { ...(featureByUid[uid] || buildFeatureAccess()) };
         nextInitialInitials[uid] = normalizeInitials(complianceInitialsByUid[uid]);
       });
       setInitialByUid(nextInitialAccess);
+      setInitialFeatureByUid(nextInitialFeatures);
       setInitialComplianceInitialsByUid(nextInitialInitials);
       setComplianceInitialsByUid((prev) => ({ ...prev, ...nextInitialInitials }));
       setSuccess(`Saved portal access for ${data.updatedCount ?? dirtyUids.length} user(s).`);
@@ -321,7 +361,7 @@ export default function PortalAccessMatrix() {
       <div className="px-8 py-6 border-b border-[#1a2540]">
         <h1 className="text-2xl font-bold text-white">Portal Access</h1>
         <p className="text-sm text-slate-400 mt-1">
-          Bulk assign portal roles and Weekend Availability initials.
+          Bulk assign portal roles, feature access, and Weekend Availability initials.
         </p>
       </div>
 
@@ -563,6 +603,18 @@ export default function PortalAccessMatrix() {
                         </div>
                       </th>
                     ))}
+                  {KNOWN_FEATURES.map((feature) => (
+                    <th
+                      key={feature.key}
+                      className="px-2 py-2 text-center text-[10px] font-semibold uppercase tracking-wide text-emerald-400/90 min-w-[100px] bg-emerald-500/5"
+                      title={feature.description}
+                    >
+                      Feature
+                      <div className="normal-case tracking-normal text-emerald-200/90 mt-0.5">
+                        {feature.label}
+                      </div>
+                    </th>
+                  ))}
                   {viewMode === 'quick' && (
                     <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-widest text-slate-400">
                       {focusPortalDef?.label} — {focusRole}
@@ -573,12 +625,14 @@ export default function PortalAccessMatrix() {
               <tbody className="divide-y divide-[#1a2540]">
                 {filteredUsers.map((user) => {
                   const row = accessByUid[user.uid] || matrixRowFromUser(user);
+                  const features = featureByUid[user.uid] || buildFeatureAccess();
                   const accessDirty =
                     initialByUid[user.uid] && !rowsEqual(row, initialByUid[user.uid]);
+                  const featureDirty = !featuresEqual(features, initialFeatureByUid[user.uid] || {});
                   const initialsDirty =
                     (complianceInitialsByUid[user.uid] || '') !==
                     (initialComplianceInitialsByUid[user.uid] || '');
-                  const isDirty = accessDirty || initialsDirty;
+                  const isDirty = accessDirty || featureDirty || initialsDirty;
                   const focusHasAccess = !!row[focusPortal];
                   const focusMatchesRole = row[focusPortal] === focusRole;
 
@@ -648,6 +702,22 @@ export default function PortalAccessMatrix() {
                             </td>
                           );
                         })}
+
+                      {KNOWN_FEATURES.map((feature) => (
+                        <td
+                          key={feature.key}
+                          className="px-2 py-2 text-center align-middle bg-emerald-500/5"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={Boolean(features[feature.key])}
+                            onChange={(e) => setUserFeature(user.uid, feature.key, e.target.checked)}
+                            className="rounded border-[#1a2540]"
+                            aria-label={`${user.fullName} ${feature.label}`}
+                            title={feature.description}
+                          />
+                        </td>
+                      ))}
 
                       {viewMode === 'quick' && (
                         <td className="px-4 py-2.5">

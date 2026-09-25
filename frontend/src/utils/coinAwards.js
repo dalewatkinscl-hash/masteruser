@@ -21,6 +21,10 @@ export const COIN_REASON_LABELS = {
   suggestion: 'Suggestion submitted',
   daily_login: 'Daily login',
   training_assessment: 'Training assessment',
+  coach_depot_job: 'Coach Depot job',
+  coach_depot_upgrade: 'Coach Depot upgrade',
+  coach_depot_admin_grant: 'Coach Depot test grant',
+  toolbox_flight_coin: 'Toolbox flight coin',
 };
 
 /** Ways to earn coins — used by the wallet “Earn more” panel. */
@@ -28,7 +32,7 @@ export const COIN_EARN_ACTIONS = [
   {
     id: 'next_of_kin',
     label: 'Fill in next of kin',
-    detail: 'Name and phone · one-time +10',
+    detail: 'On your own profile · name and phone · one-time +10',
     amount: 10,
     profileTab: 'profile',
     section: 'next-of-kin',

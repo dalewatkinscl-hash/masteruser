@@ -1,5 +1,12 @@
 const MASTER_ADMIN_ROLE = 'admin';
 
+const {
+  normalizeBonusHoursMode,
+  contractTypeLabelForMode,
+  isNotPaidBonusMode,
+  isRataBonusMode,
+} = require('./bonusAccrual');
+
 const SELF_EDITABLE_PATHS = new Set([
   'phoneNumber',
   'personalEmail',
@@ -118,6 +125,7 @@ function sanitizeEmployeeProfile(input = {}, { partial = false } = {}) {
   assignBool('computerUser');
   assignBool('emergencyPhoneCover');
   assignBool('canIssueKudos');
+  assignBool('doesNotPayBonus');
   assignString('department');
   assignString('managerName');
   assignString('contractType');
@@ -143,6 +151,30 @@ function sanitizeEmployeeProfile(input = {}, { partial = false } = {}) {
     profile.fte = Number.isFinite(fte) && fte > 0 ? fte : 0;
   }
 
+  if (input.bonusHoursMode !== undefined) {
+    profile.bonusHoursMode = normalizeBonusHoursMode(input.bonusHoursMode);
+  }
+
+  if (input.proRataBase !== undefined) {
+    const base = String(input.proRataBase || '').trim().toLowerCase();
+    profile.proRataBase = (base === 'driver' || base === 'office' || base === 'workshop') ? base : '';
+  }
+
+  // Keep a readable contractType label in sync for lists / legacy consumers.
+  if (profile.bonusHoursMode) {
+    const label = contractTypeLabelForMode(profile.bonusHoursMode);
+    if (label) profile.contractType = label;
+    if (!isRataBonusMode(profile.bonusHoursMode)) {
+      if (input.proRataBase !== undefined || input.bonusHoursMode !== undefined) {
+        profile.proRataBase = '';
+      }
+    }
+    // Zero Hours always excludes bonus.
+    if (isNotPaidBonusMode(profile.bonusHoursMode)) {
+      profile.doesNotPayBonus = true;
+    }
+  }
+
   if (input.address !== undefined) {
     profile.address = sanitizeAddress(input.address);
   }
@@ -164,9 +196,12 @@ function createEmptyEmployeeProfile() {
     computerUser: false,
     emergencyPhoneCover: false,
     canIssueKudos: false,
+    doesNotPayBonus: false,
     department: '',
     managerName: '',
     contractType: '',
+    bonusHoursMode: '',
+    proRataBase: '',
     jobRole: '',
     phoneNumber: '',
     personalEmail: '',
@@ -210,6 +245,12 @@ function mergeEmployeeProfiles(existing = {}, patch = {}) {
     nextOfKin: sanitizedPatch.nextOfKin
       ? { ...base.nextOfKin, ...sanitizedPatch.nextOfKin }
       : base.nextOfKin,
+    // Zero Hours always forces the exclude-bonus flag after merge.
+    ...(isNotPaidBonusMode(
+      sanitizedPatch.bonusHoursMode !== undefined
+        ? sanitizedPatch.bonusHoursMode
+        : base.bonusHoursMode,
+    ) ? { doesNotPayBonus: true } : {}),
   };
 }
 

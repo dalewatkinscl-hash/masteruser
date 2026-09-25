@@ -144,7 +144,7 @@ export default function ConnectionsPanel({
     const payload = (await readJsonResponse(response)) || {};
     if (!response.ok) throw new Error(payload.error || 'Failed to load Connections.');
 
-    if (payload.weekend) {
+    if (payload.weekend || payload.sittingOut) {
       setWords([]);
       setGroupMeta([]);
       setLeaderboard([]);
@@ -157,7 +157,9 @@ export default function ConnectionsPanel({
       setDurationMs(null);
       setSolution(null);
       setFinished(false);
-      setMessage(payload.message || 'Fun games come back Monday.');
+      setMessage(payload.message || (payload.sittingOut
+        ? 'Connections isn’t in today’s Fun rotation.'
+        : 'Fun games come back Monday.'));
       return;
     }
 
@@ -317,7 +319,7 @@ export default function ConnectionsPanel({
   return (
     <div className="space-y-4">
       {!isSandbox ? (
-        <FunDayPicker dayKey={dayKey} todayKey={todayKey} onChange={setDayKey} allowFuture={isAdmin} />
+        <FunDayPicker dayKey={dayKey} todayKey={todayKey} onChange={setDayKey} allowFuture={isAdmin} gameKey="connections" />
       ) : (
         <p className="text-xs text-amber-200/90 border border-amber-500/30 bg-amber-500/10 rounded-md px-2 py-1 inline-block">
           Admin sandbox — results are not saved to live leaderboards.

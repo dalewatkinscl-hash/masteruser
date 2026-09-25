@@ -1,5 +1,6 @@
 /** People Cases hub access requires an explicit cases_app role (or master admin). Headcount/HR does not grant it. */
 import { canAccessHrDirectory } from './employeeProfile';
+import { canAccessBonusAdmin } from './featureAccess';
 
 export function getCasesRole(user) {
   if (user?.portalsAccess?.master_admin === 'admin') return 'admin';
@@ -23,14 +24,14 @@ export function canConvertCaseToSamsaraCoaching(caseItem = {}) {
   return false;
 }
 
-/** People Cases / active measures / bonus deductions inside the in-app HR portal. */
+/** People Cases / active measures inside the in-app HR portal. */
 export function canAccessHrCases(user) {
   return canManagePeopleCases(user);
 }
 
-/** In-app HR portal entry — directory and/or cases access. */
+/** In-app HR portal entry — directory, cases, and/or bonus feature access. */
 export function canAccessHrPortal(user) {
-  return canAccessHrDirectory(user) || canAccessHrCases(user);
+  return canAccessHrDirectory(user) || canAccessHrCases(user) || canAccessBonusAdmin(user);
 }
 
 /** Roles a manager already held on this case (for appeal-recipient conflict warnings). */
@@ -82,6 +83,7 @@ export const PROCESS_FAMILIES = [
   { id: 'grievance', label: 'Grievance' },
   { id: 'vehicle_accident', label: 'Vehicle accident' },
   { id: 'samsara_coaching', label: 'Samsara Coaching' },
+  { id: 'record', label: 'Record' },
 ];
 
 export const DISCIPLINARY_STAGES = [
@@ -113,6 +115,11 @@ export const SAMSARA_STAGES = [
   'closed',
 ];
 
+export const RECORD_STAGES = [
+  'open',
+  'closed',
+];
+
 /** Common Samsara coaching event types — plus Other for free text. */
 export const SAMSARA_EVENT_TYPES = [
   'Harsh braking',
@@ -131,6 +138,7 @@ export function stagesForFamily(processFamily) {
   if (processFamily === 'grievance') return GRIEVANCE_STAGES;
   if (processFamily === 'vehicle_accident') return ACCIDENT_STAGES;
   if (processFamily === 'samsara_coaching') return SAMSARA_STAGES;
+  if (processFamily === 'record') return RECORD_STAGES;
   return DISCIPLINARY_STAGES;
 }
 
@@ -145,6 +153,7 @@ export function isEarlyInformalStyleClose(caseItem = {}) {
     return true;
   }
   if ((caseItem.processFamily || '') === 'samsara_coaching') return true;
+  if ((caseItem.processFamily || '') === 'record') return true;
   const closed = caseItem.stage === 'closed' || caseItem.status === 'closed';
   if (!closed) return false;
   const wentFormal = Boolean(
@@ -181,6 +190,9 @@ export function normalizeStage(processFamily, stage) {
   if (processFamily === 'samsara_coaching') {
     return 'closed';
   }
+  if (processFamily === 'record') {
+    return RECORD_STAGES.includes(raw) ? raw : 'open';
+  }
   if (raw === 'intake' || raw === 'investigation' || raw === 'minutes_signoff') return 'fact_finding';
   return DISCIPLINARY_STAGES.includes(raw) ? raw : 'fact_finding';
 }
@@ -197,6 +209,7 @@ export function stageLabel(stage) {
 export function stageAllowsDocumentation(processFamily, stage) {
   const normalized = normalizeStage(processFamily, stage);
   if (processFamily === 'samsara_coaching') return false;
+  if (processFamily === 'record') return normalized === 'open' || normalized === 'closed';
   if (processFamily === 'grievance') return normalized !== 'acknowledged';
   if (processFamily === 'vehicle_accident') return normalized !== 'triage';
   return true;
@@ -364,6 +377,23 @@ export function getCaseProgressStatus(caseItem = {}) {
       hint: 'Processed on Samsara — no portal interview',
       tone: 'slate',
       stage: 'closed',
+    };
+  }
+
+  if (family === 'record') {
+    if (stage === 'closed' || isClosed) {
+      return {
+        label: 'Closed — personnel record',
+        hint: 'Documents and interviews remain on file',
+        tone: 'slate',
+        stage: 'closed',
+      };
+    }
+    return {
+      label: 'Record open — add documents or interviews',
+      hint: 'Not a disciplinary or grievance process',
+      tone: 'indigo',
+      stage: 'open',
     };
   }
 

@@ -652,7 +652,7 @@ export function WantedSandbox() {
         </button>
       </div>
 
-      <FunDayPicker dayKey={dayKey} todayKey={todayKey} onChange={setDayKey} allowFuture />
+      <FunDayPicker dayKey={dayKey} todayKey={todayKey} onChange={setDayKey} allowFuture gameKey="wanted" />
 
       {localBest ? (
         <p className="text-xs text-slate-400">
@@ -780,6 +780,7 @@ export function WantedDailyPanel({
         todayKey={todayKey}
         onChange={setDayKey}
         allowFuture={Boolean(isAdmin)}
+        gameKey="wanted"
       />
 
       {practice ? (

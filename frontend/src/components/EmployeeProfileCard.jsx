@@ -15,6 +15,14 @@ import {
   readJsonResponse,
   resolveBusinessContactEmail,
 } from '../utils/employeeProfile';
+import {
+  CONTRACT_MODE_OPTIONS,
+  contractModeLabel,
+  isRataContractMode,
+  isZeroHoursContractMode,
+  normalizeContractMode,
+  resolveProRataBaseLabel,
+} from '../utils/contractModes';
 import { SHOW_HR_RECORDS } from '../utils/featureFlags';
 import { useLanguage } from '../context/LanguageContext';
 
@@ -394,6 +402,10 @@ export default function EmployeeProfileCard({
     }
   };
 
+  const updateFields = (patch) => {
+    setForm((prev) => ({ ...prev, ...patch }));
+  };
+
   const updateAddress = (key, value) => {
     setForm((prev) => ({
       ...prev,
@@ -634,38 +646,156 @@ export default function EmployeeProfileCard({
                 </Field>
                 <Field label={t('card.contract')}>
                   {editable.hr ? (
-                    <input
+                    <select
                       className={inputClassName(false)}
-                      value={form.contractType}
-                      onChange={(e) => updateField('contractType', e.target.value)}
-                      placeholder="Full Time / Part Time"
-                    />
-                  ) : (
-                    <p className="text-sm text-white">{employee.contractType || '—'}</p>
-                  )}
-                </Field>
-                <Field label={t('card.annualHours')}>
-                  {editable.hr ? (
-                    <input
-                      type="number"
-                      min="0"
-                      step="1"
-                      className={inputClassName(false)}
-                      value={form.annualContractedHours || ''}
-                      onChange={(e) => updateField(
-                        'annualContractedHours',
-                        e.target.value === '' ? 0 : Number(e.target.value),
-                      )}
-                      placeholder="e.g. 1000 (FT = 2210)"
-                    />
+                      value={normalizeContractMode(form.bonusHoursMode) || ''}
+                      onChange={(e) => {
+                        const mode = normalizeContractMode(e.target.value);
+                        if (!mode) {
+                          updateFields({
+                            bonusHoursMode: '',
+                            proRataBase: '',
+                            contractType: '',
+                          });
+                          return;
+                        }
+                        const label = contractModeLabel(mode);
+                        if (isZeroHoursContractMode(mode)) {
+                          updateFields({
+                            bonusHoursMode: mode,
+                            proRataBase: '',
+                            contractType: label,
+                            doesNotPayBonus: true,
+                          });
+                        } else if (isRataContractMode(mode)) {
+                          const base = form.proRataBase
+                            || (form.drivingStaff ? 'driver' : 'office');
+                          updateFields({
+                            bonusHoursMode: mode,
+                            proRataBase: base,
+                            contractType: label,
+                          });
+                        } else {
+                          updateFields({
+                            bonusHoursMode: mode,
+                            proRataBase: '',
+                            contractType: label,
+                          });
+                        }
+                      }}
+                    >
+                      <option value="">—</option>
+                      {CONTRACT_MODE_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
                   ) : (
                     <p className="text-sm text-white">
-                      {employee.annualContractedHours
-                        ? t('card.hrsYear', { count: employee.annualContractedHours })
-                        : '—'}
+                      {contractModeLabel(employee.bonusHoursMode)
+                        || employee.contractType
+                        || '—'}
                     </p>
                   )}
                 </Field>
+                <Field
+                  label={t('card.doesNotPayBonus')}
+                  value={
+                    (form.doesNotPayBonus || isZeroHoursContractMode(employee.bonusHoursMode)
+                      || employee.doesNotPayBonus)
+                      ? t('card.yes')
+                      : t('card.no')
+                  }
+                >
+                  {editable.hr ? (
+                    <label className="inline-flex items-center gap-2 text-sm text-slate-200 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        className="rounded border-[#1a2540] bg-[#060e1a] text-indigo-500 focus:ring-indigo-500"
+                        checked={Boolean(
+                          form.doesNotPayBonus
+                          || isZeroHoursContractMode(form.bonusHoursMode),
+                        )}
+                        disabled={isZeroHoursContractMode(form.bonusHoursMode)}
+                        onChange={(e) => updateField('doesNotPayBonus', e.target.checked)}
+                      />
+                      <span className="text-xs text-slate-400">
+                        {isZeroHoursContractMode(form.bonusHoursMode)
+                          ? t('card.doesNotPayBonusZeroHoursHint')
+                          : t('card.doesNotPayBonusHint')}
+                      </span>
+                    </label>
+                  ) : null}
+                </Field>
+                {(isRataContractMode(form.bonusHoursMode)
+                  || (!editable.hr && isRataContractMode(employee.bonusHoursMode))) && (
+                  <Field label={t('card.proRataBase')}>
+                    {editable.hr ? (
+                      <select
+                        className={inputClassName(false)}
+                        value={form.proRataBase || ''}
+                        onChange={(e) => {
+                          const base = e.target.value;
+                          updateFields({
+                            proRataBase: base,
+                            contractType: contractModeLabel(form.bonusHoursMode)
+                              || form.contractType
+                              || 'Part-Time',
+                          });
+                        }}
+                      >
+                        <option value="">—</option>
+                        <option value="driver">{t('card.proRataDriver')}</option>
+                        <option value="office">{t('card.proRataOffice')}</option>
+                        <option value="workshop">{t('card.proRataWorkshop')}</option>
+                      </select>
+                    ) : (
+                      <p className="text-sm text-white">
+                        {resolveProRataBaseLabel(employee.proRataBase)
+                          ? t(
+                            employee.proRataBase === 'office'
+                              ? 'card.proRataOffice'
+                              : employee.proRataBase === 'workshop'
+                                ? 'card.proRataWorkshop'
+                                : 'card.proRataDriver',
+                          )
+                          : '—'}
+                      </p>
+                    )}
+                  </Field>
+                )}
+                {(isRataContractMode(form.bonusHoursMode)
+                  || (!editable.hr && isRataContractMode(employee.bonusHoursMode))) && (
+                  <Field label={t('card.annualHours')}>
+                    {editable.hr ? (
+                      <input
+                        type="number"
+                        min="0"
+                        step="1"
+                        className={inputClassName(false)}
+                        value={form.annualContractedHours || ''}
+                        onChange={(e) => updateField(
+                          'annualContractedHours',
+                          e.target.value === '' ? 0 : Number(e.target.value),
+                        )}
+                        placeholder={
+                          form.proRataBase === 'office'
+                            ? t('card.annualHoursPlaceholderOffice')
+                            : form.proRataBase === 'workshop'
+                              ? t('card.annualHoursPlaceholderWorkshop')
+                              : t('card.annualHoursPlaceholderDriver')
+                        }
+                      />
+                    ) : (
+                      <p className="text-sm text-white">
+                        {employee.annualContractedHours
+                          ? t('card.hrsYear', { count: employee.annualContractedHours })
+                          : '—'}
+                      </p>
+                    )}
+                  </Field>
+                )}
                 <Field label={t('card.startDate')} value={formatDisplayDate(employee.startDate)}>
                   {editable.hr ? (
                     <input

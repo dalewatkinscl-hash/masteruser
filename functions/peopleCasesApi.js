@@ -56,7 +56,46 @@ const {
   TEMPLATES_FOLDER_NAME,
   downloadDriveItemContent,
   deleteCaseSharePointFolder,
+  listDisciplinaryProcessLogAbsences,
+  listDisciplinaryProcessLogBonusItems,
 } = require('./sharepoint');
+const {
+  ABSENCE_OUTCOME_PRESET,
+  LATENESS_OUTCOME_PRESET,
+  MAP_COLLECTION,
+  buildEmployeesByEmail,
+  loadSharePointEmployeeMaps,
+  resolveMappedEmployee,
+  buildAbsenceDeductionRecord,
+  upsertAbsenceDeduction,
+  loadAbsenceDeductionsForPaymentRun,
+  mapDocId,
+  normalizeEmail: normalizeBonusEmail,
+  syncSharePointDeductionsForRun,
+} = require('./bonusAbsenceSync');
+const {
+  listBonusPaymentRuns,
+  getBonusPaymentRun,
+  upsertBonusPaymentRun,
+  deleteBonusPaymentRun,
+  dateInInclusiveRange,
+  normalizePaymentOfYear,
+  findPairedFirstPaymentRun,
+} = require('./bonusPaymentRuns');
+const {
+  listManualAdjustmentsForPaymentRun,
+  upsertManualAdjustment,
+  deleteManualAdjustment,
+  MANUAL_ADDITION,
+  MANUAL_DEDUCTION,
+} = require('./bonusManualAdjustments');
+const { hasFeatureAccess } = require('./featureAccess');
+
+function canAccessBonusAdmin(profile, getEffectivePortalRole) {
+  if (!profile) return false;
+  if (hasFeatureAccess(profile, 'bonus_deductions')) return true;
+  return canManageCases(profile, getEffectivePortalRole);
+}
 
 function createPeopleCasesApi({
   admin,
@@ -88,6 +127,18 @@ function createPeopleCasesApi({
     }
     if (!canManageCases(session.profile, getEffectivePortalRole)) {
       res.status(403).json({ error: 'Cases manager access required.' });
+      return false;
+    }
+    return true;
+  }
+
+  function assertBonusAccess(session, res) {
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return false;
+    }
+    if (!canAccessBonusAdmin(session.profile, getEffectivePortalRole)) {
+      res.status(403).json({ error: 'Bonus deductions access required.' });
       return false;
     }
     return true;
@@ -796,7 +847,9 @@ function createPeopleCasesApi({
         res.status(400).json({
           error: input.processFamily === 'samsara_coaching'
             ? 'Event type is required.'
-            : 'Issue is required.',
+            : input.processFamily === 'record'
+              ? 'Subject is required.'
+              : 'Issue is required.',
         });
         return;
       }
@@ -1132,7 +1185,11 @@ function createPeopleCasesApi({
           patch.stage = 'closed';
           patch.status = 'closed';
           patch.closedAt = admin.firestore.FieldValue.serverTimestamp();
-          patch.appealWindowEndsAt = addWorkingDays(new Date(), 5);
+          if ((existing.processFamily || '') === 'record') {
+            patch.appealWindowEndsAt = '';
+          } else {
+            patch.appealWindowEndsAt = addWorkingDays(new Date(), 5);
+          }
           events.push(['closed_with_notes', {
             outcomePreset: preset.id,
             notes,
@@ -1948,16 +2005,27 @@ function createPeopleCasesApi({
           patch.stage = 'closed';
           patch.status = 'closed';
           patch.closedAt = admin.firestore.FieldValue.serverTimestamp();
-          patch.appealWindowEndsAt = addWorkingDays(new Date(), 5);
+          if (family === 'record') {
+            patch.appealWindowEndsAt = '';
+          } else {
+            patch.appealWindowEndsAt = addWorkingDays(new Date(), 5);
+          }
           if (Array.isArray(steps)) {
             patch.outcomePackSteps = steps.map((step) => (
               step.id === 'mark_complete' ? { ...step, done: true } : step
             ));
           }
-          events.push(['case_closed', { appealWindowEndsAt: patch.appealWindowEndsAt }]);
+          events.push(['case_closed', {
+            appealWindowEndsAt: patch.appealWindowEndsAt || '',
+            processFamily: family,
+          }]);
         }
 
         if (body.initiateAppeal === true) {
+          if ((existing.processFamily || '') === 'record') {
+            res.status(400).json({ error: 'Personnel records cannot be appealed. Open a disciplinary or grievance case if needed.' });
+            return;
+          }
           if (existing.stage !== 'closed') {
             res.status(400).json({ error: 'Only closed cases can be appealed.' });
             return;
@@ -2246,9 +2314,13 @@ function createPeopleCasesApi({
         }, session.profile);
         res.status(200).json({
           id: ref.id,
+          intervieweeUid,
+          intervieweeNameSnapshot,
           message: documentData
             ? 'Document sent to the employee for review and sign-off.'
-            : 'Minutes issued to employee.',
+            : (intervieweeNameSnapshot
+              ? `Interview notes sent to ${intervieweeNameSnapshot} for confirmation.`
+              : 'Minutes issued to employee.'),
         });
       } catch (error) {
         console.error('createCaseMinutes failed', error);
@@ -3654,6 +3726,9 @@ function createPeopleCasesApi({
     DEFAULT_FULL_TIME_HOURS_PER_WEEK,
     DEFAULT_FULL_TIME_WEEKS_PER_YEAR,
     DEFAULT_FULL_TIME_ANNUAL_HOURS,
+    DRIVER_FULL_TIME_ANNUAL_HOURS,
+    OFFICE_FULL_TIME_ANNUAL_HOURS,
+    WORKSHOP_FULL_TIME_ANNUAL_HOURS,
     DEFAULT_PAYMENT_SCHEDULE,
     calculateBonusAtPaymentDate,
     resolveNextPaymentDate,
@@ -3662,6 +3737,7 @@ function createPeopleCasesApi({
     resolveBonusProRata,
     applyBonusDeductionsAndProRata,
     toIsoDateOnly: bonusToIsoDateOnly,
+    roundGbp,
   } = require('./bonusAccrual');
 
   async function loadBonusConfig() {
@@ -3673,6 +3749,7 @@ function createPeopleCasesApi({
           fullTimeHoursPerWeek: DEFAULT_FULL_TIME_HOURS_PER_WEEK,
           fullTimeWeeksPerYear: DEFAULT_FULL_TIME_WEEKS_PER_YEAR,
           fullTimeAnnualHours: DEFAULT_FULL_TIME_ANNUAL_HOURS,
+          activePeriod: null,
         };
       }
       const data = snap.data() || {};
@@ -3685,11 +3762,22 @@ function createPeopleCasesApi({
       const fullTimeAnnualHours = annual > 0
         ? annual
         : fullTimeHoursPerWeek * fullTimeWeeksPerYear;
+      const period = data.activePeriod || {};
+      const calculationFrom = bonusToIsoDateOnly(period.calculationFrom || '');
+      const calculationTo = bonusToIsoDateOnly(period.calculationTo || '');
+      const periodPaymentDate = bonusToIsoDateOnly(period.paymentDate || '');
       return {
         schedule: schedule.length ? schedule : DEFAULT_PAYMENT_SCHEDULE,
         fullTimeHoursPerWeek,
         fullTimeWeeksPerYear,
         fullTimeAnnualHours,
+        activePeriod: (calculationFrom || calculationTo || periodPaymentDate)
+          ? {
+            calculationFrom: calculationFrom || '',
+            calculationTo: calculationTo || '',
+            paymentDate: periodPaymentDate || '',
+          }
+          : null,
       };
     } catch (error) {
       console.warn('loadBonusConfig failed, using defaults', error.message || error);
@@ -3698,6 +3786,7 @@ function createPeopleCasesApi({
         fullTimeHoursPerWeek: DEFAULT_FULL_TIME_HOURS_PER_WEEK,
         fullTimeWeeksPerYear: DEFAULT_FULL_TIME_WEEKS_PER_YEAR,
         fullTimeAnnualHours: DEFAULT_FULL_TIME_ANNUAL_HOURS,
+        activePeriod: null,
       };
     }
   }
@@ -3741,21 +3830,71 @@ function createPeopleCasesApi({
         return;
       }
       const session = await getVerifiedSessionUser(req);
-      if (!assertManager(session, res)) return;
+      if (!assertBonusAccess(session, res)) return;
 
       try {
         const employeeUidFilter = toTrimmedString(req.query?.employeeUid);
+        const requestedRunId = toTrimmedString(req.query?.paymentRunId);
         const {
           schedule,
           fullTimeHoursPerWeek,
           fullTimeWeeksPerYear,
           fullTimeAnnualHours,
+          activePeriod,
         } = await loadBonusConfig();
-        const todayIso = new Date().toISOString().slice(0, 10);
+        const paymentRuns = await listBonusPaymentRuns(db);
         const requestedPaymentDate = bonusToIsoDateOnly(req.query?.paymentDate);
-        const nextDefault = resolveNextPaymentDate(todayIso, schedule);
-        const paymentDate = requestedPaymentDate || nextDefault;
-        const paymentOptions = listUpcomingPaymentOptions(todayIso, schedule, 6);
+
+        let selectedRun = null;
+        if (requestedRunId) {
+          selectedRun = paymentRuns.find((run) => run.id === requestedRunId)
+            || await getBonusPaymentRun(db, requestedRunId);
+        }
+        if (!selectedRun && requestedPaymentDate) {
+          selectedRun = paymentRuns.find((run) => run.paymentDate === requestedPaymentDate) || null;
+        }
+        if (!selectedRun && activePeriod?.paymentDate) {
+          selectedRun = paymentRuns.find((run) => (
+            run.paymentDate === activePeriod.paymentDate
+            && run.calculationFrom === (activePeriod.calculationFrom || '')
+            && run.calculationTo === (activePeriod.calculationTo || '')
+          )) || null;
+        }
+        if (!selectedRun && paymentRuns.length) {
+          selectedRun = paymentRuns[0];
+        }
+
+        const calculationFrom = selectedRun?.calculationFrom
+          || activePeriod?.calculationFrom
+          || '';
+        const calculationTo = selectedRun?.calculationTo
+          || activePeriod?.calculationTo
+          || '';
+        const paymentDate = selectedRun?.paymentDate
+          || requestedPaymentDate
+          || activePeriod?.paymentDate
+          || '';
+        // Bonus accrual / service length is as of the calculation period end.
+        const asOfDate = calculationTo || paymentDate;
+        const paymentRunId = selectedRun?.id || '';
+        const paymentRunName = selectedRun?.name || '';
+        const paymentOfYear = normalizePaymentOfYear(selectedRun?.paymentOfYear);
+        const pairedFirstRun = findPairedFirstPaymentRun(paymentRuns, {
+          ...selectedRun,
+          paymentOfYear,
+          paymentDate,
+        });
+
+        const paymentOptions = paymentRuns.map((run) => ({
+          id: run.id,
+          label: run.name,
+          date: run.paymentDate,
+          paymentDate: run.paymentDate,
+          calculationFrom: run.calculationFrom,
+          calculationTo: run.calculationTo,
+          name: run.name,
+          paymentOfYear: normalizePaymentOfYear(run.paymentOfYear),
+        }));
         const baseBonus = DEFAULT_BASE_BONUS;
 
         const [usersSnap, casesSnap] = await Promise.all([
@@ -3786,6 +3925,10 @@ function createPeopleCasesApi({
             department: profile.department || data.department || '',
             startDate,
             contractType: profile.contractType || data.contractType || '',
+            bonusHoursMode: profile.bonusHoursMode || data.bonusHoursMode || '',
+            doesNotPayBonus: Boolean(profile.doesNotPayBonus ?? data.doesNotPayBonus),
+            proRataBase: profile.proRataBase || data.proRataBase || '',
+            drivingStaff: Boolean(profile.drivingStaff ?? data.drivingStaff),
             annualContractedHours: Number(
               profile.annualContractedHours || data.annualContractedHours || 0,
             ) || 0,
@@ -3811,9 +3954,12 @@ function createPeopleCasesApi({
             || toIsoDateOnly(item.warningEffectiveAt)
             || toIsoDateOnly(item.updatedAt)
             || '';
+          // Only deductions in the selected calculation period count.
+          if (calculationFrom || calculationTo) {
+            if (!dateInInclusiveRange(givenAt, calculationFrom, calculationTo)) continue;
+          }
           const superseded = isSupersededMeasure(item);
           const cleared = Boolean(item.warningClearedAt) && !superseded;
-          // Superseded / cleared warnings stay listed but do not reduce final payment.
           const countsTowardPayment = !superseded && !item.warningClearedAt;
           const preset = outcomePresetById(presetId);
           const entry = {
@@ -3844,34 +3990,189 @@ function createPeopleCasesApi({
           list.sort((left, right) => String(right.givenAt || '').localeCompare(String(left.givenAt || '')));
         }
 
+        const absenceDeductions = await loadAbsenceDeductionsForPaymentRun(db, {
+          paymentRunId,
+          paymentDate,
+        });
+        for (const entry of absenceDeductions) {
+          if (!entry.employeeUid) continue;
+          if ((calculationFrom || calculationTo)
+            && !dateInInclusiveRange(entry.givenAt, calculationFrom, calculationTo)) {
+            continue;
+          }
+          const list = deductionsByEmployee.get(entry.employeeUid) || [];
+          list.push(entry);
+          deductionsByEmployee.set(entry.employeeUid, list);
+        }
+
+        const manualAdjustments = await listManualAdjustmentsForPaymentRun(db, {
+          paymentRunId,
+          paymentDate,
+        });
+        for (const entry of manualAdjustments) {
+          if (!entry.employeeUid) continue;
+          if (employeeUidFilter && entry.employeeUid !== employeeUidFilter) continue;
+          const list = deductionsByEmployee.get(entry.employeeUid) || [];
+          list.push(entry);
+          deductionsByEmployee.set(entry.employeeUid, list);
+        }
+
+        for (const list of deductionsByEmployee.values()) {
+          list.sort((left, right) => String(right.givenAt || '').localeCompare(String(left.givenAt || '')));
+        }
+
+        // Payment 2: excess deductions from payment 1 of the same year carry in.
+        // After payment 2 (Dec), excess is written off — nothing carries to next July.
+        const carryForwardByUid = new Map();
+        if (paymentOfYear === 2 && pairedFirstRun) {
+          const firstFrom = pairedFirstRun.calculationFrom || '';
+          const firstTo = pairedFirstRun.calculationTo || '';
+          const firstAsOf = firstTo || pairedFirstRun.paymentDate || '';
+          const firstPeriodDeductions = new Map();
+          const firstPeriodAdditions = new Map();
+
+          for (const doc of casesSnap.docs) {
+            const item = serializeCase(doc);
+            const presetId = bonusDeductionPresetId(item);
+            const amount = BONUS_DEDUCTION_AMOUNTS[presetId];
+            if (!amount) continue;
+            const family = item.processFamily || 'disciplinary';
+            if (family && family !== 'disciplinary') continue;
+            if (!item.employeeUid) continue;
+            if (!bonusDeductionWasIssued(item)) continue;
+            const givenAt = measureGivenAt(item)
+              || toIsoDateOnly(item.outcomeIssuedAt)
+              || toIsoDateOnly(item.closedAt)
+              || toIsoDateOnly(item.warningEffectiveAt)
+              || toIsoDateOnly(item.updatedAt)
+              || '';
+            if ((firstFrom || firstTo) && !dateInInclusiveRange(givenAt, firstFrom, firstTo)) continue;
+            if (isSupersededMeasure(item) || item.warningClearedAt) continue;
+            firstPeriodDeductions.set(
+              item.employeeUid,
+              roundGbp((firstPeriodDeductions.get(item.employeeUid) || 0) + amount),
+            );
+          }
+
+          const firstAbsence = await loadAbsenceDeductionsForPaymentRun(db, {
+            paymentRunId: pairedFirstRun.id,
+            paymentDate: pairedFirstRun.paymentDate,
+          });
+          for (const entry of firstAbsence) {
+            if (!entry.employeeUid) continue;
+            if ((firstFrom || firstTo)
+              && !dateInInclusiveRange(entry.givenAt, firstFrom, firstTo)) {
+              continue;
+            }
+            if (entry.countsTowardPayment === false) continue;
+            firstPeriodDeductions.set(
+              entry.employeeUid,
+              roundGbp((firstPeriodDeductions.get(entry.employeeUid) || 0) + (Number(entry.amount) || 0)),
+            );
+          }
+
+          const firstManual = await listManualAdjustmentsForPaymentRun(db, {
+            paymentRunId: pairedFirstRun.id,
+            paymentDate: pairedFirstRun.paymentDate,
+          });
+          for (const entry of firstManual) {
+            if (!entry.employeeUid) continue;
+            if (entry.countsTowardPayment === false) continue;
+            const amount = Number(entry.amount) || 0;
+            if (entry.kind === 'addition' || entry.outcomePreset === MANUAL_ADDITION) {
+              firstPeriodAdditions.set(
+                entry.employeeUid,
+                roundGbp((firstPeriodAdditions.get(entry.employeeUid) || 0) + amount),
+              );
+            } else {
+              firstPeriodDeductions.set(
+                entry.employeeUid,
+                roundGbp((firstPeriodDeductions.get(entry.employeeUid) || 0) + amount),
+              );
+            }
+          }
+
+          const carryUids = [...new Set([
+            ...employeesByUid.keys(),
+            ...firstPeriodDeductions.keys(),
+            ...firstPeriodAdditions.keys(),
+          ])];
+          for (const uid of carryUids) {
+            const employee = employeesByUid.get(uid);
+            const bonus = calculateBonusAtPaymentDate({
+              startDate: employee?.startDate || '',
+              paymentDate: firstAsOf,
+              baseBonus,
+            });
+            const proRata = resolveBonusProRata({
+              bonusHoursMode: employee?.bonusHoursMode || '',
+              proRataBase: employee?.proRataBase || '',
+              contractType: employee?.contractType || '',
+              annualContractedHours: employee?.annualContractedHours || 0,
+              hoursPerWeek: employee?.hoursPerWeek || 0,
+              fte: employee?.fte || 0,
+              drivingStaff: Boolean(employee?.drivingStaff),
+              doesNotPayBonus: Boolean(employee?.doesNotPayBonus),
+              fullTimeHoursPerWeek,
+              fullTimeWeeksPerYear,
+              fullTimeAnnualHours,
+            });
+            const firstSettlement = applyBonusDeductionsAndProRata({
+              bonus,
+              proRata,
+              deductionTotal: firstPeriodDeductions.get(uid) || 0,
+              additionTotal: firstPeriodAdditions.get(uid) || 0,
+              paymentOfYear: 1,
+            });
+            if (firstSettlement.carryForwardOut > 0) {
+              carryForwardByUid.set(uid, firstSettlement.carryForwardOut);
+            }
+          }
+        }
+
         // Active employees + anyone with a listed deduction (so warnings are never hidden).
         const employeeUids = [...new Set([
           ...employeesByUid.keys(),
           ...deductionsByEmployee.keys(),
+          ...carryForwardByUid.keys(),
         ])];
         const rows = employeeUids
           .map((uid) => {
             const employee = employeesByUid.get(uid);
             const deductions = deductionsByEmployee.get(uid) || [];
-            const applicableDeductions = deductions.filter((item) => item.countsTowardPayment);
-            const totalAmount = applicableDeductions.reduce(
-              (sum, item) => sum + (Number(item.amount) || 0),
-              0,
+            const applicableLines = deductions.filter((item) => item.countsTowardPayment);
+            const isManualAddition = (item) => (
+              item.kind === 'addition'
+              || item.outcomePreset === MANUAL_ADDITION
+              || item.source === 'manual' && item.kind === 'addition'
             );
+            const periodDeductionTotal = applicableLines.reduce((sum, item) => {
+              if (isManualAddition(item)) return sum;
+              return sum + (Number(item.amount) || 0);
+            }, 0);
+            const periodAdditionTotal = applicableLines.reduce((sum, item) => {
+              if (!isManualAddition(item)) return sum;
+              return sum + (Number(item.amount) || 0);
+            }, 0);
             const listedDeductionTotal = deductions.reduce(
               (sum, item) => sum + (Number(item.amount) || 0),
               0,
             );
+            const carryForwardIn = carryForwardByUid.get(uid) || 0;
             const bonus = calculateBonusAtPaymentDate({
               startDate: employee?.startDate || '',
-              paymentDate,
+              paymentDate: asOfDate,
               baseBonus,
             });
             const proRata = resolveBonusProRata({
+              bonusHoursMode: employee?.bonusHoursMode || '',
+              proRataBase: employee?.proRataBase || '',
               contractType: employee?.contractType || '',
               annualContractedHours: employee?.annualContractedHours || 0,
               hoursPerWeek: employee?.hoursPerWeek || 0,
               fte: employee?.fte || 0,
+              drivingStaff: Boolean(employee?.drivingStaff),
+              doesNotPayBonus: Boolean(employee?.doesNotPayBonus),
               fullTimeHoursPerWeek,
               fullTimeWeeksPerYear,
               fullTimeAnnualHours,
@@ -3879,8 +4180,13 @@ function createPeopleCasesApi({
             const settlement = applyBonusDeductionsAndProRata({
               bonus,
               proRata,
-              deductionTotal: totalAmount,
+              deductionTotal: periodDeductionTotal,
+              additionTotal: periodAdditionTotal,
+              carryForwardIn,
+              paymentOfYear,
             });
+            const annualEntitlement = Number(settlement.annualEntitlement) || 0;
+            const totalAmount = Number(settlement.deductionTotal) || 0;
             return {
               employeeUid: uid,
               employeeName: employee?.fullName || deductions[0]?.employeeNameSnapshot || 'Unknown employee',
@@ -3888,23 +4194,42 @@ function createPeopleCasesApi({
               department: employee?.department || '',
               startDate: employee?.startDate || '',
               contractType: employee?.contractType || '',
+              bonusHoursMode: employee?.bonusHoursMode || proRata.bonusHoursMode || '',
+              doesNotPayBonus: Boolean(
+                employee?.doesNotPayBonus
+                || proRata.doesNotPayBonus
+                || proRata.notPaidBonus
+                || settlement.notPaidBonus,
+              ),
+              proRataBase: employee?.proRataBase || proRata.proRataBase || '',
               annualContractedHours: employee?.annualContractedHours || null,
               hoursPerWeek: employee?.hoursPerWeek || null,
               fte: employee?.fte || null,
               isPartTime: Boolean(proRata.isPartTime),
               isFullTime: Boolean(proRata.isFullTime),
+              notPaidBonus: Boolean(proRata.notPaidBonus || settlement.notPaidBonus),
               isActiveEmployee: Boolean(employee),
               proRata,
               bonus,
+              settlement,
               bonusPaymentAmountGross: bonus.paymentAmount,
               bonusAccruedPot: bonus.accruedPot,
+              annualEntitlement,
+              annualEntitlementGross: bonus.accruedPot,
+              baseAfterProRata: Number(settlement.baseAfterProRata) || 0,
               preDeductionPot: settlement.preDeductionPot,
               bonusPaymentAmount: settlement.preDeductionPot,
               deductions,
+              periodDeductionTotal: settlement.periodDeductionTotal,
+              periodAdditionTotal: settlement.periodAdditionTotal,
+              carryForwardIn: settlement.carryForwardIn,
+              carryForwardOut: settlement.carryForwardOut,
+              writtenOff: settlement.writtenOff,
+              paymentOfYear: settlement.paymentOfYear,
               totalAmount,
               listedDeductionTotal,
               deductionCount: deductions.length,
-              applicableDeductionCount: applicableDeductions.length,
+              applicableDeductionCount: applicableLines.length,
               finalPayment: settlement.finalPayment,
             };
           })
@@ -3915,21 +4240,48 @@ function createPeopleCasesApi({
         const finalPaymentsTotal = rows.reduce((sum, row) => sum + (Number(row.finalPayment) || 0), 0);
         const partTimeCount = rows.filter((row) => row.isPartTime).length;
         res.status(200).json({
-          amounts: BONUS_DEDUCTION_AMOUNTS,
           grandTotal,
           bonusPaymentsTotal,
           finalPaymentsTotal,
           partTimeCount,
           currency: 'GBP',
           paymentDate,
-          nextPaymentDate: nextDefault,
+          paymentRunId,
+          paymentRunName,
+          paymentOfYear,
+          pairedFirstPaymentRunId: pairedFirstRun?.id || '',
+          asOfDate,
+          calculationFrom,
+          calculationTo,
+          nextPaymentDate: paymentDate,
           paymentOptions,
+          paymentRuns,
+          activePeriod: selectedRun
+            ? {
+              calculationFrom,
+              calculationTo,
+              paymentDate,
+              paymentRunId,
+              name: paymentRunName,
+              paymentOfYear,
+            }
+            : activePeriod,
           bonusConfig: {
             baseBonus,
             schedule,
             fullTimeHoursPerWeek,
             fullTimeWeeksPerYear,
             fullTimeAnnualHours,
+            driverFullTimeAnnualHours: DRIVER_FULL_TIME_ANNUAL_HOURS,
+            officeFullTimeAnnualHours: OFFICE_FULL_TIME_ANNUAL_HOURS,
+            workshopFullTimeAnnualHours: WORKSHOP_FULL_TIME_ANNUAL_HOURS,
+          },
+          amounts: {
+            ...BONUS_DEDUCTION_AMOUNTS,
+            [ABSENCE_OUTCOME_PRESET]: null,
+            [LATENESS_OUTCOME_PRESET]: null,
+            [MANUAL_ADDITION]: null,
+            [MANUAL_DEDUCTION]: null,
           },
           rows,
           ...(employeeUidFilter ? {
@@ -3940,6 +4292,423 @@ function createPeopleCasesApi({
       } catch (error) {
         console.error('getBonusDeductions failed', error);
         res.status(500).json({ error: 'Failed to load bonus deductions.' });
+      }
+    }),
+  );
+
+  const getBonusPaymentRuns = onRequest(
+    { region: 'europe-west2' },
+    withCors(async (req, res) => {
+      if (req.method !== 'GET') {
+        res.status(405).json({ error: 'Method not allowed.' });
+        return;
+      }
+      const session = await getVerifiedSessionUser(req);
+      if (!assertBonusAccess(session, res)) return;
+      try {
+        const paymentRuns = await listBonusPaymentRuns(db);
+        res.status(200).json({ paymentRuns });
+      } catch (error) {
+        console.error('getBonusPaymentRuns failed', error);
+        res.status(500).json({ error: error.message || 'Failed to load payment runs.' });
+      }
+    }),
+  );
+
+  const saveBonusPaymentRun = onRequest(
+    { region: 'europe-west2' },
+    withCors(async (req, res) => {
+      if (req.method !== 'POST') {
+        res.status(405).json({ error: 'Method not allowed.' });
+        return;
+      }
+      const session = await getVerifiedSessionUser(req);
+      if (!assertBonusAccess(session, res)) return;
+      try {
+        const result = await upsertBonusPaymentRun(db, req.body || {}, session.uid || '');
+        if (result.error) {
+          res.status(400).json({ error: result.error });
+          return;
+        }
+        // Keep legacy activePeriod in sync with the latest saved run for older clients.
+        await db.collection('settings').doc('bonus').set({
+          activePeriod: {
+            calculationFrom: result.value.calculationFrom,
+            calculationTo: result.value.calculationTo,
+            paymentDate: result.value.paymentDate,
+            paymentRunId: result.value.id,
+            name: result.value.name,
+            updatedAt: new Date().toISOString(),
+            updatedByUid: session.uid || '',
+          },
+        }, { merge: true });
+        res.status(200).json({ ok: true, paymentRun: result.value });
+      } catch (error) {
+        console.error('saveBonusPaymentRun failed', error);
+        res.status(500).json({ error: error.message || 'Failed to save payment run.' });
+      }
+    }),
+  );
+
+  const deleteBonusPaymentRunApi = onRequest(
+    { region: 'europe-west2' },
+    withCors(async (req, res) => {
+      if (req.method !== 'POST' && req.method !== 'DELETE') {
+        res.status(405).json({ error: 'Method not allowed.' });
+        return;
+      }
+      const session = await getVerifiedSessionUser(req);
+      if (!assertBonusAccess(session, res)) return;
+      const id = toTrimmedString(req.body?.id || req.query?.id);
+      try {
+        const result = await deleteBonusPaymentRun(db, id);
+        if (result.error) {
+          res.status(400).json({ error: result.error });
+          return;
+        }
+        res.status(200).json({ ok: true, id: result.id });
+      } catch (error) {
+        console.error('deleteBonusPaymentRun failed', error);
+        res.status(500).json({ error: error.message || 'Failed to delete payment run.' });
+      }
+    }),
+  );
+
+  const saveBonusPeriod = onRequest(
+    { region: 'europe-west2' },
+    withCors(async (req, res) => {
+      if (req.method !== 'POST') {
+        res.status(405).json({ error: 'Method not allowed.' });
+        return;
+      }
+      const session = await getVerifiedSessionUser(req);
+      if (!assertBonusAccess(session, res)) return;
+
+      const body = req.body || {};
+      const result = await upsertBonusPaymentRun(db, {
+        id: body.paymentRunId || body.id || '',
+        name: body.name || body.paymentRunName || `Payment ${bonusToIsoDateOnly(body.paymentDate) || ''}`.trim(),
+        calculationFrom: body.calculationFrom,
+        calculationTo: body.calculationTo,
+        paymentDate: body.paymentDate,
+      }, session.uid || '');
+      if (result.error) {
+        res.status(400).json({ error: result.error });
+        return;
+      }
+      try {
+        const activePeriod = {
+          calculationFrom: result.value.calculationFrom,
+          calculationTo: result.value.calculationTo,
+          paymentDate: result.value.paymentDate,
+          paymentRunId: result.value.id,
+          name: result.value.name,
+          updatedAt: new Date().toISOString(),
+          updatedByUid: session.uid || '',
+        };
+        await db.collection('settings').doc('bonus').set({ activePeriod }, { merge: true });
+        res.status(200).json({ ok: true, activePeriod, paymentRun: result.value });
+      } catch (error) {
+        console.error('saveBonusPeriod failed', error);
+        res.status(500).json({ error: error.message || 'Failed to save bonus period.' });
+      }
+    }),
+  );
+
+
+  const syncBonusAbsenceDeductions = onRequest(
+    {
+      region: 'europe-west2',
+      timeoutSeconds: 300,
+      memory: '512MiB',
+    },
+    withCors(async (req, res) => {
+      if (req.method !== 'POST') {
+        res.status(405).json({ error: 'Method not allowed.' });
+        return;
+      }
+      const session = await getVerifiedSessionUser(req);
+      if (!assertBonusAccess(session, res)) return;
+
+      const sharePointConfig = getSharePointConfig();
+      if (!isSharePointConfigured(sharePointConfig)) {
+        res.status(503).json({ error: 'SharePoint integration is not configured yet.' });
+        return;
+      }
+
+      try {
+        const body = req.body || {};
+        const stored = await loadBonusConfig();
+        const requestedRunId = toTrimmedString(body.paymentRunId);
+        let run = requestedRunId ? await getBonusPaymentRun(db, requestedRunId) : null;
+        if (!run && body.calculationFrom && body.calculationTo && body.paymentDate) {
+          // Ad-hoc period from body (legacy) — still works without creating a named run.
+          run = {
+            id: '',
+            name: toTrimmedString(body.name || body.paymentRunName) || '',
+            calculationFrom: bonusToIsoDateOnly(body.calculationFrom),
+            calculationTo: bonusToIsoDateOnly(body.calculationTo),
+            paymentDate: bonusToIsoDateOnly(body.paymentDate),
+          };
+        }
+        if (!run && stored.activePeriod?.paymentRunId) {
+          run = await getBonusPaymentRun(db, stored.activePeriod.paymentRunId);
+        }
+        if (!run && stored.activePeriod) {
+          run = {
+            id: stored.activePeriod.paymentRunId || '',
+            name: stored.activePeriod.name || '',
+            calculationFrom: stored.activePeriod.calculationFrom || '',
+            calculationTo: stored.activePeriod.calculationTo || '',
+            paymentDate: stored.activePeriod.paymentDate || '',
+          };
+        }
+
+        const calculationFrom = bonusToIsoDateOnly(run?.calculationFrom);
+        const calculationTo = bonusToIsoDateOnly(run?.calculationTo);
+        const periodPaymentDate = bonusToIsoDateOnly(run?.paymentDate);
+
+        if (!calculationFrom || !calculationTo || !periodPaymentDate) {
+          res.status(400).json({
+            error: 'Select a scheduled payment (with calc from/to and payment date) before syncing absences.',
+          });
+          return;
+        }
+        if (calculationFrom > calculationTo) {
+          res.status(400).json({ error: 'calculationFrom must be on or before calculationTo.' });
+          return;
+        }
+
+        const period = {
+          calculationFrom,
+          calculationTo,
+          paymentDate: periodPaymentDate,
+          paymentRunId: run.id || '',
+          paymentRunName: run.name || '',
+          updatedAt: new Date().toISOString(),
+          updatedByUid: session.uid || '',
+        };
+        await db.collection('settings').doc('bonus').set({
+          activePeriod: {
+            calculationFrom,
+            calculationTo,
+            paymentDate: periodPaymentDate,
+            paymentRunId: run.id || '',
+            name: run.name || '',
+            updatedAt: period.updatedAt,
+            updatedByUid: session.uid || '',
+          },
+        }, { merge: true });
+
+        // Manual sync is always a full period pass so statements match SharePoint.
+        const syncResult = await syncSharePointDeductionsForRun(db, sharePointConfig, {
+          run: {
+            id: run.id || '',
+            name: run.name || '',
+            calculationFrom,
+            calculationTo,
+            paymentDate: periodPaymentDate,
+            lastSharePointSyncAt: null,
+          },
+          actorUid: session.uid || '',
+          incremental: false,
+        });
+        if (syncResult.error) {
+          res.status(400).json({ error: syncResult.error });
+          return;
+        }
+        res.status(200).json(syncResult);
+      } catch (error) {
+        console.error('syncBonusAbsenceDeductions failed', error);
+        res.status(500).json({ error: error.message || 'Failed to sync absence deductions.' });
+      }
+    }),
+  );
+
+  const mapBonusSharePointEmployee = onRequest(
+    {
+      region: 'europe-west2',
+      timeoutSeconds: 120,
+      memory: '512MiB',
+    },
+    withCors(async (req, res) => {
+      if (req.method !== 'POST') {
+        res.status(405).json({ error: 'Method not allowed.' });
+        return;
+      }
+      const session = await getVerifiedSessionUser(req);
+      if (!assertBonusAccess(session, res)) return;
+
+      const body = req.body || {};
+      const employeeUid = toTrimmedString(body.employeeUid);
+      const sharePointLookupId = toTrimmedString(body.sharePointLookupId);
+      const sharePointEmail = normalizeBonusEmail(body.sharePointEmail);
+      const sharePointName = toTrimmedString(body.sharePointName);
+      const absences = Array.isArray(body.absences) ? body.absences : [];
+
+      if (!employeeUid) {
+        res.status(400).json({ error: 'employeeUid is required.' });
+        return;
+      }
+      if (!sharePointLookupId && !sharePointEmail) {
+        res.status(400).json({ error: 'sharePointLookupId or sharePointEmail is required.' });
+        return;
+      }
+
+      const employeeSnap = await db.collection('users').doc(employeeUid).get();
+      if (!employeeSnap.exists || employeeSnap.data()?.isActive === false) {
+        res.status(404).json({ error: 'Portal employee not found.' });
+        return;
+      }
+
+      const mapId = mapDocId({ sharePointLookupId, sharePointEmail });
+      if (!mapId) {
+        res.status(400).json({ error: 'Could not build a mapping key.' });
+        return;
+      }
+
+      try {
+        const stored = await loadBonusConfig();
+        const runId = toTrimmedString(body.paymentRunId) || stored.activePeriod?.paymentRunId || '';
+        const run = runId ? await getBonusPaymentRun(db, runId) : null;
+        const calculationFrom = bonusToIsoDateOnly(body.calculationFrom)
+          || run?.calculationFrom
+          || stored.activePeriod?.calculationFrom
+          || '';
+        const calculationTo = bonusToIsoDateOnly(body.calculationTo)
+          || run?.calculationTo
+          || stored.activePeriod?.calculationTo
+          || '';
+        const periodPaymentDate = bonusToIsoDateOnly(body.paymentDate)
+          || run?.paymentDate
+          || stored.activePeriod?.paymentDate
+          || '';
+        const period = {
+          calculationFrom,
+          calculationTo,
+          paymentDate: periodPaymentDate,
+          paymentRunId: runId || run?.id || '',
+          paymentRunName: toTrimmedString(body.paymentRunName) || run?.name || stored.activePeriod?.name || '',
+        };
+
+        await db.collection(MAP_COLLECTION).doc(mapId).set({
+          employeeUid,
+          sharePointLookupId,
+          sharePointEmail,
+          sharePointName,
+          mappedAt: new Date().toISOString(),
+          mappedByUid: session.uid || '',
+        }, { merge: true });
+
+        let applied = 0;
+        if (absences.length && period.paymentDate) {
+          for (const item of absences) {
+            const amount = Number(item.amount) || 0;
+            if (amount <= 0 || !item.sharePointItemId) continue;
+            await upsertAbsenceDeduction(db, buildAbsenceDeductionRecord({
+              absence: {
+                sharePointItemId: item.sharePointItemId,
+                eventDate: bonusToIsoDateOnly(item.absenceDate) || '',
+                absenceDate: bonusToIsoDateOnly(item.absenceDate) || '',
+                amount,
+                absenceReason: toTrimmedString(item.absenceReason),
+                disciplinaryReason: toTrimmedString(item.disciplinaryReason),
+                latenessType: toTrimmedString(item.latenessType),
+                recordType: toTrimmedString(item.recordType) || 'absence',
+                disciplinaryType: toTrimmedString(item.disciplinaryType),
+                sharePointLookupId,
+                sharePointName,
+                sharePointEmail,
+              },
+              employeeUid,
+              period,
+              actorUid: session.uid || '',
+              matchMethod: 'manual_map',
+            }));
+            applied += 1;
+          }
+        }
+
+        const employee = employeeSnap.data() || {};
+        res.status(200).json({
+          ok: true,
+          applied,
+          mapping: {
+            employeeUid,
+            employeeName: employee.fullName || employee.email || '',
+            sharePointLookupId,
+            sharePointEmail,
+            sharePointName,
+          },
+        });
+      } catch (error) {
+        console.error('mapBonusSharePointEmployee failed', error);
+        res.status(500).json({ error: error.message || 'Failed to save employee mapping.' });
+      }
+    }),
+  );
+
+  const saveBonusManualAdjustment = onRequest(
+    { region: 'europe-west2' },
+    withCors(async (req, res) => {
+      if (req.method !== 'POST') {
+        res.status(405).json({ error: 'Method not allowed.' });
+        return;
+      }
+      const session = await getVerifiedSessionUser(req);
+      if (!assertBonusAccess(session, res)) return;
+
+      const body = req.body || {};
+      try {
+        const runId = toTrimmedString(body.paymentRunId);
+        let paymentDate = bonusToIsoDateOnly(body.paymentDate);
+        if (runId && !paymentDate) {
+          const run = await getBonusPaymentRun(db, runId);
+          paymentDate = run?.paymentDate || '';
+        }
+        const result = await upsertManualAdjustment(db, {
+          id: body.id,
+          employeeUid: body.employeeUid,
+          paymentRunId: runId,
+          paymentDate,
+          kind: body.kind,
+          amount: body.amount,
+          reason: body.reason,
+          givenAt: body.givenAt,
+        }, session.uid || '');
+        if (result.error) {
+          res.status(400).json({ error: result.error });
+          return;
+        }
+        res.status(200).json({ ok: true, adjustment: result.value });
+      } catch (error) {
+        console.error('saveBonusManualAdjustment failed', error);
+        res.status(500).json({ error: error.message || 'Failed to save adjustment.' });
+      }
+    }),
+  );
+
+  const deleteBonusManualAdjustment = onRequest(
+    { region: 'europe-west2' },
+    withCors(async (req, res) => {
+      if (req.method !== 'POST' && req.method !== 'DELETE') {
+        res.status(405).json({ error: 'Method not allowed.' });
+        return;
+      }
+      const session = await getVerifiedSessionUser(req);
+      if (!assertBonusAccess(session, res)) return;
+
+      const id = toTrimmedString(req.body?.id || req.query?.id);
+      try {
+        const result = await deleteManualAdjustment(db, id);
+        if (result.error) {
+          res.status(400).json({ error: result.error });
+          return;
+        }
+        res.status(200).json({ ok: true, id: result.id });
+      } catch (error) {
+        console.error('deleteBonusManualAdjustment failed', error);
+        res.status(500).json({ error: error.message || 'Failed to delete adjustment.' });
       }
     }),
   );
@@ -4098,6 +4867,14 @@ function createPeopleCasesApi({
     getEmployeeInformalHistory,
     getActiveDisciplinaryMeasures,
     getBonusDeductions,
+    getBonusPaymentRuns,
+    saveBonusPaymentRun,
+    deleteBonusPaymentRun: deleteBonusPaymentRunApi,
+    saveBonusPeriod,
+    syncBonusAbsenceDeductions,
+    mapBonusSharePointEmployee,
+    saveBonusManualAdjustment,
+    deleteBonusManualAdjustment,
     DOCUMENT_TYPES,
   };
 }

@@ -15,6 +15,7 @@ import DuplicateEmployees from './pages/DuplicateEmployees';
 import BirthdaysAnniversaries from './pages/BirthdaysAnniversaries';
 import ActiveDisciplinaryMeasures from './pages/ActiveDisciplinaryMeasures';
 import BonusDeductions from './pages/BonusDeductions';
+import BonusPaymentSchedule from './pages/BonusPaymentSchedule';
 import DisciplinaryDashboard from './pages/DisciplinaryDashboard';
 import DisciplinaryCase from './pages/DisciplinaryCase';
 import BumpCardPage from './pages/BumpCardPage';
@@ -140,8 +141,16 @@ export default function App() {
                 <Route
                   path="bonus-deductions"
                   element={(
-                    <ProtectedRoute requireCasesManager>
+                    <ProtectedRoute requireBonusAccess>
                       <BonusDeductions />
+                    </ProtectedRoute>
+                  )}
+                />
+                <Route
+                  path="bonus-payments"
+                  element={(
+                    <ProtectedRoute requireBonusAccess>
+                      <BonusPaymentSchedule />
                     </ProtectedRoute>
                   )}
                 />

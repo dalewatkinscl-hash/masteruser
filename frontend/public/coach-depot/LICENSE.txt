@@ -1,0 +1,8 @@
+Coach Depot art
+===============
+
+Isometric City — Starter pack sprites under /coach-depot/iso/
+(Buildings, Vehicles, Roads and Grounds, Props, Characters).
+
+Used under the pack license supplied with the download.
+Procedural Three.js meshes were replaced by these sprites for the yard view.

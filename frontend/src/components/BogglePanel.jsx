@@ -142,9 +142,23 @@ export default function BogglePanel({
     const payload = (await readJsonResponse(response)) || {};
     if (!response.ok) throw new Error(payload.error || 'Failed to load Boggle.');
 
+    if (payload.weekend || payload.sittingOut) {
+      setBoard([]);
+      setLeaderboard([]);
+      setTotalPlayed(0);
+      setServerGame(null);
+      setFinished(false);
+      setFound([]);
+      setRemaining(0);
+      setMessage(payload.message || (payload.sittingOut
+        ? 'Boggle isn’t in today’s Fun rotation.'
+        : 'Fun games come back Monday.'));
+      return;
+    }
+
     setBoard(payload.puzzle?.board || []);
     setRoundSeconds(payload.puzzle?.roundSeconds || ROUND_SECONDS);
-    setLeaderboard(payload.leaderboard || []);
+    setLeaderboard(Array.isArray(payload.leaderboard) ? payload.leaderboard.filter(Boolean) : []);
     setTotalPlayed(payload.totalPlayed || 0);
     setServerGame(payload.game || null);
     setMessage('');
@@ -402,6 +416,7 @@ export default function BogglePanel({
           todayKey={todayKey}
           onChange={setDayKey}
           allowFuture={isAdmin || isSandbox}
+          gameKey="boggle"
         />
       </div>
       {isSandbox ? (

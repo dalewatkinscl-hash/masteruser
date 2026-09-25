@@ -21,6 +21,7 @@ import {
   portalAccessFromUser,
   toCompanyEmail,
 } from '../utils/portalAccess';
+import { buildFeatureAccess, sanitizeFeatureAccessClient } from '../config/features';
 
 const DEFAULT_TEMP_PASSWORD = 'socket';
 
@@ -44,6 +45,7 @@ function EnablePortalLoginCard({
   accountForm,
   onAccountChange,
   onPortalRoleChange,
+  onFeatureAccessChange,
   onEnable,
   saving,
 }) {
@@ -87,6 +89,7 @@ function EnablePortalLoginCard({
             formData={accountForm}
             onChange={onAccountChange}
             onPortalRoleChange={onPortalRoleChange}
+            onFeatureAccessChange={onFeatureAccessChange}
             readOnly={false}
           />
         </div>
@@ -193,6 +196,7 @@ export default function EmployeeDetail() {
     businessCommsEmail: 'work',
     isActive: true,
     portalsAccess: buildPortalsAccess(),
+    featureAccess: buildFeatureAccess(),
     mentorProfileId: '',
     assessmentProfileId: '',
     tyreProfileId: '',
@@ -328,6 +332,16 @@ export default function EmployeeDetail() {
     });
   };
 
+  const handleFeatureAccessChange = (featureKey, enabled) => {
+    setAccountForm((prev) => ({
+      ...prev,
+      featureAccess: {
+        ...(prev.featureAccess || {}),
+        [featureKey]: Boolean(enabled),
+      },
+    }));
+  };
+
   const savePortalAccess = async (targetUid) => {
     const portalMappings = buildPortalMappings(accountForm);
     const response = await fetch('/api/adminUpdateUser', {
@@ -341,6 +355,7 @@ export default function EmployeeDetail() {
         // form and a stale default of "work" was overwriting personal preferences.
         isActive: accountForm.isActive,
         portalsAccess: accountForm.portalsAccess,
+        featureAccess: sanitizeFeatureAccessClient(accountForm.featureAccess),
         portalMappings,
       }),
     });
@@ -366,6 +381,7 @@ export default function EmployeeDetail() {
           businessCommsEmail: accountForm.businessCommsEmail,
           isActive: accountForm.isActive,
           portalsAccess: accountForm.portalsAccess,
+          featureAccess: sanitizeFeatureAccessClient(accountForm.featureAccess),
           portalMappings,
         }),
       });
@@ -398,6 +414,7 @@ export default function EmployeeDetail() {
           password: accountForm.portalPassword || DEFAULT_TEMP_PASSWORD,
           isActive: accountForm.isActive,
           portalsAccess: accountForm.portalsAccess,
+          featureAccess: sanitizeFeatureAccessClient(accountForm.featureAccess),
           portalMappings,
         }),
       });
@@ -597,6 +614,7 @@ export default function EmployeeDetail() {
                   formData={accountForm}
                   onChange={handleAccountChange}
                   onPortalRoleChange={handlePortalRoleChange}
+                  onFeatureAccessChange={handleFeatureAccessChange}
                   readOnly={false}
                 />
                 <div className="flex justify-end mt-6 pt-4 border-t border-[#1a2540]">
@@ -693,6 +711,7 @@ export default function EmployeeDetail() {
                     accountForm={accountForm}
                     onAccountChange={handleAccountChange}
                     onPortalRoleChange={handlePortalRoleChange}
+                    onFeatureAccessChange={handleFeatureAccessChange}
                     onEnable={handleEnablePortalLogin}
                     saving={saving}
                   />
@@ -754,6 +773,7 @@ export default function EmployeeDetail() {
                         formData={accountForm}
                         onChange={handleAccountChange}
                         onPortalRoleChange={handlePortalRoleChange}
+                        onFeatureAccessChange={handleFeatureAccessChange}
                         readOnly={portalReadOnly}
                       />
 

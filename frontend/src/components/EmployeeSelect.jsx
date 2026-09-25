@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 const inputClass = 'w-full bg-[#060e1a] border border-[#1a2540] text-slate-100 text-sm rounded-lg px-3 py-2';
 
@@ -21,6 +21,9 @@ function labelFor(employee) {
 /**
  * Searchable person picker. mode: "employees" (active staff) or "managers" (cases-capable).
  * Results appear as a dropdown as you type, matching the manager picker behaviour.
+ *
+ * allowEmpty: if false, submit validation should reject blank selection — but the user
+ * can still clear/change the current person to pick someone else.
  */
 export default function EmployeeSelect({
   value = '',
@@ -36,9 +39,17 @@ export default function EmployeeSelect({
   const [search, setSearch] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
   const [picked, setPicked] = useState(null);
+  const [changing, setChanging] = useState(false);
 
-  const selected = employees.find((employee) => personId(employee) === String(value || '').trim())
-    || (picked && personId(picked) === String(value || '').trim() ? picked : null);
+  // Parent re-prefills (e.g. opening a fresh interview form) — exit change mode.
+  useEffect(() => {
+    if (value) setChanging(false);
+  }, [value]);
+
+  const selected = !changing
+    ? (employees.find((employee) => personId(employee) === String(value || '').trim())
+      || (picked && personId(picked) === String(value || '').trim() ? picked : null))
+    : null;
 
   // When a value is set externally (e.g. prefill), clear any stale search text.
   const displaySearch = selected ? '' : search;
@@ -54,6 +65,7 @@ export default function EmployeeSelect({
 
     list = list.filter((employee) => {
       const id = personId(employee);
+      // While searching for a replacement, still exclude the current selection from the list.
       if (selectedId && id === selectedId) return false;
       if (!query) return true;
       const haystack = [
@@ -74,13 +86,23 @@ export default function EmployeeSelect({
     const uid = personId(employee);
     if (!uid) return;
     setPicked(employee);
+    setChanging(false);
     onChange?.(uid, employee);
     setSearch('');
     setMenuOpen(false);
   };
 
+  const beginChange = () => {
+    setChanging(true);
+    setSearch('');
+    setMenuOpen(true);
+    // Clear value so parent form does not keep the old selection while choosing.
+    onChange?.('');
+  };
+
   const clear = () => {
     setPicked(null);
+    setChanging(false);
     onChange?.('');
     setSearch('');
   };
@@ -92,7 +114,16 @@ export default function EmployeeSelect({
           <span className="flex-1 text-sm text-slate-100 truncate">
             {labelFor(selected)}
           </span>
-          {!disabled && allowEmpty && (
+          {!disabled ? (
+            <button
+              type="button"
+              className="text-xs font-medium text-indigo-300 hover:text-indigo-200 shrink-0"
+              onClick={beginChange}
+            >
+              Change
+            </button>
+          ) : null}
+          {!disabled && allowEmpty ? (
             <button
               type="button"
               className="text-slate-500 hover:text-red-300 text-base leading-none"
@@ -101,7 +132,7 @@ export default function EmployeeSelect({
             >
               ×
             </button>
-          )}
+          ) : null}
         </div>
       ) : (
         <div className="relative">
