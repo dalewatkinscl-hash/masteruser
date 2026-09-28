@@ -115,8 +115,8 @@ function clearPendingToolboxScore(dayKey = null) {
     /* ignore */
   }
 }
-/** World X where rare smoker drivers can appear (12 km of flight). */
-const SMOKER_FROM_X = BOX_REST_X + 12 * 1000 * PX_PER_METRE;
+/** World X where rare smoker drivers can appear (4 km of flight). */
+const SMOKER_FROM_X = BOX_REST_X + 4 * 1000 * PX_PER_METRE;
 /** Even rarer Macan — starts a bit further out than the smoker. */
 const MACAN_FROM_X = BOX_REST_X + 18 * 1000 * PX_PER_METRE;
 /** Ultra-rare Little Dick cameo — further still. */
@@ -198,7 +198,7 @@ const DISTANCE_MILESTONES = [
  * Hardcoded gameplay values (tuned in Dev, then locked in).
  */
 export const DEFAULT_TUNING = {
-  launchSpeed100: 45,
+  launchSpeed100: 75,
   launchSpeedMin: 5,
   sackBounce: 14,
   sackBoost: 1.28,
@@ -207,10 +207,10 @@ export const DEFAULT_TUNING = {
   /** After oil coating — slides further, but still settles. */
   oilGroundDrag: 0.972,
   oilFriction: 0.992,
-  /** Dry grass rebound — turf, not a trampoline. */
-  bounceDamp: 0.36,
+  /** Dry grass rebound. */
+  bounceDamp: 0.55,
   /** Need this much downward speed (px/tick) to leave the grass again. */
-  grassBounceMinVy: 2.35,
+  grassBounceMinVy: 2.2,
   /** Storm / wet grass — dead thump, kills hop and forward speed. */
   wetGrassBounceDamp: 0.1,
   wetGrassFriction: 0.62,
@@ -853,6 +853,16 @@ function slowdownDensityAtKm(km) {
   };
 }
 
+/** Full smoker rate 4–10 km, then fades out toward ~30 km. */
+function smokerSpawnChance(km) {
+  const k = Math.max(0, Number(km) || 0);
+  if (k < 4) return 0;
+  const base = 0.036;
+  if (k <= 10) return base;
+  const fade = Math.max(0, 1 - (k - 10) / 20);
+  return base * fade * fade;
+}
+
 const BALLOON_COLORS = [
   ['#ef4444', '#b91c1c'],
   ['#3b82f6', '#1d4ed8'],
@@ -884,13 +894,13 @@ function appendProps(items, fromX, toX, next, features = {}) {
       x += 600 + next() * 1000;
       continue;
     }
-    // Ultra-rare Chelle — bold lady with a book (2× prior spawn rate)
+    // Ultra-rare Chelle — bold lady with a book (4× original / 2× prior)
     if (
       !skipRare
       && newProps
       && CHELLE_NATURAL_SPAWN
       && x >= CHELLE_FROM_X
-      && next() < 0.0024
+      && next() < 0.0048
     ) {
       items.push({
         type: 'chelle',
@@ -900,8 +910,8 @@ function appendProps(items, fromX, toX, next, features = {}) {
       x += 560 + next() * 960;
       continue;
     }
-    // Ultra-rare black Macan — rarer than smoker, from 18 km
-    if (!skipRare && newProps && x >= MACAN_FROM_X && next() < 0.004) {
+    // Rare black Macan (Julies Car) — 2× prior spawn rate, from 18 km
+    if (!skipRare && newProps && x >= MACAN_FROM_X && next() < 0.008) {
       items.push({
         type: 'macan',
         x,
@@ -910,8 +920,8 @@ function appendProps(items, fromX, toX, next, features = {}) {
       x += 520 + next() * 900;
       continue;
     }
-    // Very rare smoker break from 12 km onward — enormous bounce if you hit them
-    if (!skipRare && x >= SMOKER_FROM_X && next() < 0.012) {
+    // Smoking driver — peak 4–10 km, then dwindles
+    if (!skipRare && x >= SMOKER_FROM_X && next() < smokerSpawnChance(kmAtWorldX(x))) {
       items.push({
         type: 'smoker',
         x,
@@ -1021,6 +1031,52 @@ function ensureReturnPathProps(st, boxX) {
     cursor += 480;
   }
   st.items.sort((a, b) => a.x - b.x);
+}
+
+/**
+ * After a failed Little Dick QTE boot-back, plant rescue Dicks (and a smoker)
+ * on the path toward kick-off so you can get caught and sent forward again.
+ */
+function seedReturnRescueProps(st, fromX) {
+  const minX = BOX_REST_X + 420;
+  const maxX = Math.max(minX + 120, fromX - 180);
+  const span = maxX - minX;
+  if (span < 200) return;
+  const fracs = span > 5000 ? [0.22, 0.48, 0.74] : span > 1800 ? [0.35, 0.7] : [0.55];
+  for (const t of fracs) {
+    const x = minX + span * t;
+    if (st.items.some((it) => it.type === 'littleDick' && Math.abs(it.x - x) < 100)) continue;
+    st.items.push({
+      type: 'littleDick',
+      x,
+      id: `return-dick-${x | 0}`,
+      returnRescue: true,
+    });
+  }
+  // One smoker for a non-Dick forward save, if there's room
+  if (span > 900) {
+    const sx = minX + span * 0.5;
+    if (!st.items.some((it) => it.type === 'smoker' && Math.abs(it.x - sx) < 120)) {
+      st.items.push({
+        type: 'smoker',
+        x: sx,
+        id: `return-smoker-${sx | 0}`,
+        returnRescue: true,
+      });
+    }
+  }
+  st.items.sort((a, b) => a.x - b.x);
+}
+
+function dickReturnRescueGrade() {
+  return {
+    label: 'CAUGHT AGAIN!',
+    sub: 'Little Dick boots you FORWARD this time!',
+    gold: true,
+    epic: true,
+    color: '#fbbf24',
+    glow: '#f59e0b',
+  };
 }
 
 function cullDistantProps(st, box) {
@@ -2613,6 +2669,7 @@ function ToolboxKickGame({
       launchSpeed: 0,
       launchAngleDeg: 45,
       dickCatch: null,
+      returningFromBoot: false,
       chelleReact: null,
       punishRevenge: null,
       caughtCheating: Boolean(caughtCheatingRef.current),
@@ -2902,6 +2959,7 @@ function ToolboxKickGame({
           st.box.spin = 0.2 + st.power * 0.3;
           st.box.onGround = false;
           st.dickCatch = null;
+          st.returningFromBoot = false;
           st.chelleReact = null;
           if (st.punished) spawnPunishmentCoachSwarm(st);
           if (st.qtePractice) {
@@ -2924,6 +2982,7 @@ function ToolboxKickGame({
         const box = st.box;
         const catchSt = st.dickCatch;
         const qteOn = dickQteEnabled(st);
+        const returnRescue = Boolean(catchSt.returnRescue);
         catchSt.frame += 1;
         const f = catchSt.frame;
         // Hold toolbox while he catches / winds up / boots
@@ -2936,15 +2995,23 @@ function ToolboxKickGame({
         box.spin = 0;
 
         if (f === 1) {
-          st.message = qteOn
-            ? 'Little Dick caught the toolbox — get ready to TAP!'
-            : 'Little Dick caught the toolbox!';
-          // Short popup so it doesn’t cover the whole QTE window
-          popupFnRef.current?.(littleDickRebootGrade(), qteOn ? 900 : 2000);
-          if (qteOn) setQteFlash('ready');
+          if (returnRescue) {
+            catchSt.facing = 1;
+            catchSt.qteResolved = true;
+            catchSt.qteSuccess = true;
+            st.message = 'Little Dick grabs it again — sending you FORWARD!';
+            popupFnRef.current?.(dickReturnRescueGrade(), 1800);
+          } else {
+            st.message = qteOn
+              ? 'Little Dick caught the toolbox — get ready to TAP!'
+              : 'Little Dick caught the toolbox!';
+            // Short popup so it doesn’t cover the whole QTE window
+            popupFnRef.current?.(littleDickRebootGrade(), qteOn ? 900 : 2000);
+            if (qteOn) setQteFlash('ready');
+          }
           syncHud(st);
         }
-        if (qteOn && !catchSt.qteResolved) {
+        if (qteOn && !returnRescue && !catchSt.qteResolved) {
           if (f === DICK_QTE_OPEN) {
             setQteFlash('go');
             st.message = 'TAP NOW — Space / tap the screen!';
@@ -2959,9 +3026,11 @@ function ToolboxKickGame({
           }
         }
         if (f === DICK_QTE_TURN) {
-          if (qteOn && catchSt.qteSuccess) {
+          if (returnRescue || (qteOn && catchSt.qteSuccess)) {
             catchSt.facing = 1;
-            st.message = 'He winds up… but you wriggle free!';
+            st.message = returnRescue
+              ? 'He winds up… and boots you back downrange!'
+              : 'He winds up… but you wriggle free!';
           } else {
             catchSt.facing = -1; // betrayal — turns and boots BACK toward the start
             st.message = 'Oh no — he boots it BACK toward the start!';
@@ -2976,15 +3045,18 @@ function ToolboxKickGame({
           const speedFactor = (st.caughtCheating || st.punished) ? CAUGHT_CHEAT_SPEED_FACTOR : 1;
           const speed = (st.launchSpeed || launchSpeedForPower(st.power, tun)) * speedFactor;
           setQteFlash(null);
-          if (qteOn && catchSt.qteSuccess) {
+          if (returnRescue || (qteOn && catchSt.qteSuccess)) {
             box.x = catchSt.x + 14;
             box.y = GROUND_Y - 18;
             applyDickQteBoost(box, speedFactor);
             st.kickFlash = 12;
             st.dickCatch = null;
+            st.returningFromBoot = false;
             st.hitIds = new Set();
-            st.message = 'QTE! Little Dick whiffs — toolbox rockets onward!';
-            popupFnRef.current?.(dickQteSuccessGrade(), 1800);
+            st.message = returnRescue
+              ? 'COMEBACK! Little Dick boots you forward!'
+              : 'QTE! Little Dick whiffs — toolbox rockets onward!';
+            if (!returnRescue) popupFnRef.current?.(dickQteSuccessGrade(), 1800);
             syncHud(st);
           } else {
             box.x = catchSt.x - 12;
@@ -2995,9 +3067,11 @@ function ToolboxKickGame({
             box.spin = -(0.2 + (st.power || 0.5) * 0.3);
             box.onGround = false;
             st.dickCatch = null;
+            st.returningFromBoot = true;
             st.hitIds = new Set(); // re-collide with obstacles on the way back
             ensureReturnPathProps(st, box.x);
-            st.message = 'Little Dick sent it BACK — distance plunging!';
+            seedReturnRescueProps(st, box.x);
+            st.message = 'Little Dick sent it BACK — catch him again to rebound!';
             syncHud(st);
           }
         }
@@ -3037,6 +3111,7 @@ function ToolboxKickGame({
           box.x = react.x + 24;
           box.y = GROUND_Y - 40;
           st.chelleReact = null;
+          st.returningFromBoot = false;
           st.message = st.caughtCheating
             ? 'CHELLE! (but you’re sluggish…)'
             : 'CHELLE! 3× Julies Car!';
@@ -3133,9 +3208,15 @@ function ToolboxKickGame({
                 bumpHitTally(st, 'sack');
                 registerAirCombo(st, box, popupFnRef.current);
                 box.vy = -tun.sackBounce * (0.9 + Math.random() * 0.35);
-                box.vx *= tun.sackBoost;
+                if (st.returningFromBoot) {
+                  box.vx = Math.max(Math.abs(box.vx) * tun.sackBoost, 14);
+                  st.returningFromBoot = false;
+                  st.message = 'Sack trampoline — back downrange!';
+                } else {
+                  box.vx *= tun.sackBoost;
+                  st.message = 'Rubbish sack trampoline!';
+                }
                 box.spin = -box.spin * 1.15;
-                st.message = 'Rubbish sack trampoline!';
                 syncHud(st);
               }
             }
@@ -3148,7 +3229,11 @@ function ToolboxKickGame({
                 bumpHitTally(st, 'smoker');
                 registerAirCombo(st, box, popupFnRef.current);
                 applySmokerBoost(box, (st.caughtCheating || st.punished) ? CAUGHT_CHEAT_SPEED_FACTOR : 1);
-                st.message = 'Driver on a ciggy break — sent flying!';
+                const rescue = Boolean(it.returnRescue) || Boolean(st.returningFromBoot);
+                st.returningFromBoot = false;
+                st.message = rescue
+                  ? 'Smoke break save — back downrange!'
+                  : 'Driver on a ciggy break — sent flying!';
                 popupFnRef.current?.(smokerBoostGrade(false), 1600);
                 syncHud(st);
               }
@@ -3162,6 +3247,7 @@ function ToolboxKickGame({
                 bumpHitTally(st, 'macan');
                 registerAirCombo(st, box, popupFnRef.current);
                 applyMacanBoost(box, (st.caughtCheating || st.punished) ? CAUGHT_CHEAT_SPEED_FACTOR : 1);
+                st.returningFromBoot = false;
                 st.message = 'JULIES CAR!';
                 popupFnRef.current?.(macanBoostGrade(), 2000);
                 syncHud(st);
@@ -3190,18 +3276,22 @@ function ToolboxKickGame({
             if (dx * dx + dy * dy < 40 ** 2 && box.vy > 0 && !st.hitIds.has(id)) {
               st.hitIds.add(id);
               bumpHitTally(st, 'littleDick');
+              const returnRescue = Boolean(it.returnRescue) || Boolean(st.returningFromBoot);
               st.dickCatch = {
                 x: it.x,
                 frame: 0,
-                facing: 1, // pretends he'll boot you onward…
+                facing: 1,
                 qteResolved: false,
                 qteSuccess: false,
+                returnRescue,
               };
               box.vx = 0;
               box.vy = 0;
               box.x = it.x;
               box.y = GROUND_Y - 28;
-              st.message = 'Landed on Little Dick!';
+              st.message = returnRescue
+                ? 'Little Dick again — comeback catch!'
+                : 'Landed on Little Dick!';
               syncHud(st);
             }
           } else if (it.type === 'bird') {
@@ -3482,6 +3572,8 @@ function ToolboxKickGame({
             box.onGround = false;
             st.hitIds = new Set();
             ensureReturnPathProps(st, box.x);
+            seedReturnRescueProps(st, box.x);
+            st.returningFromBoot = true;
             pr.stage = 'flight';
             pr.afterBoot = true;
             pr.shout = true;
@@ -4687,7 +4779,7 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
   const alreadyDone = game?.status === 'won' && game?.roundComplete !== false;
   const forfeited = Boolean(game?.forfeited);
   const punished = Boolean(game?.punished);
-  const investigate = Boolean(game?.investigate) || (Number(game?.runCount) || 1) > 3;
+  const investigate = Boolean(game?.investigate);
   const runCount = Math.max(1, Math.floor(Number(game?.runCount) || 1));
   const speedNerfed = punished;
   const modeLabel = game?.mode === 'allOrNothing' || mode === 'allOrNothing' ? 'All or nothing' : '3 goes';

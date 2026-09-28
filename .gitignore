@@ -65,6 +65,9 @@ node_modules/
 # dotenv environment variables file
 .env
 
+# Import / probe script outputs
+functions/tmp/
+
 # dataconnect generated files
 .dataconnect
 

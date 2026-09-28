@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { readJsonResponse } from '../utils/employeeProfile';
-import { PROCESS_FAMILIES, caseProgressToneClass, formatCaseTimeToResolution, getCaseProgressStatus, stageLabel } from '../utils/peopleCasesAccess';
+import { PROCESS_FAMILIES, caseIsVisibleToEmployee, caseProgressToneClass, formatCaseTimeToResolution, getCaseProgressStatus, stageLabel } from '../utils/peopleCasesAccess';
 import { ALLOW_DELETE_CASES } from '../utils/featureFlags';
 
 const STATUS_OPTIONS = ['', 'open', 'pending_manager', 'pending_hr', 'pending_employee', 'reopened_on_appeal', 'closed'];
@@ -29,6 +29,46 @@ function matchesStatusFilter(item, statusFilter) {
   return item.status === statusFilter;
 }
 
+function formatCaseDate(item) {
+  const raw = item?.eventDate
+    || item?.openedAt
+    || item?.createdAt
+    || item?.closedAt
+    || '';
+  const text = String(raw).slice(0, 10);
+  const match = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (match) return `${match[3]}/${match[2]}/${match[1]}`;
+  if (!raw) return '—';
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return '—';
+  return date.toLocaleDateString('en-GB');
+}
+
+function caseDateSortKey(item) {
+  const raw = item?.eventDate
+    || item?.openedAt
+    || item?.createdAt
+    || item?.closedAt
+    || '';
+  return String(raw).slice(0, 10);
+}
+
+function VisibilityDot({ visible }) {
+  return (
+    <span className="inline-flex items-center gap-2">
+      <span
+        className={`inline-block h-2.5 w-2.5 rounded-full ${
+          visible ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.55)]' : 'bg-red-400 shadow-[0_0_8px_rgba(248,113,113,0.45)]'
+        }`}
+        title={visible ? 'Visible to employee' : 'Hidden from employee'}
+      />
+      <span className={`text-xs ${visible ? 'text-emerald-300' : 'text-red-300'}`}>
+        {visible ? 'Yes' : 'No'}
+      </span>
+    </span>
+  );
+}
+
 export default function DisciplinaryDashboard() {
   const navigate = useNavigate();
   const [cases, setCases] = useState([]);
@@ -40,6 +80,50 @@ export default function DisciplinaryDashboard() {
   const [attentionOnly, setAttentionOnly] = useState(false);
   const [mineOnly, setMineOnly] = useState(false);
   const [deletingId, setDeletingId] = useState('');
+  const [publishingId, setPublishingId] = useState('');
+
+  const setEmployeeVisibility = async (item, publish) => {
+    const label = item.title || item.id;
+    if (publish) {
+      if (!window.confirm(`Publish "${label}" to the employee portal?\n\nThey will see this case under My cases.`)) {
+        return;
+      }
+    } else if (!window.confirm(`Hide "${label}" from the employee portal?\n\nThey will no longer see this case under My cases.`)) {
+      return;
+    }
+    setPublishingId(item.id);
+    setError('');
+    try {
+      const response = await fetch('/api/updatePeopleCase', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ caseId: item.id, publishToEmployee: publish }),
+      });
+      const data = (await readJsonResponse(response)) || {};
+      if (!response.ok) throw new Error(data.error || 'Failed to update visibility.');
+      const nowIso = new Date().toISOString();
+      setCases((prev) => prev.map((row) => {
+        if (row.id !== item.id) return row;
+        if (publish) {
+          return {
+            ...row,
+            publishedToEmployeeAt: nowIso,
+            unpublishedFromEmployeeAt: null,
+          };
+        }
+        return {
+          ...row,
+          publishedToEmployeeAt: null,
+          unpublishedFromEmployeeAt: nowIso,
+        };
+      }));
+    } catch (err) {
+      setError(err.message || 'Failed to update visibility.');
+    } finally {
+      setPublishingId('');
+    }
+  };
 
   const deleteCase = async (item) => {
     const label = item.title || item.id;
@@ -93,7 +177,7 @@ export default function DisciplinaryDashboard() {
 
   const filteredCases = useMemo(() => {
     const query = search.trim().toLowerCase();
-    return cases.filter((item) => {
+    const rows = cases.filter((item) => {
       if (!matchesStatusFilter(item, statusFilter)) return false;
       if (!query) return true;
       const haystack = [
@@ -105,10 +189,13 @@ export default function DisciplinaryDashboard() {
         item.processFamily,
         item.stage,
         item.status,
+        formatCaseDate(item),
         getCaseProgressStatus(item).label,
       ].filter(Boolean).join(' ').toLowerCase();
       return haystack.includes(query);
     });
+    rows.sort((left, right) => caseDateSortKey(right).localeCompare(caseDateSortKey(left)));
+    return rows;
   }, [cases, search, statusFilter]);
 
   const queues = useMemo(() => {
@@ -211,6 +298,7 @@ export default function DisciplinaryDashboard() {
             <table className="w-full">
               <thead>
                 <tr className="bg-[#0b1220] border-b border-[#1a2540]">
+                  <th className="px-5 py-3 text-left text-xs text-slate-400 uppercase">Date</th>
                   <th className="px-5 py-3 text-left text-xs text-slate-400 uppercase">Title</th>
                   <th className="px-5 py-3 text-left text-xs text-slate-400 uppercase">Employee</th>
                   <th className="px-5 py-3 text-left text-xs text-slate-400 uppercase">Owner</th>
@@ -218,14 +306,19 @@ export default function DisciplinaryDashboard() {
                   <th className="px-5 py-3 text-left text-xs text-slate-400 uppercase">Progress</th>
                   <th className="px-5 py-3 text-left text-xs text-slate-400 uppercase">Time to resolution</th>
                   <th className="px-5 py-3 text-left text-xs text-slate-400 uppercase">SLA</th>
+                  <th className="px-5 py-3 text-left text-xs text-slate-400 uppercase">Visible to employee</th>
                   <th className="px-5 py-3 text-right text-xs text-slate-400 uppercase">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#1a2540]">
                 {filteredCases.map((item) => {
                   const progress = getCaseProgressStatus(item);
+                  const visible = caseIsVisibleToEmployee(item);
                   return (
                   <tr key={item.id} className="hover:bg-[#0b1220]">
+                    <td className="px-5 py-3 text-sm text-slate-300 whitespace-nowrap">
+                      {formatCaseDate(item)}
+                    </td>
                     <td className="px-5 py-3 text-sm text-white">
                       {item.title || '—'}
                       {item.suspensionActive && (
@@ -252,8 +345,25 @@ export default function DisciplinaryDashboard() {
                       {formatCaseTimeToResolution(item)}
                     </td>
                     <td className="px-5 py-3 text-sm text-slate-300">{item.slaDueAt || '—'}</td>
+                    <td className="px-5 py-3">
+                      <VisibilityDot visible={visible} />
+                    </td>
                     <td className="px-5 py-3 text-right">
                       <div className="inline-flex items-center gap-3">
+                        <button
+                          type="button"
+                          onClick={() => setEmployeeVisibility(item, !visible)}
+                          disabled={publishingId === item.id}
+                          className={`text-sm disabled:opacity-50 ${
+                            visible
+                              ? 'text-amber-300 hover:text-amber-200'
+                              : 'text-emerald-300 hover:text-emerald-200'
+                          }`}
+                        >
+                          {publishingId === item.id
+                            ? (visible ? 'Hiding…' : 'Publishing…')
+                            : (visible ? 'Hide' : 'Publish to employee')}
+                        </button>
                         <button
                           type="button"
                           onClick={() => navigate(`/dashboard/hr/cases/${item.id}`)}
@@ -278,7 +388,7 @@ export default function DisciplinaryDashboard() {
                 })}
                 {filteredCases.length === 0 && (
                   <tr>
-                    <td colSpan={8} className="px-5 py-6 text-sm text-slate-500 text-center">
+                    <td colSpan={10} className="px-5 py-6 text-sm text-slate-500 text-center">
                       No cases found.
                     </td>
                   </tr>

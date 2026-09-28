@@ -294,7 +294,46 @@ function createPeopleCasesApi({
       hearingScheduledTime: item.hearingScheduledTime || '',
       hearingLocation: item.hearingLocation || '',
       hearingInviteDocumentId: item.hearingInviteDocumentId || '',
+      publishedToEmployeeAt: item.publishedToEmployeeAt || null,
+      unpublishedFromEmployeeAt: item.unpublishedFromEmployeeAt || null,
+      visibleToEmployee: caseIsVisibleToEmployee(item),
     };
+  }
+
+  /** Whether the case should appear on the employee's My cases list. */
+  function caseIsVisibleToEmployee(caseData = {}) {
+    if (caseData.unpublishedFromEmployeeAt) return false;
+    if (caseData.publishedToEmployeeAt) return true;
+    // Auto / legacy: already shared via invite, notes, file note, or outcome.
+    return Boolean(
+      caseData.hearingInviteIssuedAt
+      || caseData.fileNoteIssuedAt
+      || caseData.outcomeIssuedAt
+      || caseData.interviewNotesIssuedAt
+      || caseData.status === 'pending_employee',
+    );
+  }
+
+  function applyPublishToEmployee(patch, session, { publish }) {
+    const now = admin.firestore.FieldValue.serverTimestamp();
+    if (publish) {
+      patch.publishedToEmployeeAt = now;
+      patch.publishedToEmployeeByUid = session.profile.uid;
+      patch.unpublishedFromEmployeeAt = null;
+      patch.unpublishedFromEmployeeByUid = '';
+    } else {
+      patch.unpublishedFromEmployeeAt = now;
+      patch.unpublishedFromEmployeeByUid = session.profile.uid;
+      patch.publishedToEmployeeAt = null;
+      patch.publishedToEmployeeByUid = '';
+    }
+  }
+
+  /** Soft-publish when issuing materials, unless the case was explicitly unpublished. */
+  function ensurePublishedToEmployee(patch, existing, session) {
+    if (existing.unpublishedFromEmployeeAt && !patch.publishedToEmployeeAt) return;
+    if (existing.publishedToEmployeeAt || patch.publishedToEmployeeAt) return;
+    applyPublishToEmployee(patch, session, { publish: true });
   }
 
   function portalHtmlHasLetterhead(html) {
@@ -383,6 +422,7 @@ function createPeopleCasesApi({
       suspensionActive: Boolean(caseData.suspensionActive || caseData.precautionarySuspension),
       precautionarySuspension: Boolean(caseData.precautionarySuspension || caseData.suspensionActive),
       suspensionReason: caseData.suspensionReason || '',
+      dismissalPossible: Boolean(caseData.dismissalPossible),
     });
   }
 
@@ -627,6 +667,81 @@ function createPeopleCasesApi({
     }),
   );
 
+  function isOutcomeLetterDocument(doc = {}) {
+    const type = String(doc.documentType || '');
+    const name = String(doc.fileName || '').toLowerCase();
+    const template = String(doc.templateId || '');
+    return type === 'outcome'
+      || template === 'outcome_letter'
+      || name.startsWith('outcome letter');
+  }
+
+  /** Personnel records must never keep disciplinary outcome letters — remove any that slipped through. */
+  async function scrubRecordOutcomeArtifacts(caseSnap, related) {
+    const caseData = caseSnap.data() || {};
+    if ((caseData.processFamily || '') !== 'record') {
+      return { caseData, related, scrubbed: false };
+    }
+
+    const outcomeDocs = (related.documents || []).filter((doc) => isOutcomeLetterDocument(doc));
+    const needsCaseClear = Boolean(
+      caseData.outcomePreset
+      || (Array.isArray(caseData.outcomePackSteps) && caseData.outcomePackSteps.length)
+      || caseData.outcomeDetails
+      || caseData.evidenceConsideration
+      || caseData.expectedStandard
+      || caseData.supportMonitoringRetraining
+      || caseData.appealWindowEndsAt
+    );
+
+    if (!outcomeDocs.length && !needsCaseClear) {
+      return { caseData, related, scrubbed: false };
+    }
+
+    const batch = db.batch();
+    for (const doc of outcomeDocs) {
+      batch.delete(db.collection('disciplinary_documents').doc(doc.id));
+    }
+    if (needsCaseClear) {
+      batch.update(caseSnap.ref, {
+        outcomePreset: '',
+        outcomePackSteps: [],
+        outcomeDetails: '',
+        evidenceConsideration: '',
+        expectedStandard: '',
+        supportMonitoringRetraining: '',
+        appealWindowEndsAt: '',
+        decisionMakerUid: caseData.decisionMakerUid && caseData.outcomePreset
+          ? ''
+          : (caseData.decisionMakerUid || ''),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    }
+    await batch.commit();
+
+    const nextCaseData = needsCaseClear
+      ? {
+        ...caseData,
+        outcomePreset: '',
+        outcomePackSteps: [],
+        outcomeDetails: '',
+        evidenceConsideration: '',
+        expectedStandard: '',
+        supportMonitoringRetraining: '',
+        appealWindowEndsAt: '',
+      }
+      : caseData;
+
+    return {
+      caseData: nextCaseData,
+      related: {
+        ...related,
+        documents: (related.documents || []).filter((doc) => !isOutcomeLetterDocument(doc)),
+      },
+      scrubbed: true,
+    };
+  }
+
   const getPeopleCase = onRequest(
     { region: 'europe-west2' },
     withCors(async (req, res) => {
@@ -646,9 +761,12 @@ function createPeopleCasesApi({
       try {
         const caseSnap = await loadCaseOrFail(caseId, res);
         if (!caseSnap) return;
-        const caseData = caseSnap.data();
+        let caseData = caseSnap.data();
 
-        const related = await listRelated(caseId);
+        let related = await listRelated(caseId);
+        const scrubbed = await scrubRecordOutcomeArtifacts(caseSnap, related);
+        caseData = scrubbed.caseData;
+        related = scrubbed.related;
 
         let history = [];
         let coachingHistory = [];
@@ -708,7 +826,10 @@ function createPeopleCasesApi({
             }));
         }
 
-        const serialized = serializeCase(caseSnap);
+        const serialized = serializeCase({
+          id: caseSnap.id,
+          data: () => caseData,
+        });
         const stage = serialized.stage;
         const family = serialized.processFamily || 'disciplinary';
         const stageTemplates = templatesForStage(
@@ -957,6 +1078,11 @@ function createPeopleCasesApi({
           suspensionFrom: '',
           suspensionTo: '',
           suspensionReason: '',
+          dismissalPossible: false,
+          publishedToEmployeeAt: null,
+          publishedToEmployeeByUid: '',
+          unpublishedFromEmployeeAt: null,
+          unpublishedFromEmployeeByUid: '',
           outcomePreset: isSamsara ? 'samsara_coaching' : '',
           outcomePackSteps: [],
           warningEffectiveAt: '',
@@ -1067,6 +1193,17 @@ function createPeopleCasesApi({
           events.push(['owner_assigned', { ownerManagerUid: body.ownerManagerUid }]);
         }
 
+        if (body.publishToEmployee === true || body.publishToEmployee === false) {
+          applyPublishToEmployee(patch, session, { publish: body.publishToEmployee === true });
+          events.push([
+            body.publishToEmployee === true ? 'published_to_employee' : 'unpublished_from_employee',
+            {
+              byUid: session.profile.uid,
+              byName: session.profile.fullName || session.profile.email || '',
+            },
+          ]);
+        }
+
         if (body.processFamily !== undefined) {
           const nextFamily = toTrimmedString(body.processFamily).toLowerCase();
           if (!PROCESS_FAMILIES.has(nextFamily)) {
@@ -1165,6 +1302,23 @@ function createPeopleCasesApi({
 
         if (body.closeWithNotes === true) {
           if (!(await assertNoPendingAmendments(caseId, res))) return;
+          const family = existing.processFamily || 'disciplinary';
+          if (family === 'record') {
+            patch.stage = 'closed';
+            patch.status = 'closed';
+            patch.closedAt = admin.firestore.FieldValue.serverTimestamp();
+            patch.closedByUid = session.profile.uid;
+            patch.closedByName = session.profile.fullName || session.profile.email || '';
+            patch.appealWindowEndsAt = '';
+            patch.outcomePreset = '';
+            patch.outcomePackSteps = [];
+            const notes = toTrimmedString(body.closeNotes);
+            if (notes) patch.closeNotes = notes;
+            events.push(['case_closed', {
+              processFamily: 'record',
+              closedByUid: session.profile.uid,
+            }]);
+          } else {
           const notes = toTrimmedString(body.closeNotes);
           if (!notes) {
             res.status(400).json({ error: 'Add notes explaining why the case is being closed.' });
@@ -1185,17 +1339,14 @@ function createPeopleCasesApi({
           patch.stage = 'closed';
           patch.status = 'closed';
           patch.closedAt = admin.firestore.FieldValue.serverTimestamp();
-          if ((existing.processFamily || '') === 'record') {
-            patch.appealWindowEndsAt = '';
-          } else {
-            patch.appealWindowEndsAt = addWorkingDays(new Date(), 5);
-          }
+          patch.appealWindowEndsAt = addWorkingDays(new Date(), 5);
           events.push(['closed_with_notes', {
             outcomePreset: preset.id,
             notes,
             closedByUid: session.profile.uid,
             closedByName: session.profile.fullName || session.profile.email || '',
           }]);
+          }
         }
 
         if (body.closeAsInformalAction === true) {
@@ -1347,6 +1498,7 @@ function createPeopleCasesApi({
           patch.fileNoteIssuedByName = issuerName;
           patch.fileNoteManagerSignedAt = managerSignature.signedAt;
           patch.fileNoteEmployeeSignStatus = 'pending';
+          ensurePublishedToEmployee(patch, existing, session);
           const fileNoteEffective = issuedAt.toISOString().slice(0, 10);
           const fileNoteExpires = new Date(`${fileNoteEffective}T00:00:00Z`);
           fileNoteExpires.setUTCMonth(fileNoteExpires.getUTCMonth() + 6);
@@ -1429,6 +1581,11 @@ function createPeopleCasesApi({
             patch.suspensionReason = toTrimmedString(body.suspensionReason) || 'Suspended pending disciplinary hearing';
           }
 
+          const dismissalPossible = body.dismissalPossible === true
+            || body.dismissalPossible === 'true'
+            || body.dismissalPossible === 1;
+          patch.dismissalPossible = dismissalPossible;
+
           const hearingManagerUid = toTrimmedString(patch.hearingManagerUid || existing.hearingManagerUid);
           const hearingManager = hearingManagerUid ? await getUserProfile(hearingManagerUid) : null;
           const resolvedLocation = hearingLocation || 'Country Lion';
@@ -1452,6 +1609,7 @@ function createPeopleCasesApi({
             suspensionActive: Boolean(body.precautionarySuspension || existing.suspensionActive),
             precautionarySuspension: Boolean(body.precautionarySuspension || existing.precautionarySuspension || existing.suspensionActive),
             suspensionReason: toTrimmedString(body.suspensionReason) || existing.suspensionReason || '',
+            dismissalPossible,
           });
           const fileName = `Hearing invite - ${hearingScheduledAt}.html`;
           const now = admin.firestore.FieldValue.serverTimestamp();
@@ -1519,6 +1677,7 @@ function createPeopleCasesApi({
           patch.hearingInviteIssuedAt = now;
           patch.hearingInviteDocumentId = docRef.id;
           patch.status = 'pending_employee';
+          ensurePublishedToEmployee(patch, existing, session);
           events.push(['hearing_invite_issued', {
             documentId: docRef.id,
             hearingScheduledAt,
@@ -1528,6 +1687,7 @@ function createPeopleCasesApi({
             noticeWorkingHours: Math.round(noticeWorkingHours * 10) / 10,
             shortNotice,
             evidenceDocumentIds: releasedEvidenceIds,
+            dismissalPossible,
           }]);
           calendarEvents.push(calendarEventFromOptions(
             `hearing-${caseId}-${hearingScheduledAt}.ics`,
@@ -1637,7 +1797,7 @@ function createPeopleCasesApi({
           ));
         }
 
-        if (body.outcomePreset) {
+        if (body.outcomePreset && (existing.processFamily || '') !== 'record') {
           const preset = outcomePresetById(body.outcomePreset);
           if (!preset) {
             res.status(400).json({ error: 'Invalid outcome preset.' });
@@ -1949,6 +2109,7 @@ function createPeopleCasesApi({
             patch.closedByName = session.profile.fullName || session.profile.email || '';
             patch.appealWindowEndsAt = appealWindowEndsAt;
             patch.outcomeIssuedAt = outcomeNow;
+            ensurePublishedToEmployee(patch, existing, session);
             events.push(['outcome_finalized', {
               outcomePreset: preset.id,
               appealWindowEndsAt,
@@ -1978,7 +2139,7 @@ function createPeopleCasesApi({
           if (!(await assertNoPendingAmendments(caseId, res))) return;
           const family = existing.processFamily || 'disciplinary';
           const currentStage = normalizeStage(family, existing.stage);
-          if (['outcome_pack', 'appeal'].includes(currentStage)) {
+          if (family !== 'record' && ['outcome_pack', 'appeal'].includes(currentStage)) {
             const relatedForClose = await listRelated(caseId);
             const missing = missingRequiredTemplates({
               processFamily: family,
@@ -1997,23 +2158,31 @@ function createPeopleCasesApi({
             }
           }
           const steps = patch.outcomePackSteps || existing.outcomePackSteps || [];
-          const incomplete = steps.filter((step) => step.id !== 'mark_complete' && !step.done);
-          if (incomplete.length && !body.forceClose) {
-            res.status(400).json({ error: 'Complete outcome pack steps before closing, or force close with reason.' });
-            return;
+          if (family !== 'record') {
+            const incomplete = steps.filter((step) => step.id !== 'mark_complete' && !step.done);
+            if (incomplete.length && !body.forceClose) {
+              res.status(400).json({ error: 'Complete outcome pack steps before closing, or force close with reason.' });
+              return;
+            }
           }
           patch.stage = 'closed';
           patch.status = 'closed';
           patch.closedAt = admin.firestore.FieldValue.serverTimestamp();
+          patch.closedByUid = session.profile.uid;
+          patch.closedByName = session.profile.fullName || session.profile.email || '';
           if (family === 'record') {
             patch.appealWindowEndsAt = '';
+            patch.outcomePreset = '';
+            patch.outcomePackSteps = [];
+            const notes = toTrimmedString(body.closeNotes);
+            if (notes) patch.closeNotes = notes;
           } else {
             patch.appealWindowEndsAt = addWorkingDays(new Date(), 5);
-          }
-          if (Array.isArray(steps)) {
-            patch.outcomePackSteps = steps.map((step) => (
-              step.id === 'mark_complete' ? { ...step, done: true } : step
-            ));
+            if (Array.isArray(steps)) {
+              patch.outcomePackSteps = steps.map((step) => (
+                step.id === 'mark_complete' ? { ...step, done: true } : step
+              ));
+            }
           }
           events.push(['case_closed', {
             appealWindowEndsAt: patch.appealWindowEndsAt || '',
@@ -2297,6 +2466,12 @@ function createPeopleCasesApi({
         };
         if (caseData.status !== 'closed' && normalizeStage(caseData.processFamily || 'disciplinary', caseData.stage) !== 'closed') {
           casePatch.status = 'open';
+        }
+        if (!caseData.unpublishedFromEmployeeAt && !caseData.publishedToEmployeeAt) {
+          casePatch.publishedToEmployeeAt = now;
+          casePatch.publishedToEmployeeByUid = session.profile.uid;
+          casePatch.unpublishedFromEmployeeAt = null;
+          casePatch.unpublishedFromEmployeeByUid = '';
         }
         await caseSnap.ref.update(casePatch);
         await appendEvent(caseId, 'minutes_issued', {
@@ -2591,14 +2766,18 @@ function createPeopleCasesApi({
           db.collection('disciplinary_documents').where('employeeUid', '==', uid).limit(100).get(),
         ]);
 
-        const pendingMinutes = minutesSnap.docs
-          .map((doc) => ({ id: doc.id, ...doc.data(), createdAt: serializeTimestamp(doc.data().createdAt) }))
-          .filter((item) => item.status === 'issued');
-
         const casesById = Object.fromEntries(
           casesSnap.docs.map((doc) => [doc.id, { id: doc.id, ...doc.data() }]),
         );
-        const cases = casesSnap.docs.map((doc) => serializeEmployeeOwnCase(doc));
+        const cases = casesSnap.docs
+          .map((doc) => serializeEmployeeOwnCase(doc))
+          .filter((item) => item.visibleToEmployee);
+        const visibleCaseIds = new Set(cases.map((item) => item.id));
+
+        const pendingMinutes = minutesSnap.docs
+          .map((doc) => ({ id: doc.id, ...doc.data(), createdAt: serializeTimestamp(doc.data().createdAt) }))
+          .filter((item) => item.status === 'issued' && visibleCaseIds.has(item.caseId));
+
         const prompts = promptsSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
         const allEmployeeDocs = docsSnap.docs.map((doc) => ({
           id: doc.id,
@@ -2612,6 +2791,7 @@ function createPeopleCasesApi({
         const hearingManagerCache = {};
         const documents = [];
         for (const item of allEmployeeDocs) {
+          if (item.caseId && !visibleCaseIds.has(item.caseId)) continue;
           const caseData = casesById[item.caseId] || {};
           const caseHasHearingInvite = Boolean(caseData.hearingInviteIssuedAt);
           const include = (

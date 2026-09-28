@@ -4,7 +4,14 @@
  * Re-open today's finished Toolbox rounds for another 3 goes, keeping best
  * distance (leaderboard) intact.
  *
- * Usage: node functions/scripts/reopenToolboxKickDay.js [YYYY-MM-DD]
+ * Usage:
+ *   node functions/scripts/reopenToolboxKickDay.js [YYYY-MM-DD]
+ *   node functions/scripts/reopenToolboxKickDay.js [YYYY-MM-DD] --force
+ *   node functions/scripts/reopenToolboxKickDay.js --force --name "Dale"
+ *
+ * --force also resets players who still have an open mid-round (clears attempts,
+ * keeps their best distance).
+ * --name filters by fullName / email substring (case-insensitive).
  */
 const https = require('https');
 const fs = require('fs');
@@ -136,7 +143,14 @@ function isFullyDone(fields) {
 }
 
 async function main() {
-  const dayKey = String(process.argv[2] || londonDayKey()).trim();
+  const args = process.argv.slice(2);
+  const force = args.includes('--force');
+  const nameIdx = args.findIndex((a) => a === '--name');
+  const nameFilter = nameIdx >= 0 ? String(args[nameIdx + 1] || '').trim().toLowerCase() : '';
+  const dayKey = String(
+    args.find((a, i) => a !== '--force' && a !== '--name' && !(nameIdx >= 0 && i === nameIdx + 1))
+      || londonDayKey(),
+  ).trim();
   const conf = JSON.parse(fs.readFileSync(CONF, 'utf8'));
   let token = await refreshAccessToken(conf);
 
@@ -164,6 +178,7 @@ async function main() {
   const rows = Array.isArray(res.body) ? res.body.filter((r) => r && r.document) : [];
   let reopened = 0;
   let skippedOpen = 0;
+  let skippedName = 0;
   let failed = 0;
   const names = [];
 
@@ -171,16 +186,31 @@ async function main() {
     const name = row.document.name;
     const fields = row.document.fields || {};
     const fullName = field(fields.fullName) || field(fields.email) || name.split('/').pop();
+    const email = field(fields.email) || '';
     const distanceM = field(fields.distanceM) || 0;
     const attempts = field(fields.attempts) || [];
+    const status = field(fields.status);
 
-    if (!isFullyDone(fields)) {
+    if (nameFilter) {
+      const hay = `${fullName} ${email}`.toLowerCase();
+      if (!hay.includes(nameFilter)) {
+        skippedName += 1;
+        continue;
+      }
+    }
+
+    const eligible = force
+      ? (status === 'won' || status === 'in_progress')
+      : isFullyDone(fields);
+
+    if (!eligible) {
       skippedOpen += 1;
       continue;
     }
 
     // Keep best distance on the day board (status won) while unlocking more goes
     // via roundComplete:false. Leaderboard filters status===won.
+    const stamp = new Date().toISOString();
     const patch = {
       fields: {
         status: { stringValue: 'won' },
@@ -188,9 +218,9 @@ async function main() {
         attempts: { arrayValue: { values: [] } },
         forfeited: { booleanValue: false },
         forfeitReason: { nullValue: null },
-        bonusReopenAt: { timestampValue: new Date().toISOString() },
-        bonusReopenReason: { stringValue: 'toolbox-2.0-extra-goes' },
-        updatedAt: { timestampValue: new Date().toISOString() },
+        bonusReopenAt: { timestampValue: stamp },
+        bonusReopenReason: { stringValue: `bonus-extra-go-${dayKey}` },
+        updatedAt: { timestampValue: stamp },
       },
     };
 
@@ -218,9 +248,12 @@ async function main() {
   console.log(JSON.stringify({
     ok: failed === 0,
     dayKey,
+    force,
+    nameFilter: nameFilter || null,
     scanned: rows.length,
     reopened,
     skippedAlreadyOpen: skippedOpen,
+    skippedName,
     failed,
     players: names,
   }, null, 2));

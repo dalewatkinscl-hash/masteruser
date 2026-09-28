@@ -4,10 +4,6 @@ import { useAuth } from '../context/AuthContext';
 import EmployeeProfileCard from '../components/EmployeeProfileCard';
 import EmployeeDisciplinaryPanel from '../components/EmployeeDisciplinaryPanel';
 import EmployeeSharePointDocuments from '../components/EmployeeSharePointDocuments';
-import EmployeeFunPanel from '../components/EmployeeFunPanel';
-import FunErrorBoundary from '../components/FunErrorBoundary';
-import SuggestionBoxPanel from '../components/SuggestionBoxPanel';
-import PollsPanel from '../components/PollsPanel';
 import MergeEmployeeCard from '../components/MergeEmployeeCard';
 import YearsOfServiceBadge from '../components/YearsOfServiceBadge';
 import PortalAccessFields from '../components/PortalAccessFields';
@@ -33,9 +29,6 @@ const TAB_IDS = {
   performance: 'performance',
   cases: 'cases',
   documents: 'documents',
-  fun: 'fun',
-  polls: 'polls',
-  suggestions: 'suggestions',
   access: 'access',
   admin: 'admin',
 };
@@ -224,9 +217,6 @@ export default function EmployeeDetail() {
     }
     items.push(
       { id: TAB_IDS.documents, label: 'Documents' },
-      { id: TAB_IDS.fun, label: 'Fun' },
-      { id: TAB_IDS.polls, label: 'Polls' },
-      { id: TAB_IDS.suggestions, label: 'Suggestions' },
     );
     if (canViewPortal) {
       items.push({
@@ -677,30 +667,6 @@ export default function EmployeeDetail() {
                   setProfileMeta((current) => (current ? { ...current, ...mapping } : current));
                 }}
               />
-            )}
-
-            {activeTab === TAB_IDS.fun && (
-              <div className="flex flex-col xl:flex-row gap-6 items-start">
-                <div className="min-w-0 flex-1 w-full">
-                  <FunErrorBoundary>
-                    <EmployeeFunPanel currentUserUid={user?.uid} isAdmin={isAdmin} />
-                  </FunErrorBoundary>
-                </div>
-                <aside className="w-full xl:w-[22rem] xl:sticky xl:top-4 flex-shrink-0">
-                  <div className="rounded-xl border border-[#1a2540] bg-[#0b1220]/60 p-4">
-                    <p className="text-[10px] font-mono uppercase tracking-[0.18em] text-indigo-400 mb-3">Polls</p>
-                    <PollsPanel compact />
-                  </div>
-                </aside>
-              </div>
-            )}
-
-            {activeTab === TAB_IDS.polls && (
-              <PollsPanel />
-            )}
-
-            {activeTab === TAB_IDS.suggestions && (
-              <SuggestionBoxPanel currentUserUid={user?.uid} />
             )}
 
             {activeTab === TAB_IDS.access && canViewPortal && (

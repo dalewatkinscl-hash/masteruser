@@ -36,12 +36,14 @@ export function buildHearingInviteHtml({
   suspensionActive = false,
   precautionarySuspension = false,
   suspensionReason = '',
+  dismissalPossible = false,
   evidenceDocumentNames = [],
 }) {
   const when = formatHearingWhenLabel(hearingScheduledAt, hearingScheduledTime);
   const location = String(hearingLocation || '').trim() || companyName || 'Country Lion';
   const notes = String(extraNotes || '').trim();
   const showSuspension = Boolean(suspensionActive || precautionarySuspension);
+  const showDismissal = Boolean(dismissalPossible);
   const signerName = String(hearingManagerName || issuedByName || 'Management').trim() || 'Management';
   const issuedDate = String(issuedAtLabel || new Date().toLocaleDateString('en-GB')).trim();
   const allegationDetails = String(caseSummary || caseTitle || 'the matter under consideration — further particulars will be confirmed at the hearing').trim();
@@ -52,6 +54,9 @@ export function buildHearingInviteHtml({
     ? `<ul>${evidenceNames.map((name) => `<li>${escapeHtml(name)}</li>`).join('')}</ul>
        <p>Copies of these documents are enclosed with this invitation and/or available via the Employee Portal for you to review before the hearing.</p>`
     : `<p>Copies of any written evidence, investigatory notes, or witness statements that will be discussed at the hearing are enclosed with this invitation and/or available via the Employee Portal. Please review them carefully so you can prepare your response.</p>`;
+  const outcomesParagraph = showDismissal
+    ? `<p>At the hearing, a range of outcomes may be considered. Depending on the findings, this may include no further action, informal action, a written warning, a final written warning, or other appropriate action. <strong>Dismissal is a possible outcome of this hearing.</strong></p>`
+    : `<p>At the hearing, a range of outcomes may be considered. Depending on the findings, this may include no further action, informal action, a written warning, a final written warning, or other appropriate action.</p>`;
 
   const bodyHtml = `
   <p class="date">${escapeHtml(issuedDate)}</p>
@@ -69,7 +74,7 @@ export function buildHearingInviteHtml({
   ${evidenceListHtml}
   ${showSuspension ? `<p>You should be aware that due to the nature of the concerns raised${suspensionReason ? ` (${escapeHtml(suspensionReason)})` : ''}, you will be suspended on full pay pending the outcome of the disciplinary hearing.</p>` : ''}
   <p><strong>Possible outcomes</strong></p>
-  <p>At the hearing, a range of outcomes may be considered. Depending on the findings, this may include no further action, informal action, a written warning, a final written warning, or other appropriate action. <strong>Dismissal is a possible outcome of this hearing.</strong></p>
+  ${outcomesParagraph}
   <p><strong>Your right to be accompanied</strong></p>
   <p>You have a statutory right to be accompanied at this hearing by a companion. If you wish to be accompanied, please inform us of the individual you wish to attend as soon as possible. If your companion cannot attend, you may ask to postpone the hearing by up to five working days.</p>
   <p>Failure to attend may result in a decision being made in your absence. Please confirm attendance via the Employee Portal where possible. If you cannot attend, contact your manager as soon as you can.</p>

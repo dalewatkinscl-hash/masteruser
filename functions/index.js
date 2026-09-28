@@ -10324,7 +10324,7 @@ async function buildToolboxKickLeaderboardBundle(dayKey) {
       caughtCheating: Boolean(data.caughtCheating),
       punished: Boolean(data.punished),
       runCount,
-      investigate: runCount > 3,
+      investigate: runCount > 25,
       shameScore: Boolean(data.shameScore),
       resultLabelOverride: data.resultLabelOverride ? String(data.resultLabelOverride) : null,
       leaderboardGif: data.leaderboardGif ? String(data.leaderboardGif) : null,

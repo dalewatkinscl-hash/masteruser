@@ -72,7 +72,8 @@ function serializeToolboxKickGame(data = {}) {
     runCount,
     reloadCount: Math.max(0, Math.floor(Number(data.reloadCount) || 0)),
     extraRuns: Math.max(0, runCount - 1),
-    investigate: runCount > 3,
+    // Soft threshold — bonus reopen days bump runCount without meaning cheat.
+    investigate: runCount > 25,
     forfeited: Boolean(data.forfeited),
     forfeitReason: data.forfeitReason || null,
     startedAt: data.startedAt?.toDate?.()?.toISOString?.() || data.startedAt || null,

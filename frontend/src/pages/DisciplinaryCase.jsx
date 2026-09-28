@@ -71,6 +71,22 @@ function formatHistoryDate(value) {
   return date.toLocaleDateString('en-GB');
 }
 
+function formatDateTimeUk(value) {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    const text = String(value);
+    return text.length >= 16 ? text.slice(0, 16).replace('T', ' ') : text;
+  }
+  return date.toLocaleString('en-GB', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
 function readFileAsBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -252,6 +268,7 @@ export default function DisciplinaryCase() {
     hearingInviteNotes: '',
     suspensionPending: false,
     suspensionReason: '',
+    dismissalPossible: false,
   });
   const [employees, setEmployees] = useState([]);
   const [employeesLoading, setEmployeesLoading] = useState(false);
@@ -458,6 +475,9 @@ export default function DisciplinaryCase() {
         hearingInviteNotes: data.case.hearingInviteNotes || prev.hearingInviteNotes || '',
         suspensionPending: data.case.suspensionActive ?? data.case.precautionarySuspension ?? prev.suspensionPending ?? false,
         suspensionReason: data.case.suspensionReason || prev.suspensionReason || '',
+        dismissalPossible: Boolean(
+          data.case.dismissalPossible ?? prev.dismissalPossible ?? false,
+        ),
       }));
     }
   };
@@ -1754,6 +1774,7 @@ export default function DisciplinaryCase() {
     suspensionActive: hearingForm.suspensionPending,
     precautionarySuspension: hearingForm.suspensionPending,
     suspensionReason: hearingForm.suspensionReason || '',
+    dismissalPossible: Boolean(hearingForm.dismissalPossible),
   });
 
   const handlePrintInvite = async () => {
@@ -1783,6 +1804,7 @@ export default function DisciplinaryCase() {
       acknowledgeShortNotice,
       precautionarySuspension: hearingForm.suspensionPending,
       suspensionReason: hearingForm.suspensionReason || '',
+      dismissalPossible: Boolean(hearingForm.dismissalPossible),
     });
     if (!result?.ok) return;
     setAcknowledgeShortNotice(false);
@@ -2161,6 +2183,34 @@ export default function DisciplinaryCase() {
               />
             </Field>
           )}
+
+          <div className="rounded-lg border border-[#1a2540] bg-[#060e1a]/50 px-4 py-3 flex items-center justify-between gap-4">
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-white">This hearing may result in dismissal</p>
+              <p className="text-xs text-slate-500 mt-0.5">
+                When on, the invite letter states that dismissal is a possible outcome.
+              </p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={hearingForm.dismissalPossible}
+              aria-label="This hearing may result in dismissal"
+              onClick={() => setHearingForm((prev) => ({
+                ...prev,
+                dismissalPossible: !prev.dismissalPossible,
+              }))}
+              className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors ${
+                hearingForm.dismissalPossible ? 'bg-indigo-500' : 'bg-slate-600'
+              }`}
+            >
+              <span
+                className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
+                  hearingForm.dismissalPossible ? 'translate-x-6' : 'translate-x-1'
+                }`}
+              />
+            </button>
+          </div>
 
           <div ref={hearingScheduleRef} className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <Field label="Hearing date">
@@ -2779,50 +2829,125 @@ export default function DisciplinaryCase() {
     }
 
     if (family === 'record') {
-      if (viewingPastStage || currentStage === 'closed') {
-        return (
-          <div className="space-y-6">
-            <StepCard title={currentStage === 'closed' ? 'Record closed' : `Viewing — ${stageLabel(displayStage)}`}>
-              <p className="text-sm text-slate-400">
-                {currentStage === 'closed'
-                  ? 'This personnel record is closed. Documents and interviews remain available below.'
-                  : 'Historical view of this stage. Documentation and interviews for this stage are listed below.'}
-              </p>
-              {caseData?.closeNotes ? (
-                <p className="text-sm text-slate-300 mt-2">{caseData.closeNotes}</p>
-              ) : null}
-            </StepCard>
-            {documentationHub}
-          </div>
-        );
-      }
+      const recordDocs = (Array.isArray(documents) ? documents : []).filter((doc) => {
+        const type = String(doc.documentType || '');
+        const name = String(doc.fileName || '').toLowerCase();
+        const template = String(doc.templateId || '');
+        if (type === 'outcome') return false;
+        if (template === 'outcome_letter') return false;
+        if (name.startsWith('outcome letter')) return false;
+        return true;
+      });
+      const uploaderName = (uid) => {
+        if (!uid) return recordedByName || '—';
+        const person = employees.find((item) => item.uid === uid);
+        return person?.fullName || person?.email || recordedByName || '—';
+      };
+      const openPortalDoc = (doc) => {
+        if (!doc?.portalHtml) return;
+        const win = window.open('', '_blank', 'noopener,noreferrer');
+        if (!win) return;
+        win.document.open();
+        win.document.write(doc.portalHtml);
+        win.document.close();
+      };
+
       return (
         <div className="space-y-6">
-          <StepCard
-            title="Personnel record"
-            footer={(
-              <button
-                type="button"
-                className={btnPrimary}
-                disabled={saving}
-                onClick={() => apiUpdate({
-                  closeWithNotes: true,
-                  closeNotes: 'Personnel record closed.',
-                  outcomePreset: 'no_further_action',
-                })}
-              >
-                Close record
-              </button>
-            )}
-          >
-            <p className="text-sm text-slate-300">
-              Add documents or interviews to this employee’s file. This is not a disciplinary or grievance process.
-            </p>
-            <p className="text-sm text-slate-400">
-              Use the documentation section below, then close the record when finished.
-            </p>
+          <StepCard title={caseData?.issue || caseData?.title || 'Personnel record'}>
+            <dl className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
+              <div>
+                <dt className="text-xs uppercase tracking-wide text-slate-500">Employee</dt>
+                <dd className="mt-1 text-white">{caseData?.employeeNameSnapshot || '—'}</dd>
+              </div>
+              <div>
+                <dt className="text-xs uppercase tracking-wide text-slate-500">Opened</dt>
+                <dd className="mt-1 text-white">
+                  {formatDateTimeUk(caseData?.openedAt || caseData?.createdAt)}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs uppercase tracking-wide text-slate-500">Opened by</dt>
+                <dd className="mt-1 text-white">{recordedByName || '—'}</dd>
+              </div>
+              {currentStage === 'closed' ? (
+                <div>
+                  <dt className="text-xs uppercase tracking-wide text-slate-500">Closed</dt>
+                  <dd className="mt-1 text-white">
+                    {formatDateTimeUk(caseData?.closedAt)}
+                    {closedByName && closedByName !== 'Unknown' ? ` · ${closedByName}` : ''}
+                  </dd>
+                </div>
+              ) : null}
+            </dl>
+            {caseData?.summary ? (
+              <p className="text-sm text-slate-300 mt-4 whitespace-pre-wrap">{caseData.summary}</p>
+            ) : null}
           </StepCard>
-          {documentationHub}
+
+          <StepCard title="Documents">
+            {recordDocs.length === 0 ? (
+              <p className="text-sm text-slate-500">No documents uploaded yet.</p>
+            ) : (
+              <ul className="space-y-3">
+                {recordDocs.map((doc) => (
+                  <li
+                    key={doc.id}
+                    className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[#1a2540] bg-[#060e1a]/50 px-3 py-2.5"
+                  >
+                    <div className="min-w-0">
+                      <p className="text-sm text-white truncate">{doc.fileName || doc.documentType || 'Document'}</p>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        {formatDateTimeUk(doc.createdAt || doc.uploadedAt || doc.updatedAt)}
+                        {' · '}
+                        {uploaderName(doc.uploadedByUid)}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {doc.portalHtml ? (
+                        <button type="button" className="text-sm text-indigo-300 hover:text-indigo-200" onClick={() => openPortalDoc(doc)}>
+                          Open
+                        </button>
+                      ) : null}
+                      {doc.sharePointWebUrl ? (
+                        <a
+                          href={doc.sharePointWebUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-sm text-indigo-300 hover:text-indigo-200"
+                        >
+                          Open
+                        </a>
+                      ) : null}
+                      {!doc.portalHtml && !doc.sharePointWebUrl ? (
+                        <span className="text-xs text-slate-500">No link</span>
+                      ) : null}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </StepCard>
+
+          {currentStage !== 'closed' ? (
+            <div className="space-y-4">
+              {documentationHub}
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className={btnPrimary}
+                  disabled={saving}
+                  onClick={() => apiUpdate({
+                    closeCase: true,
+                    forceClose: true,
+                    closeNotes: 'Personnel record closed.',
+                  })}
+                >
+                  Close record
+                </button>
+              </div>
+            </div>
+          ) : null}
         </div>
       );
     }
@@ -2970,7 +3095,7 @@ export default function DisciplinaryCase() {
               <p className="text-sm text-slate-400">
                 {caseData?.employeeNameSnapshot || 'Unknown employee'}
                 {' · '}
-                {String(family).replace(/_/g, ' ')}
+                {family === 'record' ? 'Record' : String(family).replace(/_/g, ' ')}
                 {caseData?.suspensionActive ? ' · Suspension active' : ''}
               </p>
               <p className="text-sm text-slate-400">
@@ -2979,14 +3104,14 @@ export default function DisciplinaryCase() {
                 ) : (
                   <>Opened by unknown</>
                 )}
-                {ownerManagerName && ownerManagerName !== 'Unknown' ? (
+                {family !== 'record' && ownerManagerName && ownerManagerName !== 'Unknown' ? (
                   <> · Owner <span className="text-slate-200">{ownerManagerName}</span></>
                 ) : null}
                 {currentStage === 'closed' && closedByName && closedByName !== 'Unknown' ? (
-                  <> · Recorded by <span className="text-slate-200">{closedByName}</span></>
+                  <> · Closed by <span className="text-slate-200">{closedByName}</span></>
                 ) : null}
               </p>
-              {(() => {
+              {family !== 'record' && (() => {
                 const progress = getCaseProgressStatus(caseData || {});
                 return (
                   <span className={`inline-flex items-center rounded-lg border px-2.5 py-1 text-sm font-medium ${caseProgressToneClass(progress.tone)}`}>
@@ -2994,11 +3119,24 @@ export default function DisciplinaryCase() {
                   </span>
                 );
               })()}
+              {family === 'record' && (
+                <span className={`inline-flex items-center rounded-lg border px-2.5 py-1 text-sm font-medium ${
+                  currentStage === 'closed'
+                    ? 'border-slate-500/30 bg-slate-500/10 text-slate-300'
+                    : 'border-indigo-500/30 bg-indigo-500/10 text-indigo-200'
+                }`}
+                >
+                  {currentStage === 'closed' ? 'Record closed' : 'Personnel record'}
+                  {(caseData?.openedAt || caseData?.createdAt)
+                    ? ` · ${formatDateTimeUk(caseData?.openedAt || caseData?.createdAt)}`
+                    : ''}
+                </span>
+              )}
             </div>
           )}
         </div>
         <div className="flex gap-2">
-          {!isNew && currentStage === 'closed' && (
+          {!isNew && currentStage === 'closed' && family !== 'record' && (
             <button type="button" onClick={exportCase} className={btnSecondary} disabled={saving}>
               Export pack
             </button>
@@ -3296,6 +3434,26 @@ export default function DisciplinaryCase() {
                     ? 'Enter a subject — the title is built as Name — Subject — Record — Date.'
                     : 'Enter the issue — the case title is built from the employee name, issue, and today’s date.'}
               </p>
+            )}
+          </div>
+        ) : family === 'record' ? (
+          <div className="max-w-3xl space-y-6">
+            {renderCurrentStep()}
+            {ALLOW_DELETE_CASES && (
+              <div className="border border-red-500/20 rounded-xl p-4">
+                <h4 className="text-white font-medium mb-2">Delete record</h4>
+                <p className="text-xs text-slate-500 mb-3">
+                  Permanently removes this record and its portal document metadata.
+                </p>
+                <button
+                  type="button"
+                  className="px-3 py-2 text-sm rounded-lg border border-red-500/40 text-red-300 hover:bg-red-500/10 disabled:opacity-50"
+                  disabled={saving}
+                  onClick={deleteCase}
+                >
+                  Delete entire record
+                </button>
+              </div>
             )}
           </div>
         ) : (

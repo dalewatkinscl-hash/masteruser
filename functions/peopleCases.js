@@ -596,6 +596,7 @@ function buildHearingInviteHtml({
   suspensionActive = false,
   precautionarySuspension = false,
   suspensionReason = '',
+  dismissalPossible = false,
   grossMisconductReason = '',
   evidenceDocumentNames = [],
 }) {
@@ -605,6 +606,7 @@ function buildHearingInviteHtml({
     || toTrimmedString(caseTitle)
     || 'the matter under consideration — further particulars will be confirmed at the hearing';
   const showSuspensionWarning = Boolean(suspensionActive || precautionarySuspension);
+  const showDismissalWarning = Boolean(dismissalPossible);
   const signerName = toTrimmedString(hearingManagerName) || toTrimmedString(issuedByName) || 'Management';
   const issuedDate = toTrimmedString(issuedAtLabel) || new Date().toLocaleDateString('en-GB');
   const notes = toTrimmedString(extraNotes);
@@ -618,6 +620,9 @@ function buildHearingInviteHtml({
   const suspensionBlock = showSuspensionWarning
     ? `<p>You should be aware that due to the nature of the concerns raised${toTrimmedString(suspensionReason) ? ` (${escapeHtml(toTrimmedString(suspensionReason))})` : ''}, you will be suspended on full pay pending the outcome of the disciplinary hearing.</p>`
     : '';
+  const outcomesParagraph = showDismissalWarning
+    ? `<p>At the hearing, a range of outcomes may be considered. Depending on the findings, this may include no further action, informal action, a written warning, a final written warning, or other appropriate action. <strong>Dismissal is a possible outcome of this hearing.</strong></p>`
+    : `<p>At the hearing, a range of outcomes may be considered. Depending on the findings, this may include no further action, informal action, a written warning, a final written warning, or other appropriate action.</p>`;
 
   const bodyHtml = `
   <p class="date">${escapeHtml(issuedDate)}</p>
@@ -635,7 +640,7 @@ function buildHearingInviteHtml({
   ${evidenceListHtml}
   ${suspensionBlock}
   <p><strong>Possible outcomes</strong></p>
-  <p>At the hearing, a range of outcomes may be considered. Depending on the findings, this may include no further action, informal action, a written warning, a final written warning, or other appropriate action. <strong>Dismissal is a possible outcome of this hearing.</strong></p>
+  ${outcomesParagraph}
   <p><strong>Your right to be accompanied</strong></p>
   <p>You have a statutory right to be accompanied at this hearing by a companion. If you wish to be accompanied, please inform us of the individual you wish to attend as soon as possible. If your companion cannot attend, you may ask to postpone the hearing by up to five working days.</p>
   <p>Failure to attend may result in a decision being made in your absence. Please confirm attendance via the Employee Portal where possible. If you cannot attend, contact your manager as soon as you can.</p>

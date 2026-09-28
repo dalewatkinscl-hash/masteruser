@@ -14,6 +14,19 @@ export function canManagePeopleCases(user) {
   return role === 'manager' || role === 'admin' || role === 'hr';
 }
 
+/** Whether the case appears on the employee's My cases list. */
+export function caseIsVisibleToEmployee(caseItem = {}) {
+  if (caseItem.unpublishedFromEmployeeAt) return false;
+  if (caseItem.publishedToEmployeeAt) return true;
+  return Boolean(
+    caseItem.hearingInviteIssuedAt
+    || caseItem.fileNoteIssuedAt
+    || caseItem.outcomeIssuedAt
+    || caseItem.interviewNotesIssuedAt
+    || caseItem.status === 'pending_employee',
+  );
+}
+
 /** Informal / early-closed disciplinaries that can be retagged as Samsara coaching. */
 export function canConvertCaseToSamsaraCoaching(caseItem = {}) {
   if ((caseItem.processFamily || '') === 'samsara_coaching') return false;
