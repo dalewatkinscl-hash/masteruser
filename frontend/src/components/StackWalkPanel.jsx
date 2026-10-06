@@ -1031,6 +1031,8 @@ export function StackWalkDailyPanel({
   onAchievements = null,
   isAdmin = false,
   preview = false,
+  onUnavailable = null,
+  onRotationSync = null,
 }) {
   const todayKey = getLondonDayKey();
   const [dayKey, setDayKey] = useState(todayKey);
@@ -1039,6 +1041,10 @@ export function StackWalkDailyPanel({
   const [game, setGame] = useState(null);
   const [leaderboard, setLeaderboard] = useState([]);
   const practice = dayKey !== todayKey;
+  const onUnavailableRef = useRef(onUnavailable);
+  const onRotationSyncRef = useRef(onRotationSync);
+  onUnavailableRef.current = onUnavailable;
+  onRotationSyncRef.current = onRotationSync;
 
   useEffect(() => {
     let cancelled = false;
@@ -1054,9 +1060,17 @@ export function StackWalkDailyPanel({
         const payload = (await readJsonResponse(response)) || {};
         if (!response.ok) throw new Error(payload.error || "Failed to load O Dell's Amazon Run.");
         if (cancelled) return;
+        if (payload.rotation && typeof onRotationSyncRef.current === 'function') {
+          onRotationSyncRef.current(payload.rotation);
+        }
         if (payload.weekend || payload.sittingOut) {
           setGame(null);
           setLeaderboard([]);
+          // Today only: pull the accordion off Fun so sit-outs never linger in the list.
+          if (!practice && typeof onUnavailableRef.current === 'function') {
+            onUnavailableRef.current('stackwalk');
+            return;
+          }
           setError(payload.message || "O Dell's Amazon Run isn’t in today’s Fun rotation.");
           return;
         }
@@ -1074,7 +1088,7 @@ export function StackWalkDailyPanel({
     return () => {
       cancelled = true;
     };
-  }, [dayKey, todayKey, preview]);
+  }, [dayKey, todayKey, preview, practice]);
 
   if (loading) return <p className="text-sm text-slate-400">Loading O Dell&apos;s Amazon Run…</p>;
   if (error) return <p className="text-sm text-rose-300">{error}</p>;

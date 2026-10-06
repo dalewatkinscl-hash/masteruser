@@ -2703,6 +2703,8 @@ function ToolboxKickGame({
   const [fortuneUi, setFortuneUi] = useState({ mode: 'choice', d1: 1, d2: 1, rolling: false });
   const fortuneTimerRef = useRef(null);
   const fortuneSpinRef = useRef(null);
+  /** Ignore Space/tap briefly after dice dismiss so that click doesn't lock power. */
+  const powerInputIgnoreUntilRef = useRef(0);
 
   useEffect(() => {
     const gfx = gfxRef.current;
@@ -2737,7 +2739,7 @@ function ToolboxKickGame({
     }
   }, []);
 
-  const beginPowerMeter = useCallback(() => {
+  const beginPowerMeter = useCallback((opts = {}) => {
     const st = stateRef.current;
     if (!st || st.phase !== PHASE.READY) return;
     const gfx = gfxRef.current;
@@ -2751,6 +2753,9 @@ function ToolboxKickGame({
         : '';
     st.message = `Tap to set power…${fortuneNote}`;
     gfx?.play('select');
+    // Swallow the dismiss / Kick click so it can't immediately lock power.
+    const graceMs = Number(opts.inputGraceMs);
+    powerInputIgnoreUntilRef.current = Date.now() + (Number.isFinite(graceMs) ? graceMs : 450);
     setFortuneUi((u) => ({ ...u, mode: null }));
     setHud((h) => ({
       ...h,
@@ -2766,7 +2771,7 @@ function ToolboxKickGame({
     st.fortuneMult = 1;
     st.fortuneDice = null;
     gfxRef.current?.play('select');
-    beginPowerMeter();
+    beginPowerMeter({ inputGraceMs: 500 });
   }, [beginPowerMeter]);
 
   const chooseFortune = useCallback(() => {
@@ -2817,7 +2822,7 @@ function ToolboxKickGame({
         setHud((h) => ({ ...h, message: st.message, fortuneMult: roll.mult }));
         fortuneTimerRef.current = window.setTimeout(() => {
           fortuneTimerRef.current = null;
-          beginPowerMeter();
+          beginPowerMeter({ inputGraceMs: 550 });
         }, 1600);
       }
     }, 70);
@@ -3145,11 +3150,20 @@ function ToolboxKickGame({
     }
 
     if (st.phase === PHASE.READY) {
-      // Ignore taps while dice are spinning / revealing.
-      if (fortuneUi?.mode === 'rolling' || fortuneUi?.mode === 'result') return;
+      // Ignore taps while dice are spinning / revealing — click dismisses result instead.
+      if (fortuneUi?.mode === 'rolling') return;
+      if (fortuneUi?.mode === 'result') {
+        if (fortuneTimerRef.current) {
+          window.clearTimeout(fortuneTimerRef.current);
+          fortuneTimerRef.current = null;
+        }
+        beginPowerMeter({ inputGraceMs: 550 });
+        return;
+      }
       // Space / tap = Kick (skip the dice). Dice needs the Fortune button.
       chooseKick();
     } else if (st.phase === PHASE.POWER) {
+      if (Date.now() < powerInputIgnoreUntilRef.current) return;
       st.power = meterValue(st.powerT);
       const pct = Math.round(st.power * 100);
       if (pct >= 99) st.power = 1;
@@ -3186,7 +3200,7 @@ function ToolboxKickGame({
         initShot({ keepBest: true, attempt: 1, freshRound: true });
       }
     }
-  }, [initShot, showRpgPopup, chooseKick, fortuneUi]);
+  }, [initShot, showRpgPopup, chooseKick, beginPowerMeter, fortuneUi]);
 
   /** Dev cheat (sandbox / practice only): Y = perfect launch, or smoker boost in flight. */
   const doCheatY = useCallback(() => {
@@ -4683,8 +4697,21 @@ function ToolboxKickGame({
       >
         <RpgPopup popup={popup} />
         {hud.phase === PHASE.READY && fortuneUi?.mode ? (
-          <div className="absolute inset-0 z-[25] flex items-center justify-center bg-black/45 px-4 pointer-events-auto">
-            <div className="w-full max-w-md">
+          <div
+            className={`absolute inset-0 z-[25] flex items-center justify-center bg-black/45 px-4 pointer-events-auto ${
+              fortuneUi.mode === 'result' ? 'cursor-pointer' : ''
+            }`}
+            onClick={(e) => {
+              e.stopPropagation();
+              if (fortuneUi.mode !== 'result') return;
+              if (fortuneTimerRef.current) {
+                window.clearTimeout(fortuneTimerRef.current);
+                fortuneTimerRef.current = null;
+              }
+              beginPowerMeter({ inputGraceMs: 550 });
+            }}
+          >
+            <div className="w-full max-w-md" onClick={(e) => e.stopPropagation()}>
               <GameUiPanel
                 title={
                   fortuneUi.mode === 'choice'
@@ -4736,15 +4763,29 @@ function ToolboxKickGame({
                     </div>
                   </div>
                 ) : (
-                  <div className="space-y-2 text-center">
+                  <div
+                    className="space-y-2 text-center"
+                    onClick={(e) => {
+                      if (fortuneUi.mode !== 'result') return;
+                      e.stopPropagation();
+                      if (fortuneTimerRef.current) {
+                        window.clearTimeout(fortuneTimerRef.current);
+                        fortuneTimerRef.current = null;
+                      }
+                      beginPowerMeter({ inputGraceMs: 550 });
+                    }}
+                  >
                     <div className="flex items-center justify-center gap-4 py-2">
                       <FortuneDieFace value={fortuneUi.d1} />
                       <FortuneDieFace value={fortuneUi.d2} />
                     </div>
                     {fortuneUi.mode === 'result' ? (
-                      <p className={`gui-font-narrow text-sm font-semibold ${fortuneUi.snakeEyes ? 'text-amber-200' : 'text-rose-200'}`}>
-                        {fortuneUi.snakeEyes ? '×3 launch power' : '−25% launch power'}
-                      </p>
+                      <>
+                        <p className={`gui-font-narrow text-sm font-semibold ${fortuneUi.snakeEyes ? 'text-amber-200' : 'text-rose-200'}`}>
+                          {fortuneUi.snakeEyes ? '×3 launch power' : '−25% launch power'}
+                        </p>
+                        <p className="text-[10px] text-slate-500">Tap to continue</p>
+                      </>
                     ) : (
                       <p className="text-xs text-slate-400">Lady luck is deciding…</p>
                     )}

@@ -91,22 +91,33 @@ export function getClientRotationSettings() {
 export function normalizeRotationSettings(raw = {}) {
   const defaults = getDefaultRotationSettings();
   const allowed = new Set(ALL_ROSTER_KEYS);
-  let permanentGameKeys = Array.isArray(raw.permanentGameKeys)
-    ? raw.permanentGameKeys.map((k) => String(k || '').trim()).filter((k) => allowed.has(k))
+  const rawPermanent = Array.isArray(raw.permanentGameKeys)
+    ? raw.permanentGameKeys.map((k) => String(k || '').trim()).filter(Boolean)
+    : null;
+  // Drop removed games (e.g. legacy coinflip) before validating.
+  let permanentGameKeys = rawPermanent
+    ? rawPermanent.filter((k) => allowed.has(k))
     : [...defaults.permanentGameKeys];
   permanentGameKeys = [...new Set(permanentGameKeys)];
 
-  // Upgrade pre-stackwalk defaults so Boggle + Connections aren't dunked for days.
+  // Upgrade pre-stackwalk / coinflip-era defaults so Boggle + Connections stay permanent.
   const oldDefault = permanentGameKeys.length === 3
     && permanentGameKeys.includes('wordle')
     && permanentGameKeys.includes('toolboxkick')
     && permanentGameKeys.includes('wanted');
-  if (oldDefault) {
+  const droppedUnknown = Array.isArray(rawPermanent)
+    && rawPermanent.some((k) => !allowed.has(k));
+  const missingModernPermanents = !permanentGameKeys.includes('boggle')
+    || !permanentGameKeys.includes('connections');
+  if (oldDefault || (droppedUnknown && missingModernPermanents && permanentGameKeys.includes('wordle'))) {
     permanentGameKeys = [...defaults.permanentGameKeys];
   }
 
   let rotatedDailyCount = Number(raw.rotatedDailyCount);
   if (!Number.isFinite(rotatedDailyCount)) {
+    rotatedDailyCount = defaults.rotatedDailyCount;
+  }
+  if (droppedUnknown && missingModernPermanents && rotatedDailyCount === 5) {
     rotatedDailyCount = defaults.rotatedDailyCount;
   }
   rotatedDailyCount = Math.max(0, Math.min(ALL_ROSTER_KEYS.length, Math.floor(rotatedDailyCount)));

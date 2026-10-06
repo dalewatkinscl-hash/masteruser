@@ -82,23 +82,36 @@ function getDefaultRotationSettings() {
 function normalizeRotationSettings(raw = {}) {
   const defaults = getDefaultRotationSettings();
   const allowed = new Set(ALL_ROSTER_KEYS);
-  let permanentGameKeys = Array.isArray(raw.permanentGameKeys)
-    ? raw.permanentGameKeys.map((k) => String(k || '').trim()).filter((k) => allowed.has(k))
+  const rawPermanent = Array.isArray(raw.permanentGameKeys)
+    ? raw.permanentGameKeys.map((k) => String(k || '').trim()).filter(Boolean)
+    : null;
+  // Drop removed games (e.g. legacy coinflip) before validating.
+  let permanentGameKeys = rawPermanent
+    ? rawPermanent.filter((k) => allowed.has(k))
     : [...defaults.permanentGameKeys];
   // Unique, preserve order
   permanentGameKeys = [...new Set(permanentGameKeys)];
 
-  // Upgrade pre-stackwalk defaults so Boggle + Connections aren't dunked for days.
+  // Upgrade pre-stackwalk / coinflip-era defaults so Boggle + Connections stay permanent.
   const oldDefault = permanentGameKeys.length === 3
     && permanentGameKeys.includes('wordle')
     && permanentGameKeys.includes('toolboxkick')
     && permanentGameKeys.includes('wanted');
-  if (oldDefault) {
+  const droppedUnknown = Array.isArray(rawPermanent)
+    && rawPermanent.some((k) => !allowed.has(k));
+  const missingModernPermanents = !permanentGameKeys.includes('boggle')
+    || !permanentGameKeys.includes('connections');
+  if (oldDefault || (droppedUnknown && missingModernPermanents && permanentGameKeys.includes('wordle'))) {
     permanentGameKeys = [...defaults.permanentGameKeys];
   }
 
   let rotatedDailyCount = Number(raw.rotatedDailyCount);
   if (!Number.isFinite(rotatedDailyCount)) {
+    rotatedDailyCount = defaults.rotatedDailyCount;
+  }
+  // Coinflip-era admin saves used 5 rotated slots with a smaller permanent set.
+  // After healing permanents to the modern five, keep the default rotated count.
+  if (droppedUnknown && missingModernPermanents && rotatedDailyCount === 5) {
     rotatedDailyCount = defaults.rotatedDailyCount;
   }
   rotatedDailyCount = Math.max(0, Math.min(ALL_ROSTER_KEYS.length, Math.floor(rotatedDailyCount)));
@@ -392,11 +405,12 @@ function previousPlayableDayKey(dayKey, gameKey) {
   return previousPlayableDayForGame(dayKey, gameKey);
 }
 
-function assertGamePlayable(dayKey, gameKey, { sandbox = false } = {}) {
+function assertGamePlayable(dayKey, gameKey, { sandbox = false, settings = null } = {}) {
+  const active = settings || getActiveRotationSettings();
   if (sandbox) {
-    return { ok: true, bypass: true, rotation: getFunRotationForDay(dayKey) };
+    return { ok: true, bypass: true, rotation: getFunRotationForDay(dayKey, active) };
   }
-  const rotation = getFunRotationForDay(dayKey);
+  const rotation = getFunRotationForDay(dayKey, active);
   if (rotation.closed) {
     const err = new Error(rotation.message || 'Fun games are closed on weekends.');
     err.status = 403;
@@ -420,12 +434,12 @@ function assertGamePlayable(dayKey, gameKey, { sandbox = false } = {}) {
 }
 
 async function assertGamePlayableAsync(db, dayKey, gameKey, opts = {}) {
-  await loadFunRotationSettings(db);
-  return assertGamePlayable(dayKey, gameKey, opts);
+  const settings = await loadFunRotationSettings(db);
+  return assertGamePlayable(dayKey, gameKey, { ...opts, settings });
 }
 
-function assertFunGamePlayable(gameKey, dayKey, { adminBypass = false } = {}) {
-  return assertGamePlayable(dayKey, gameKey, { sandbox: adminBypass });
+function assertFunGamePlayable(gameKey, dayKey, { adminBypass = false, settings = null } = {}) {
+  return assertGamePlayable(dayKey, gameKey, { sandbox: adminBypass, settings });
 }
 
 module.exports = {

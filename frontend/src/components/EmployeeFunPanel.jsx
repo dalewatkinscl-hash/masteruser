@@ -5,8 +5,8 @@ import NonogramPanel from './NonogramPanel';
 import SokobanPanel from './SokobanPanel';
 import BogglePanel from './BogglePanel';
 import ConnectionsPanel from './ConnectionsPanel';
-import { EncloseDailyPanel, EnclosePracticePanel } from './EnclosePanel';
-import { LetterboxDailyPanel, LetterboxPracticePanel } from './LetterboxPanel';
+import { EncloseDailyPanel } from './EnclosePanel';
+import { LetterboxDailyPanel } from './LetterboxPanel';
 import { PipesDailyPanel } from './PipesPanel';
 import { ToolboxKickDailyPanel } from './ToolboxKickPanel';
 import { WantedDailyPanel } from './WantedPanel';
@@ -16,14 +16,10 @@ import FunDayPicker, { getLondonDayKey } from './FunDayPicker';
 import FunLeaderboardRow from './FunLeaderboardRow';
 import { FunSectionErrorBoundary } from './FunErrorBoundary';
 import {
-  ENCLOSE_LIVE_FROM,
-  LETTERBOX_LIVE_FROM,
   PERMANENT_FUN_FROM,
   FUN_GAME_ROSTER,
-  STACK_WALK_LIVE_FROM,
   getFunRotationForDay,
   setClientRotationSettings,
-  isStackWalkPreviewDay,
 } from '../lib/funRotation';
 
 async function readJsonResponse(res) {
@@ -104,14 +100,19 @@ function normalizeRotation(raw, fallbackDayKey) {
   if (!raw || typeof raw !== 'object') {
     return getFunRotationForDay(fallbackDayKey);
   }
+  const sitOuts = Array.isArray(raw.sitOuts)
+    ? raw.sitOuts.map(String)
+    : (raw.sitOut ? [String(raw.sitOut)] : []);
+  const sitOutSet = new Set(sitOuts);
+  // Never list a sit-out in games — keeps Fun tab aligned with play APIs.
+  const games = (Array.isArray(raw.games) ? raw.games.map(String) : [])
+    .filter((key) => key && !sitOutSet.has(key));
   return {
     ...raw,
     closed: Boolean(raw.closed),
-    games: Array.isArray(raw.games) ? raw.games.map(String) : [],
-    sitOuts: Array.isArray(raw.sitOuts)
-      ? raw.sitOuts.map(String)
-      : (raw.sitOut ? [String(raw.sitOut)] : []),
-    sitOut: raw.sitOut || null,
+    games,
+    sitOuts,
+    sitOut: raw.sitOut || sitOuts[0] || null,
   };
 }
 
@@ -464,7 +465,37 @@ export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
   const [rotationReady, setRotationReady] = useState(false);
   const [openSections, setOpenSections] = useState(loadOpenSections);
   const [achievements, setAchievements] = useState([]);
-  const [stackWalkSecret, setStackWalkSecret] = useState(false);
+  /** Games the play API marked sitting-out (guards against list/play skew). */
+  const [blockedGames, setBlockedGames] = useState(() => new Set());
+
+  const markGameUnavailable = (gameKey) => {
+    const key = String(gameKey || '').trim();
+    if (!key) return;
+    setBlockedGames((prev) => {
+      if (prev.has(key)) return prev;
+      const next = new Set(prev);
+      next.add(key);
+      return next;
+    });
+    setRotation((prev) => {
+      const games = Array.isArray(prev?.games) ? prev.games.filter((g) => g !== key) : [];
+      const sitOuts = Array.isArray(prev?.sitOuts) ? prev.sitOuts : [];
+      if (!sitOuts.includes(key)) sitOuts.push(key);
+      return normalizeRotation({ ...prev, games, sitOuts, sitOut: sitOuts[0] || key }, todayKey);
+    });
+    setOpenSections((prev) => {
+      const base = prev && typeof prev === 'object' && !Array.isArray(prev)
+        ? prev
+        : DEFAULT_OPEN_SECTIONS;
+      if (!base[key]) return base;
+      return { ...base, [key]: false };
+    });
+  };
+
+  const syncRotationFromGame = (nextRotation) => {
+    if (!nextRotation || typeof nextRotation !== 'object') return;
+    setRotation(normalizeRotation(nextRotation, todayKey));
+  };
 
   useEffect(() => {
     if (!openSections || typeof openSections !== 'object' || Array.isArray(openSections)) {
@@ -479,31 +510,6 @@ export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
   }, [openSections]);
 
   useEffect(() => {
-    if (!isStackWalkPreviewDay(todayKey)) return undefined;
-    let presses = 0;
-    let lastAt = 0;
-    const onKeyDown = (event) => {
-      if (event.repeat) return;
-      const tag = String(event.target?.tagName || '').toLowerCase();
-      if (tag === 'input' || tag === 'textarea' || event.target?.isContentEditable) return;
-      if (event.key !== 'o' && event.key !== 'O') {
-        presses = 0;
-        return;
-      }
-      const now = Date.now();
-      if (now - lastAt > 2500) presses = 0;
-      lastAt = now;
-      presses += 1;
-      if (presses < 5) return;
-      presses = 0;
-      setStackWalkSecret(true);
-      setOpenSections((prev) => ({ ...prev, stackwalk: true }));
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [todayKey]);
-
-  useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
@@ -514,9 +520,25 @@ export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
           setClientRotationSettings(payload.settings);
         }
         if (payload.rotation && typeof payload.rotation === 'object') {
-          setRotation(normalizeRotation(payload.rotation, todayKey));
+          const fromApi = normalizeRotation(payload.rotation, todayKey);
+          // Intersect with a local recompute from the same settings so a stale
+          // getFunRotation build can't list a game the play APIs will reject.
+          const fromSettings = payload.settings
+            ? getFunRotationForDay(todayKey, payload.settings)
+            : fromApi;
+          const allowed = new Set(fromSettings.games || []);
+          const sitOuts = [...new Set([
+            ...(fromApi.sitOuts || []),
+            ...(fromSettings.sitOuts || []),
+          ])];
+          const games = (fromApi.games || []).filter(
+            (key) => allowed.has(key) && !sitOuts.includes(key),
+          );
+          setRotation(normalizeRotation({ ...fromApi, games, sitOuts }, todayKey));
+          setBlockedGames(new Set());
         } else {
           setRotation(getFunRotationForDay(todayKey, payload.settings || null));
+          setBlockedGames(new Set());
         }
         if (Array.isArray(payload.achievements)) {
           setAchievements(payload.achievements);
@@ -546,23 +568,23 @@ export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
     if (Array.isArray(next)) setAchievements(next);
   };
 
-  const gameSections = [
-    {
+  const allGameSections = {
+    trivia: {
       id: 'trivia',
       title: 'Daily Trivia',
       render: () => <TriviaContent currentUserUid={currentUserUid} onAchievements={refreshAchievements} />,
     },
-    {
+    wordle: {
       id: 'wordle',
       title: 'Daily Wordle',
       render: () => <WordlePanel currentUserUid={currentUserUid} onAchievements={refreshAchievements} />,
     },
-    {
+    nonogram: {
       id: 'nonogram',
       title: 'Daily Nonogram',
       render: () => <NonogramPanel currentUserUid={currentUserUid} onAchievements={refreshAchievements} />,
     },
-    {
+    sokoban: {
       id: 'sokoban',
       title: 'Daily Sokoban',
       render: () => (
@@ -573,7 +595,7 @@ export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
         />
       ),
     },
-    {
+    boggle: {
       id: 'boggle',
       title: 'Daily Boggle',
       render: () => (
@@ -584,7 +606,7 @@ export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
         />
       ),
     },
-    {
+    connections: {
       id: 'connections',
       title: 'Daily Connections',
       render: () => (
@@ -595,7 +617,7 @@ export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
         />
       ),
     },
-    {
+    enclose: {
       id: 'enclose',
       title: 'Daily Enclose',
       render: () => (
@@ -605,7 +627,7 @@ export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
         />
       ),
     },
-    {
+    letterbox: {
       id: 'letterbox',
       title: 'Daily Letter Box',
       render: () => (
@@ -615,7 +637,7 @@ export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
         />
       ),
     },
-    {
+    pipes: {
       id: 'pipes',
       title: 'Daily Pipes',
       render: () => (
@@ -626,7 +648,7 @@ export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
         />
       ),
     },
-    {
+    toolboxkick: {
       id: 'toolboxkick',
       title: 'Little Dicks Toolbox',
       render: () => (
@@ -637,7 +659,7 @@ export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
         />
       ),
     },
-    {
+    wanted: {
       id: 'wanted',
       title: 'Daily Wanted',
       render: () => (
@@ -648,7 +670,7 @@ export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
         />
       ),
     },
-    {
+    stackwalk: {
       id: 'stackwalk',
       title: "O Dell's Amazon Run",
       render: () => (
@@ -656,32 +678,33 @@ export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
           currentUserUid={currentUserUid}
           onAchievements={refreshAchievements}
           isAdmin={isAdmin}
+          onUnavailable={() => markGameUnavailable('stackwalk')}
+          onRotationSync={syncRotationFromGame}
         />
       ),
     },
-  ].filter((section) => (
+  };
+
+  // Strict: only games in today's rotation.games, in that order. Sit-outs / practice / peeks never show.
+  const sitOutSet = new Set(
+    Array.isArray(rotation.sitOuts) && rotation.sitOuts.length
+      ? rotation.sitOuts
+      : (rotation.sitOut ? [rotation.sitOut] : []),
+  );
+  for (const key of blockedGames) sitOutSet.add(key);
+  const gameSections = (
     rotationReady
     && !rotation.closed
     && Array.isArray(rotation.games)
-    && rotation.games.includes(section.id)
-    && !(Array.isArray(rotation.sitOuts) && rotation.sitOuts.includes(section.id))
-  ));
+  )
+    ? rotation.games
+      .map((key) => allGameSections[key])
+      .filter((section) => section && !sitOutSet.has(section.id) && !blockedGames.has(section.id))
+    : [];
 
-  const sitOutKeys = Array.isArray(rotation.sitOuts) && rotation.sitOuts.length
-    ? rotation.sitOuts
-    : (rotation.sitOut ? [rotation.sitOut] : []);
-  const sitOutLabel = sitOutKeys
+  const sitOutLabel = [...sitOutSet]
     .map((key) => FUN_GAME_ROSTER.find((g) => g.key === key)?.label || key)
     .join(', ') || null;
-
-  const showEnclosePractice = Boolean(rotationReady && rotation.enclosePractice);
-  const showLetterboxPractice = Boolean(rotationReady && rotation.letterboxPractice);
-  const showStackWalkSecret = Boolean(
-    rotationReady
-    && isStackWalkPreviewDay(todayKey)
-    && stackWalkSecret
-    && !rotation.games?.includes('stackwalk'),
-  );
 
   return (
     <div className="space-y-3 w-full">
@@ -711,17 +734,11 @@ export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
       ) : (
         <p className="text-sm text-slate-400 px-1">
           {rotation.rotationActive
-            ? `${rotation.games?.length === 6 ? 'Six' : rotation.games?.length === 5 ? 'Five' : `${rotation.games?.length || 6}`} games today${sitOutLabel ? ` (${sitOutLabel} sit out)` : ''}. Fresh daily puzzles each weekday · Europe/London.`
+            ? `${gameSections.length} game${gameSections.length === 1 ? '' : 's'} today${sitOutLabel ? ` (${sitOutLabel} sit out)` : ''}. Fresh daily puzzles each weekday · Europe/London.`
             : 'Pick a game to open. Fresh daily puzzles each weekday · Europe/London.'}
           {' '}
           Use the day picker inside a game to replay past weekday puzzles for fun — those don’t count for
           leaderboards or streaks.
-          {showEnclosePractice
-            ? ` Enclose practice is open — competitive from ${ENCLOSE_LIVE_FROM}.`
-            : ''}
-          {showLetterboxPractice
-            ? ` Letter Box is open to try — it joins the rotation from ${LETTERBOX_LIVE_FROM} (no leaderboard until then).`
-            : ''}
           {rotation.games?.includes('pipes')
             ? ' Pipes: rotate until every tile fills with water — score is your time.'
             : ''}
@@ -733,9 +750,6 @@ export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
             : ''}
           {rotation.games?.includes('stackwalk')
             ? " O Dell's Amazon Run: deliver parcels on foot — one more every 10 m; furthest wins."
-            : ''}
-          {showStackWalkSecret
-            ? ` O Dell's Amazon Run unlocked early — joins the rotation from ${STACK_WALK_LIVE_FROM}.`
             : ''}
           {todayKey >= PERMANENT_FUN_FROM
             ? ' Wordle, Boggle, Connections, Little Dicks Toolbox, and Daily Wanted stay in rotation every weekday.'
@@ -756,53 +770,6 @@ export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
           </FunSectionErrorBoundary>
         ) : null}
       </FunSection>
-
-      {showEnclosePractice ? (
-        <FunSection
-          title="Enclose practice · new game"
-          open={Boolean(openSections?.enclosePractice)}
-          onToggle={() => toggle('enclosePractice')}
-        >
-          {openSections?.enclosePractice ? (
-            <FunSectionErrorBoundary label="Enclose practice">
-              <EnclosePracticePanel />
-            </FunSectionErrorBoundary>
-          ) : null}
-        </FunSection>
-      ) : null}
-
-      {showLetterboxPractice ? (
-        <FunSection
-          title="Letter Box · new puzzle · try today"
-          open={Boolean(openSections?.letterboxPractice)}
-          onToggle={() => toggle('letterboxPractice')}
-        >
-          {openSections?.letterboxPractice ? (
-            <FunSectionErrorBoundary label="Letter Box practice">
-              <LetterboxPracticePanel />
-            </FunSectionErrorBoundary>
-          ) : null}
-        </FunSection>
-      ) : null}
-
-      {showStackWalkSecret ? (
-        <FunSection
-          title="O Dell's Amazon Run · early peek"
-          open={Boolean(openSections?.stackwalk)}
-          onToggle={() => toggle('stackwalk')}
-        >
-          {openSections?.stackwalk ? (
-            <FunSectionErrorBoundary label="O Dell's Amazon Run">
-              <StackWalkDailyPanel
-                preview
-                currentUserUid={currentUserUid}
-                onAchievements={refreshAchievements}
-                isAdmin={isAdmin}
-              />
-            </FunSectionErrorBoundary>
-          ) : null}
-        </FunSection>
-      ) : null}
 
       {!rotation.closed && gameSections.map((section) => (
         <FunSection

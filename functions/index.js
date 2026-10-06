@@ -4647,19 +4647,19 @@ function isStackWalkSecretPreviewDay(dayKey) {
  * Soft GETs return a closed payload for weekends and sit-outs instead of throwing.
  */
 async function enforceFunGameAccess(gameKey, { dayKey, practice, sandbox, preview }, { softWeekend = false } = {}) {
-  await loadFunRotationSettings(db);
+  const settings = await loadFunRotationSettings(db);
   if (sandbox || practice || preview) {
-    return { closed: false, rotation: getFunRotationForDay(dayKey) };
+    return { closed: false, rotation: getFunRotationForDay(dayKey, settings) };
   }
   try {
-    const result = assertFunGamePlayable(gameKey, dayKey, { adminBypass: false });
+    const result = assertFunGamePlayable(gameKey, dayKey, { adminBypass: false, settings });
     return { closed: false, rotation: result.rotation };
   } catch (error) {
     if (
       softWeekend
       && (error.code === 'fun_weekend' || error.code === 'fun_rotation')
     ) {
-      return { closed: true, rotation: error.rotation || getFunRotationForDay(dayKey), error };
+      return { closed: true, rotation: error.rotation || getFunRotationForDay(dayKey, settings), error };
     }
     throw error;
   }
