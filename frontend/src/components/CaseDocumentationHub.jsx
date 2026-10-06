@@ -229,8 +229,14 @@ export default function CaseDocumentationHub({
     const rect = addMenuRef.current?.getBoundingClientRect();
     if (rect) {
       const width = 256;
+      const menuHeight = 168;
       const left = Math.min(Math.max(8, rect.left), window.innerWidth - width - 8);
-      setMenuPos({ top: rect.bottom + 8, left });
+      const spaceBelow = window.innerHeight - rect.bottom - 8;
+      const openUp = spaceBelow < menuHeight && rect.top > menuHeight + 8;
+      const top = openUp
+        ? Math.max(8, rect.top - menuHeight - 8)
+        : Math.min(rect.bottom + 8, window.innerHeight - Math.min(menuHeight, spaceBelow || menuHeight) - 8);
+      setMenuPos({ top, left });
     }
     setMenuOpen((open) => !open);
   };
@@ -312,12 +318,12 @@ export default function CaseDocumentationHub({
               </button>
               {menuOpen && (
                 <div
-                  className="fixed z-[80] w-64 rounded-lg border border-[#1a2540] bg-[#0b1220] shadow-2xl py-1"
+                  className="fixed z-[80] w-64 max-h-[min(70vh,20rem)] overflow-y-auto rounded-lg border border-[#1a2540] bg-[#0b1220] shadow-2xl py-1"
                   style={{ top: menuPos.top, left: menuPos.left }}
                 >
                   <button
                     type="button"
-                    className="block w-full text-left px-4 py-2 text-sm text-slate-200 hover:bg-[#060e1a]"
+                    className="block w-full text-left px-4 py-3 min-h-11 text-sm text-slate-200 hover:bg-[#060e1a]"
                     onPointerDown={(e) => {
                       e.preventDefault();
                       setInterviewForm(freshInterviewForm(defaultIntervieweeUid));
@@ -331,7 +337,7 @@ export default function CaseDocumentationHub({
                   </button>
                   <button
                     type="button"
-                    className="block w-full text-left px-4 py-2 text-sm text-slate-200 hover:bg-[#060e1a]"
+                    className="block w-full text-left px-4 py-3 min-h-11 text-sm text-slate-200 hover:bg-[#060e1a]"
                     onClick={() => {
                       uploadInputRef.current?.click();
                       setMenuOpen(false);
@@ -342,7 +348,7 @@ export default function CaseDocumentationHub({
                   {letterTemplates.length > 0 && (
                     <button
                       type="button"
-                      className="block w-full text-left px-4 py-2 text-sm text-slate-200 hover:bg-[#060e1a]"
+                      className="block w-full text-left px-4 py-3 min-h-11 text-sm text-slate-200 hover:bg-[#060e1a]"
                       onClick={() => {
                         setShowTemplates(true);
                         setShowInterviewForm(false);

@@ -25,6 +25,7 @@ export const COIN_REASON_LABELS = {
   coach_depot_upgrade: 'Coach Depot upgrade',
   coach_depot_admin_grant: 'Coach Depot test grant',
   toolbox_flight_coin: 'Toolbox flight coin',
+  admin_grant: 'Admin grant',
 };
 
 /** Ways to earn coins — used by the wallet “Earn more” panel. */

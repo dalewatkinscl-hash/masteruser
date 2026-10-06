@@ -52,7 +52,7 @@ export function buildingSprite(key, level = 1) {
   return assetUrl('buildings', list[idx]);
 }
 
-/** Every HQ / building level / parking bay sprite for the Lock calibrator yard. */
+/** Every HQ / building / bay / decoration / driver sprite for the Lock calibrator yard. */
 export function calibrationCatalog() {
   const items = [];
   for (let lvl = 1; lvl <= 4; lvl += 1) {
@@ -92,6 +92,49 @@ export function calibrationCatalog() {
     src: baySrc,
     file: spriteFileName(baySrc),
   });
+
+  // Decorations — fence gets all 4 edges (NE/SW share a PNG, NW/SE share another;
+  // Lock stores anchors per facing so each edge can be placed separately).
+  const decorCatalog = [
+    { key: 'flowers', facing: 'SE', label: 'Flowers' },
+    { key: 'fence', facing: 'NE', label: 'Fence NE' },
+    { key: 'fence', facing: 'SE', label: 'Fence SE' },
+    { key: 'fence', facing: 'SW', label: 'Fence SW' },
+    { key: 'fence', facing: 'NW', label: 'Fence NW' },
+    { key: 'light', facing: 'SE', label: 'Light pole' },
+    { key: 'rocks', facing: 'SE', label: 'Rocks' },
+    { key: 'box', facing: 'SE', label: 'Crates' },
+  ];
+  decorCatalog.forEach((d) => {
+    const src = decorationSprite(d.key, d.facing);
+    const file = spriteFileName(src);
+    items.push({
+      id: `decor-${d.key}-${d.facing}`,
+      label: d.label,
+      type: 'decoration',
+      key: d.key,
+      facing: d.facing,
+      level: 1,
+      src,
+      file: spriteAnchorKey(file, d.facing),
+    });
+  });
+
+  // Walking driver — each facing has its own PNG to lock to the pad.
+  ['SE', 'SW', 'NE', 'NW'].forEach((facing) => {
+    const src = characterSprite(facing);
+    items.push({
+      id: `char-${facing}`,
+      label: `Driver ${facing}`,
+      type: 'character',
+      key: 'character',
+      facing,
+      level: 1,
+      src,
+      file: spriteFileName(src),
+    });
+  });
+
   return items;
 }
 
@@ -160,10 +203,116 @@ export function vehicleFilterStyle(tier) {
 
 export const PROP = {
   fence: assetUrl('props', 'prop_fence_wood_a.png'),
+  fenceA: assetUrl('props', 'prop_fence_wood_a.png'),
+  fenceB: assetUrl('props', 'prop_fence_wood_b.png'),
   light: assetUrl('props', 'prop_lightpole_a.png'),
   box: assetUrl('props', 'prop_box_cardboard_closed.png'),
   flowers: assetUrl('props', 'prop_flowers_yellow.png'),
+  rocks: assetUrl('props', 'prop_rocks_gray_a.png'),
+  dropbox: assetUrl('props', 'prop_dropbox_a.png'),
 };
+
+/** Tile-diamond edges a decoration can sit on / face. */
+export const DECOR_FACINGS = ['NE', 'SE', 'SW', 'NW'];
+
+export const DECOR_FACING_LABELS = {
+  NE: 'Top-right edge',
+  SE: 'Bottom-right edge',
+  SW: 'Bottom-left edge',
+  NW: 'Top-left edge',
+};
+
+export function decorationSprite(key, facing = 'SE') {
+  const edge = String(facing || 'SE').toUpperCase();
+  if (key === 'fence') {
+    // Parallel edges share a sprite (a ≈ NE/SW diagonal, b ≈ NW/SE).
+    return (edge === 'NE' || edge === 'SW') ? PROP.fenceA : PROP.fenceB;
+  }
+  if (key === 'light') return PROP.light;
+  if (key === 'box') return PROP.box;
+  if (key === 'flowers') return PROP.flowers;
+  if (key === 'rocks') return PROP.rocks;
+  return PROP.box;
+}
+
+export function decorationDisplayWidth(key) {
+  if (key === 'fence') return TILE_W * 0.62;
+  if (key === 'light') return 28;
+  if (key === 'flowers') return 36;
+  if (key === 'rocks') return 40;
+  return 32;
+}
+
+/**
+ * Screen position for a decoration on a tile centre (sx, sy from isoToScreen).
+ * Edge decorations (fence) sit on the chosen diamond edge.
+ * Applies Lock-mode sprite anchors (scale / ox / oy) when provided.
+ */
+export function decorationScreenLayout(key, facing, sx, sy, anchors = {}) {
+  const edge = String(facing || 'SE').toUpperCase();
+  const footY = buildingFootY(sy);
+  const baseWidth = decorationDisplayWidth(key);
+  const src = decorationSprite(key, edge);
+  const png = spriteFileName(src);
+  // Per-facing key so NE≠SW and NW≠SE even when they share a PNG.
+  const file = spriteAnchorKey(png, edge);
+  const anchor = resolveSpriteAnchor(anchors, png, edge);
+
+  let left = sx;
+  let top = footY;
+  let flipX = false;
+
+  if (key === 'fence') {
+    const ox = TILE_W * 0.22;
+    const oy = TILE_H * 0.22;
+    const byEdge = {
+      NE: { left: sx + ox, top: footY - oy * 0.35 },
+      SE: { left: sx + ox, top: footY + oy * 0.55 },
+      SW: { left: sx - ox, top: footY + oy * 0.55 },
+      NW: { left: sx - ox, top: footY - oy * 0.35 },
+    };
+    const pos = byEdge[edge] || byEdge.SE;
+    left = pos.left;
+    top = pos.top;
+  } else {
+    const nudge = {
+      NE: { left: sx + 10, top: footY - 4 },
+      SE: { left: sx + 8, top: footY + 2 },
+      SW: { left: sx - 8, top: footY + 2 },
+      NW: { left: sx - 10, top: footY - 4 },
+    };
+    const pos = nudge[edge] || { left: sx, top: footY };
+    left = pos.left;
+    top = pos.top;
+    flipX = edge === 'NW' || edge === 'SW';
+  }
+
+  return {
+    left: left + anchor.ox,
+    top: top + anchor.oy,
+    width: Math.max(12, Math.round(baseWidth * anchor.scale)),
+    src,
+    flipX,
+    file,
+    anchor,
+  };
+}
+
+/** Layout the walking driver sprite with Lock-mode anchors. */
+export function characterScreenLayout(facing, sx, sy, anchors = {}) {
+  const src = characterSprite(facing);
+  const file = spriteFileName(src);
+  const anchor = normalizeSpriteAnchor(anchors?.[file] || DEFAULT_SPRITE_ANCHOR);
+  const baseWidth = 28;
+  return {
+    left: sx + anchor.ox,
+    top: buildingFootY(sy) + anchor.oy,
+    width: Math.max(12, Math.round(baseWidth * anchor.scale)),
+    src,
+    file,
+    anchor,
+  };
+}
 
 export function characterSprite(facing = 'SE') {
   return assetUrl('characters', `char_a_idle_${facing}_f01.png`);
@@ -243,10 +392,40 @@ export function spriteFileName(url) {
   return i >= 0 ? s.slice(i + 1) : s;
 }
 
+/** Normalize storage key: `sprite.png` or facing-scoped `sprite.png@NE`. */
+export function normalizeAnchorMapKey(key) {
+  const raw = spriteFileName(key);
+  const m = String(raw || '').match(/^(.+\.png)(?:@(NE|SE|SW|NW))?$/i);
+  if (!m) return '';
+  return m[2] ? `${m[1]}@${m[2].toUpperCase()}` : m[1];
+}
+
+/** Facing-scoped anchor key so shared PNGs (fence NE/SW, NW/SE) calibrate separately. */
+export function spriteAnchorKey(fileOrUrl, facing = null) {
+  const file = normalizeAnchorMapKey(spriteFileName(fileOrUrl));
+  if (!file) return '';
+  const edge = String(facing || '').toUpperCase();
+  if (edge === 'NE' || edge === 'SE' || edge === 'SW' || edge === 'NW') {
+    const png = file.includes('@') ? file.split('@')[0] : file;
+    return `${png}@${edge}`;
+  }
+  return file.includes('@') ? file : file;
+}
+
+/** Prefer facing-scoped anchor; fall back to plain PNG key for older saves. */
+export function resolveSpriteAnchor(anchors = {}, fileOrUrl, facing = null) {
+  const png = normalizeAnchorMapKey(spriteFileName(fileOrUrl)).split('@')[0];
+  const keyed = spriteAnchorKey(png, facing);
+  return normalizeSpriteAnchor(
+    (keyed && anchors?.[keyed]) || anchors?.[png] || DEFAULT_SPRITE_ANCHOR,
+  );
+}
+
 /**
  * All placed buildings occupy one tile by default (scale 1 = TILE_W).
  * Per-sprite anchors (scale / ox / oy) are editable in the admin calibrator
  * and stored in Firestore coach_depot_config/spriteAnchors.
+ * Decorations may use `file.png@NE` keys so opposite edges don't share offsets.
  */
 export const DEFAULT_SPRITE_ANCHOR = { scale: 1, ox: 0, oy: 0 };
 
@@ -265,7 +444,7 @@ export function normalizeSpriteAnchors(map = {}) {
   const out = {};
   if (!map || typeof map !== 'object') return out;
   for (const [key, val] of Object.entries(map)) {
-    const file = spriteFileName(key);
+    const file = normalizeAnchorMapKey(key);
     if (!file) continue;
     out[file] = normalizeSpriteAnchor(val);
   }

@@ -224,7 +224,7 @@ export default function EmergencyPhone() {
         </div>
 
         {loading ? (
-          <p className="text-sm text-slate-400">Loading…</p>
+          <p className="text-sm text-slate-400">Loading emergency phone roster…</p>
         ) : (
           <>
             {error && (

@@ -4,6 +4,7 @@ import { signOut } from 'firebase/auth';
 import { auth } from '../firebase';
 import { useAuth } from '../context/AuthContext';
 import AmbientBackground from '../components/AmbientBackground';
+import AppErrorBoundary from '../components/AppErrorBoundary';
 import ThemeToggle from '../components/ThemeToggle';
 import LanguageSwitcher from '../components/LanguageSwitcher';
 import DigitalClock from '../components/DigitalClock';
@@ -157,6 +158,8 @@ export default function Dashboard() {
   const hasHolidaysAccess = typeof holidaysRole === 'string' && holidaysRole.trim().length > 0;
   const eventsRole = user?.portalsAccess?.events_app;
   const hasEventsAccess = typeof eventsRole === 'string' && eventsRole.trim().length > 0;
+  const vehiclesRole = user?.portalsAccess?.vehicles_app;
+  const hasVehiclesAccess = typeof vehiclesRole === 'string' && vehiclesRole.trim().length > 0;
   const contractsRole = user?.portalsAccess?.contracts_app;
   const hasContractsAccess = typeof contractsRole === 'string' && contractsRole.trim().length > 0;
   const firstName = (user?.fullName || user?.email || 'there').trim().split(/\s+/)[0];
@@ -177,6 +180,7 @@ export default function Dashboard() {
     hasTrainingAccess && { label: t('portal.training'), href: 'https://training.countrylion.co.uk' },
     hasHolidaysAccess && { label: t('portal.holidays'), href: 'https://holidays.countrylion.co.uk' },
     hasEventsAccess && { label: t('portal.events'), href: 'https://events.countrylion.co.uk' },
+    hasVehiclesAccess && { label: t('portal.vehicles'), href: 'https://vehicles.countrylion.co.uk' },
     hasTyreAccess && { label: t('portal.tyres'), href: 'https://tyres.countrylion.co.uk' },
     hasCleaningAccess && { label: t('portal.cleaning'), href: 'https://cleaning.countrylion.co.uk' },
     hasComplianceAccess && { label: t('portal.compliance'), href: 'https://compliance.countrylion.co.uk' },
@@ -208,7 +212,7 @@ export default function Dashboard() {
         <button
           type="button"
           onClick={() => setSidebarOpen(!sidebarOpen)}
-          className="btn btn-ghost btn-sm btn-square text-base-content/70"
+          className="btn btn-ghost btn-square min-h-11 min-w-11 text-base-content/70"
           aria-label={sidebarOpen ? t('nav.closeMenu') : t('nav.openMenu')}
         >
           {isDesktop ? <MenuIcon className="w-5 h-5" /> : <CloseIcon className="w-5 h-5" />}
@@ -272,19 +276,19 @@ export default function Dashboard() {
 
       {sidebar}
 
-      <main className="relative z-10 flex-1 min-w-0 overflow-y-auto scrollbar-thin">
-        <div className="px-4 sm:px-8 py-3 sm:py-4 border-b border-base-300 bg-base-200/60 backdrop-blur-md flex items-center gap-3 relative z-20">
+      <main className="relative z-10 flex-1 min-w-0 overflow-y-auto overflow-x-hidden scrollbar-thin">
+        <div className="px-4 sm:px-8 py-3 sm:py-4 border-b border-base-300 bg-base-200/60 backdrop-blur-md flex items-center gap-2 sm:gap-3 relative z-20 min-w-0">
           {!isDesktop && (
             <button
               type="button"
               onClick={() => setSidebarOpen(true)}
-              className="btn btn-ghost btn-sm btn-square"
+              className="btn btn-ghost btn-square min-h-11 min-w-11"
               aria-label={t('nav.openMenu')}
             >
               <MenuIcon className="w-5 h-5" />
             </button>
           )}
-          <div className="min-w-0 flex-1 flex items-center gap-3">
+          <div className="min-w-0 flex-1 flex items-center gap-2 sm:gap-3 overflow-hidden">
             <p className="text-base-content/70 text-sm min-w-0 truncate">
               {(() => {
                 const greeting = t('nav.hello', { name: firstName });
@@ -299,14 +303,25 @@ export default function Dashboard() {
                 );
               })()}
             </p>
-            <DigitalClock />
+            <div className="hidden sm:block shrink-0">
+              <DigitalClock />
+            </div>
           </div>
-          <LanguageSwitcher />
-          <div className="sm:hidden">
-            <ThemeToggle showLabel={false} className="!w-auto px-2" />
+          <div className="shrink-0">
+            <LanguageSwitcher />
+          </div>
+          <div className="sm:hidden shrink-0">
+            <ThemeToggle showLabel={false} className="!w-auto min-h-11 px-2" />
           </div>
         </div>
-        <Outlet />
+        <AppErrorBoundary
+          variant="section"
+          resetKey={location.pathname}
+          onHome={() => navigate('/dashboard/profile')}
+          onRetry={() => navigate(location.pathname, { replace: true })}
+        >
+          <Outlet />
+        </AppErrorBoundary>
       </main>
       <KudosWelcomeModal uid={user?.uid} />
       <CoinAwardToaster />

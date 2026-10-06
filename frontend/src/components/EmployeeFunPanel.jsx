@@ -11,10 +11,10 @@ import { PipesDailyPanel } from './PipesPanel';
 import { ToolboxKickDailyPanel } from './ToolboxKickPanel';
 import { WantedDailyPanel } from './WantedPanel';
 import { StackWalkDailyPanel } from './StackWalkPanel';
-import CoachDepotPanel from './CoachDepotPanel';
 import AchievementsPanel from './AchievementsPanel';
 import FunDayPicker, { getLondonDayKey } from './FunDayPicker';
 import FunLeaderboardRow from './FunLeaderboardRow';
+import { FunSectionErrorBoundary } from './FunErrorBoundary';
 import {
   ENCLOSE_LIVE_FROM,
   LETTERBOX_LIVE_FROM,
@@ -65,7 +65,8 @@ function TrophyIcon({ className }) {
   );
 }
 
-const FUN_SECTION_STORAGE_KEY = 'employee-fun-open-sections';
+/** Bumped so prior “all open” defaults don’t remount every heavy game at once. */
+const FUN_SECTION_STORAGE_KEY = 'employee-fun-open-sections-v2';
 
 const DEFAULT_OPEN_SECTIONS = {
   trivia: false,
@@ -74,15 +75,14 @@ const DEFAULT_OPEN_SECTIONS = {
   sokoban: false,
   boggle: false,
   connections: false,
-  enclose: true,
-  enclosePractice: true,
-  letterbox: true,
-  letterboxPractice: true,
-  pipes: true,
-  toolboxkick: true,
-  wanted: true,
-  stackwalk: true,
-  coachdepot: true,
+  enclose: false,
+  enclosePractice: false,
+  letterbox: false,
+  letterboxPractice: false,
+  pipes: false,
+  toolboxkick: false,
+  wanted: false,
+  stackwalk: false,
   achievements: false,
 };
 
@@ -115,9 +115,9 @@ function normalizeRotation(raw, fallbackDayKey) {
   };
 }
 
-function FunSection({ title, open, onToggle, children }) {
+function FunSection({ title, open, onToggle, children, bleed = false }) {
   return (
-    <div className="bg-[#0b1220] border border-[#1a2540] rounded-xl overflow-hidden">
+    <div className="bg-[#0b1220] border border-[#1a2540] rounded-xl overflow-hidden w-full">
       <button
         type="button"
         onClick={onToggle}
@@ -130,7 +130,11 @@ function FunSection({ title, open, onToggle, children }) {
         </span>
       </button>
       {open ? (
-        <div className="px-5 pb-5 pt-2 border-t border-[#1a2540] space-y-4">
+        <div
+          className={`border-t border-[#1a2540] space-y-4 ${
+            bleed ? 'px-0 pb-0 pt-0' : 'px-5 pb-5 pt-2'
+          }`}
+        >
           {children}
         </div>
       ) : null}
@@ -747,55 +751,55 @@ export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
         onToggle={() => toggle('achievements')}
       >
         {openSections?.achievements ? (
-          <AchievementsPanel achievements={achievements} isAdmin={isAdmin} />
+          <FunSectionErrorBoundary label="Trophy case">
+            <AchievementsPanel achievements={achievements} isAdmin={isAdmin} />
+          </FunSectionErrorBoundary>
         ) : null}
       </FunSection>
-
-      {isAdmin ? (
-        <FunSection
-          title="Coach Depot · admin preview"
-          open={openSections?.coachdepot !== false}
-          onToggle={() => toggle('coachdepot')}
-        >
-          {openSections?.coachdepot !== false ? (
-            <CoachDepotPanel currentUserUid={currentUserUid} />
-          ) : null}
-        </FunSection>
-      ) : null}
 
       {showEnclosePractice ? (
         <FunSection
           title="Enclose practice · new game"
-          open={openSections?.enclosePractice !== false}
+          open={Boolean(openSections?.enclosePractice)}
           onToggle={() => toggle('enclosePractice')}
         >
-          {openSections?.enclosePractice !== false ? <EnclosePracticePanel /> : null}
+          {openSections?.enclosePractice ? (
+            <FunSectionErrorBoundary label="Enclose practice">
+              <EnclosePracticePanel />
+            </FunSectionErrorBoundary>
+          ) : null}
         </FunSection>
       ) : null}
 
       {showLetterboxPractice ? (
         <FunSection
           title="Letter Box · new puzzle · try today"
-          open={openSections?.letterboxPractice !== false}
+          open={Boolean(openSections?.letterboxPractice)}
           onToggle={() => toggle('letterboxPractice')}
         >
-          {openSections?.letterboxPractice !== false ? <LetterboxPracticePanel /> : null}
+          {openSections?.letterboxPractice ? (
+            <FunSectionErrorBoundary label="Letter Box practice">
+              <LetterboxPracticePanel />
+            </FunSectionErrorBoundary>
+          ) : null}
         </FunSection>
       ) : null}
 
       {showStackWalkSecret ? (
         <FunSection
           title="O Dell's Amazon Run · early peek"
-          open={openSections?.stackwalk !== false}
+          open={Boolean(openSections?.stackwalk)}
           onToggle={() => toggle('stackwalk')}
         >
-          {openSections?.stackwalk !== false ? (
-            <StackWalkDailyPanel
-              preview
-              currentUserUid={currentUserUid}
-              onAchievements={refreshAchievements}
-              isAdmin={isAdmin}
-            />
+          {openSections?.stackwalk ? (
+            <FunSectionErrorBoundary label="O Dell's Amazon Run">
+              <StackWalkDailyPanel
+                preview
+                currentUserUid={currentUserUid}
+                onAchievements={refreshAchievements}
+                isAdmin={isAdmin}
+              />
+            </FunSectionErrorBoundary>
           ) : null}
         </FunSection>
       ) : null}
@@ -806,8 +810,17 @@ export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
           title={section.title}
           open={Boolean(openSections?.[section.id])}
           onToggle={() => toggle(section.id)}
+          bleed={section.id === 'toolboxkick'}
         >
-          {openSections?.[section.id] ? section.render() : null}
+          {openSections?.[section.id] ? (
+            <FunSectionErrorBoundary label={section.title}>
+              {section.id === 'toolboxkick' ? (
+                <div className="pt-2 pb-4">{section.render()}</div>
+              ) : (
+                section.render()
+              )}
+            </FunSectionErrorBoundary>
+          ) : null}
         </FunSection>
       ))}
     </div>

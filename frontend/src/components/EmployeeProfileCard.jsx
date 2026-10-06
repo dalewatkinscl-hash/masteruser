@@ -120,24 +120,24 @@ function ProfileSummary({
   return (
     <div className={`cl-card ${isBirthdayToday ? 'relative overflow-visible' : 'overflow-hidden'}`}>
       <div className="h-px w-full bg-gradient-to-r from-transparent via-[#5E6AD2]/60 to-transparent" />
-      <div className="px-6 py-5">
+      <div className="px-4 sm:px-6 py-5">
         {isBirthdayToday && (
           <BirthdayCelebration fullName={displayName || profile?.fullName} age={birthday.age} />
         )}
 
         <div className="flex flex-wrap items-start justify-between gap-4 mb-5">
-          <div>
+          <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-3">
               {editable.hr ? (
                 <input
-                  className={`${inputClassName(false)} text-2xl font-semibold tracking-tight text-cl-fg max-w-md`}
+                  className={`${inputClassName(false)} text-xl sm:text-2xl font-semibold tracking-tight text-cl-fg w-full max-w-md`}
                   value={fullName}
                   onChange={(e) => onFullNameChange?.(e.target.value)}
                   placeholder={t('card.employeeName')}
                   aria-label={t('card.employeeName')}
                 />
               ) : (
-                <h2 className="text-2xl font-semibold tracking-tight text-cl-fg">{profile?.fullName || '—'}</h2>
+                <h2 className="text-xl sm:text-2xl font-semibold tracking-tight text-cl-fg break-words">{profile?.fullName || '—'}</h2>
               )}
               <YearsOfServiceBadge startDate={employee.startDate} />
               {isBirthdayToday && (
@@ -146,7 +146,7 @@ function ProfileSummary({
                 </span>
               )}
             </div>
-            <p className="text-sm text-cl-muted mt-1">
+            <p className="text-sm text-cl-muted mt-1 break-words">
               {[employee.jobRole, employee.department].filter(Boolean).join(' · ') || '—'}
             </p>
             {kudosToday.length > 0 && (
@@ -498,7 +498,7 @@ export default function EmployeeProfileCard({
     businessCommsEmail: isDriver ? 'personal' : businessCommsEmail,
     employeeProfile: form,
   });
-  const wrapperClass = `${embedded ? 'space-y-4' : 'w-full px-8 py-6 space-y-4'} ${className}`.trim();
+  const wrapperClass = `${embedded ? 'space-y-4' : 'w-full px-4 sm:px-8 py-6 space-y-4'} ${className}`.trim();
   const showEmployment = show('employment');
   // Hidden company-wide for now (SHOW_HR_RECORDS). When re-enabled, drivers
   // still do not see HR records on their own profile; HR staff still can.

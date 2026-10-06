@@ -17,6 +17,7 @@ const {
   mapStageForFamilyChange,
   guideFor,
   sanitizeCaseCreateInput,
+  sanitizeUidList,
   outcomePresetById,
   buildOutcomePackSteps,
   addWorkingDays,
@@ -90,6 +91,11 @@ const {
   MANUAL_DEDUCTION,
 } = require('./bonusManualAdjustments');
 const { hasFeatureAccess } = require('./featureAccess');
+const {
+  createVehicleAccident,
+  updateVehicleAccident,
+  getVehicleAccident,
+} = require('./vehiclesPortalClient');
 
 function canAccessBonusAdmin(profile, getEffectivePortalRole) {
   if (!profile) return false;
@@ -108,7 +114,59 @@ function createPeopleCasesApi({
   uploadDisciplinaryDocument,
   isSharePointConfigured,
   getSharePointConfig,
+  gmailSecrets = [],
+  getGmailCredentials = null,
 }) {
+  const {
+    CHANNELS: CASE_NOTIFICATION_CHANNELS,
+    loadCaseNotificationSettings,
+    saveCaseNotificationSettings,
+    notifyCaseStakeholders,
+  } = require('./caseStakeholderNotifications');
+
+  function assertMasterAdmin(session, res) {
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return false;
+    }
+    if (session.profile?.portalsAccess?.master_admin !== 'admin') {
+      res.status(403).json({ error: 'Master admin access required.' });
+      return false;
+    }
+    return true;
+  }
+
+  function grievanceSubjectUidsOf(caseData) {
+    return sanitizeUidList(caseData?.grievanceSubjectUids);
+  }
+
+  function isBlockedGrievanceSubject(session, caseData) {
+    const uid = toTrimmedString(session?.profile?.uid);
+    if (!uid) return false;
+    return grievanceSubjectUidsOf(caseData).includes(uid);
+  }
+
+  function assertCanAccessCase(session, caseData, res) {
+    if (isBlockedGrievanceSubject(session, caseData)) {
+      res.status(403).json({
+        error: 'You cannot open this grievance because you are named as a subject of the complaint.',
+      });
+      return false;
+    }
+    return true;
+  }
+
+  async function resolveGrievanceSubjects(uids) {
+    const names = [];
+    const resolvedUids = [];
+    for (const uid of sanitizeUidList(uids)) {
+      const profile = await getUserProfile(uid);
+      if (!profile) continue;
+      resolvedUids.push(uid);
+      names.push(profile.fullName || profile.email || uid);
+    }
+    return { grievanceSubjectUids: resolvedUids, grievanceSubjectNamesSnapshot: names };
+  }
   async function appendEvent(caseId, eventType, payload, actor) {
     await db.collection('disciplinary_case_events').add({
       caseId,
@@ -267,10 +325,13 @@ function createPeopleCasesApi({
     return null;
   }
 
-  async function loadCaseOrFail(caseId, res) {
+  async function loadCaseOrFail(caseId, res, session = null) {
     const caseSnap = await db.collection('disciplinary_cases').doc(caseId).get();
     if (!caseSnap.exists) {
       res.status(404).json({ error: 'Case not found.' });
+      return null;
+    }
+    if (session && !assertCanAccessCase(session, caseSnap.data(), res)) {
       return null;
     }
     return caseSnap;
@@ -639,6 +700,10 @@ function createPeopleCasesApi({
         }
 
         let cases = snapshot.docs.map((doc) => serializeCase(doc));
+        const viewerUid = toTrimmedString(session.profile?.uid);
+        if (viewerUid) {
+          cases = cases.filter((item) => !grievanceSubjectUidsOf(item).includes(viewerUid));
+        }
         if (processFamily) {
           cases = cases.filter((item) => (item.processFamily || 'disciplinary') === processFamily);
         }
@@ -658,7 +723,21 @@ function createPeopleCasesApi({
           });
         }
 
-        cases.sort((left, right) => String(right.createdAt || '').localeCompare(String(left.createdAt || '')));
+        const caseDateKey = (item) => {
+          const raw = item?.eventDate || item?.openedAt || item?.createdAt || item?.closedAt || '';
+          const text = String(raw).trim();
+          const iso = text.match(/^(\d{4})-(\d{2})-(\d{2})/);
+          if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+          const parsed = Date.parse(text);
+          if (!Number.isNaN(parsed)) return new Date(parsed).toISOString().slice(0, 10);
+          return '';
+        };
+        cases.sort((left, right) => {
+          const a = caseDateKey(left) || '0000-00-00';
+          const b = caseDateKey(right) || '0000-00-00';
+          if (a !== b) return b.localeCompare(a);
+          return String(right.createdAt || '').localeCompare(String(left.createdAt || ''));
+        });
         res.status(200).json({ cases });
       } catch (error) {
         console.error('getPeopleCases failed', error);
@@ -759,9 +838,10 @@ function createPeopleCasesApi({
       }
 
       try {
-        const caseSnap = await loadCaseOrFail(caseId, res);
+        const caseSnap = await loadCaseOrFail(caseId, res, session);
         if (!caseSnap) return;
         let caseData = caseSnap.data();
+        if (!assertCanAccessCase(session, caseData, res)) return;
 
         let related = await listRelated(caseId);
         const scrubbed = await scrubRecordOutcomeArtifacts(caseSnap, related);
@@ -927,8 +1007,67 @@ function createPeopleCasesApi({
           templates: stageTemplates,
         }).map((item) => ({ id: item.id, title: item.title, documentType: item.documentType }));
 
+        let bumpCard = null;
+        const bumpCardId = toTrimmedString(caseData.bumpCardId);
+        const vehiclesAccidentId = toTrimmedString(caseData.vehiclesAccidentId);
+        const isAccidentCase = (caseData.processFamily || '') === 'vehicle_accident'
+          || Boolean(vehiclesAccidentId)
+          || Boolean(bumpCardId);
+
+        if (bumpCardId) {
+          const bumpSnap = await db.collection('bump_cards').doc(bumpCardId).get();
+          if (bumpSnap.exists) {
+            const bumpData = bumpSnap.data() || {};
+            bumpCard = {
+              id: bumpSnap.id,
+              ...bumpData,
+              createdAt: serializeTimestamp(bumpData.createdAt),
+            };
+          }
+        }
+
+        if (!bumpCard && isAccidentCase) {
+          try {
+            const bumpSnap = await db.collection('bump_cards').where('caseId', '==', caseId).limit(1).get();
+            if (!bumpSnap.empty) {
+              const bumpDoc = bumpSnap.docs[0];
+              const bumpData = bumpDoc.data() || {};
+              bumpCard = {
+                id: bumpDoc.id,
+                ...bumpData,
+                createdAt: serializeTimestamp(bumpData.createdAt),
+              };
+              if (!bumpCardId) {
+                await caseSnap.ref.update({ bumpCardId: bumpDoc.id }).catch(() => {});
+              }
+            }
+          } catch (bumpQueryError) {
+            console.error('getPeopleCase bump_cards by caseId failed', bumpQueryError);
+          }
+        }
+
+        // Vehicles portal is source of truth for the accident record — use its bump payload if local doc is missing.
+        if (!bumpCard && vehiclesAccidentId) {
+          try {
+            const accident = await getVehicleAccident(vehiclesAccidentId);
+            if (accident?.bump && (accident.bump.roadDescription || accident.bump.description || accident.bump.location)) {
+              bumpCard = {
+                id: accident.bumpCardId || '',
+                source: 'vehicles_portal',
+                incidentAt: accident.incidentAt || caseData.incidentAt || '',
+                vehicleReg: accident.vehicleReg || caseData.vehicleReg || '',
+                vehicleId: accident.vehicleId || caseData.vehicleId || '',
+                ...accident.bump,
+              };
+            }
+          } catch (vehError) {
+            console.error('getPeopleCase vehicles accident bump fallback failed', vehError);
+          }
+        }
+
         res.status(200).json({
           case: serialized,
+          bumpCard,
           ...relatedForClient(related),
           history,
           coachingHistory,
@@ -963,6 +1102,19 @@ function createPeopleCasesApi({
       if (!input.employeeUid) {
         res.status(400).json({ error: 'employeeUid is required.' });
         return;
+      }
+      if (input.processFamily === 'vehicle_accident') {
+        if (!input.vehicleReg) {
+          res.status(400).json({ error: 'Vehicle registration is required.' });
+          return;
+        }
+        if (!input.incidentAt) {
+          res.status(400).json({ error: 'Accident date/time is required.' });
+          return;
+        }
+        if (!input.issue) {
+          input.issue = `Vehicle accident — ${input.vehicleReg}`;
+        }
       }
       if (!input.issue) {
         res.status(400).json({
@@ -1002,6 +1154,10 @@ function createPeopleCasesApi({
         res.status(400).json({ error: 'Record the off-portal grievance raise date or notes.' });
         return;
       }
+      if (input.processFamily === 'grievance' && !input.grievanceSubjectUids.length) {
+        res.status(400).json({ error: 'Select at least one person the grievance is about.' });
+        return;
+      }
 
       try {
         const employee = await getUserProfile(input.employeeUid);
@@ -1016,14 +1172,30 @@ function createPeopleCasesApi({
         const slaDueAt = addWorkingDays(new Date(), 5);
         const employeeName = employee.fullName || employee.email || 'Employee';
         const isSamsara = input.processFamily === 'samsara_coaching';
-        const openedDateLabel = isSamsara && input.eventDate
-          ? input.eventDate.split('-').reverse().join('/')
-          : new Date().toLocaleDateString('en-GB');
+        const isAccident = input.processFamily === 'vehicle_accident';
         const issue = input.issue;
-        const title = input.title || `${employeeName} - ${issue} - ${openedDateLabel}`;
+        const title = input.title
+          || (isSamsara
+            ? `${employeeName} - ${issue} Samsara Coaching`
+            : isAccident
+              ? `${employeeName} — Vehicle accident — ${input.vehicleReg}`
+              : `${employeeName} - ${issue}`);
         const closeNotes = isSamsara
           ? 'Processed on the Samsara system. No portal interview required.'
           : '';
+        const accidentStage = 'recorded';
+        let grievanceSubjects = { grievanceSubjectUids: [], grievanceSubjectNamesSnapshot: [] };
+        if (input.processFamily === 'grievance') {
+          grievanceSubjects = await resolveGrievanceSubjects(input.grievanceSubjectUids);
+          if (!grievanceSubjects.grievanceSubjectUids.length) {
+            res.status(400).json({ error: 'Select at least one person the grievance is about.' });
+            return;
+          }
+          if (grievanceSubjects.grievanceSubjectUids.includes(input.employeeUid)) {
+            res.status(400).json({ error: 'The person raising the grievance cannot also be listed as a subject.' });
+            return;
+          }
+        }
 
         const caseDoc = await db.collection('disciplinary_cases').add({
           employeeUid: input.employeeUid,
@@ -1038,7 +1210,7 @@ function createPeopleCasesApi({
           title,
           summary: input.summary || (isSamsara ? closeNotes : ''),
           status: isSamsara ? 'closed' : 'open',
-          stage: isSamsara ? 'closed' : input.stage,
+          stage: isSamsara ? 'closed' : (isAccident ? accidentStage : input.stage),
           origin: input.sourceIncidentId ? 'attendance_auto' : (isSamsara ? 'samsara' : 'manual'),
           sourceIncidentId: input.sourceIncidentId || '',
           dueAt: input.dueAt || '',
@@ -1051,7 +1223,15 @@ function createPeopleCasesApi({
           informalActionTakenAt: null,
           offPortalRaiseDate: input.offPortalRaiseDate,
           offPortalRaiseNotes: input.offPortalRaiseNotes,
+          grievanceSubjectUids: grievanceSubjects.grievanceSubjectUids,
+          grievanceSubjectNamesSnapshot: grievanceSubjects.grievanceSubjectNamesSnapshot,
           eventDate: input.eventDate || '',
+          incidentAt: isAccident ? input.incidentAt : '',
+          vehicleReg: isAccident ? input.vehicleReg : '',
+          vehicleId: isAccident ? input.vehicleId : '',
+          vehiclesAccidentId: '',
+          bumpCardId: '',
+          accidentFault: isAccident ? 'pending' : '',
           processedOnSamsara: isSamsara,
           historyReviewedAt: isSamsara ? now : null,
           historyReviewedByUid: isSamsara ? session.profile.uid : '',
@@ -1110,17 +1290,62 @@ function createPeopleCasesApi({
             title,
             openedAt: new Date(),
             offPortalRaiseDate: input.offPortalRaiseDate,
+            incidentAt: isAccident ? input.incidentAt : '',
+          });
+        }
+
+        let vehiclesAccidentId = '';
+        if (isAccident) {
+          try {
+            const accident = await createVehicleAccident({
+              status: 'awaiting_bump',
+              fault: 'pending',
+              employeeUid: input.employeeUid,
+              employeeName,
+              vehicleId: input.vehicleId,
+              vehicleReg: input.vehicleReg,
+              incidentAt: input.incidentAt,
+              caseId: caseDoc.id,
+            }, session.profile.uid);
+            vehiclesAccidentId = accident?.id || '';
+            if (vehiclesAccidentId) {
+              await caseDoc.update({ vehiclesAccidentId });
+            }
+          } catch (vehError) {
+            console.error('createPeopleCase vehicles accident failed', vehError);
+            await caseDoc.delete().catch(() => {});
+            res.status(502).json({
+              error: vehError.message || 'Failed to record accident on the vehicles portal.',
+            });
+            return;
+          }
+
+          await db.collection('bump_card_prompts').add({
+            employeeUid: input.employeeUid,
+            employeeNameSnapshot: employeeName,
+            notes: `Please complete a bump card for ${input.vehicleReg} (${new Date(input.incidentAt).toLocaleString('en-GB')}).`,
+            status: 'open',
+            caseId: caseDoc.id,
+            vehiclesAccidentId,
+            vehicleReg: input.vehicleReg,
+            vehicleId: input.vehicleId,
+            incidentAt: input.incidentAt,
+            createdByUid: session.profile.uid,
+            createdAt: now,
           });
         }
 
         await appendEvent(caseDoc.id, 'case_created', {
           processFamily: input.processFamily,
           caseType: input.caseType,
-          stage: isSamsara ? 'closed' : input.stage,
+          stage: isSamsara ? 'closed' : (isAccident ? accidentStage : input.stage),
           ownerManagerUid,
           issue,
           title,
           eventDate: input.eventDate || '',
+          incidentAt: isAccident ? input.incidentAt : '',
+          vehicleReg: isAccident ? input.vehicleReg : '',
+          vehiclesAccidentId,
           processedOnSamsara: isSamsara,
           informalResolutionPath: input.informalResolutionPath || '',
           createdByName: session.profile.fullName || session.profile.email || '',
@@ -1134,11 +1359,22 @@ function createPeopleCasesApi({
           }, session.profile);
         }
 
+        if (isAccident) {
+          await appendEvent(caseDoc.id, 'accident_recorded', {
+            vehicleReg: input.vehicleReg,
+            incidentAt: input.incidentAt,
+            vehiclesAccidentId,
+          }, session.profile);
+        }
+
         res.status(200).json({
           id: caseDoc.id,
+          vehiclesAccidentId,
           message: isSamsara
             ? 'Samsara coaching logged and closed.'
-            : 'Case created.',
+            : isAccident
+              ? 'Accident recorded. Driver has been prompted to complete the bump card.'
+              : 'Case created.',
         });
       } catch (error) {
         console.error('createPeopleCase failed', error);
@@ -1148,7 +1384,10 @@ function createPeopleCasesApi({
   );
 
   const updatePeopleCase = onRequest(
-    { region: 'europe-west2' },
+    {
+      region: 'europe-west2',
+      ...(Array.isArray(gmailSecrets) && gmailSecrets.length ? { secrets: gmailSecrets } : {}),
+    },
     withCors(async (req, res) => {
       if (req.method !== 'POST') {
         res.status(405).json({ error: 'Method not allowed.' });
@@ -1165,13 +1404,35 @@ function createPeopleCasesApi({
       }
 
       try {
-        const caseSnap = await loadCaseOrFail(caseId, res);
+        const caseSnap = await loadCaseOrFail(caseId, res, session);
         if (!caseSnap) return;
         const existing = caseSnap.data();
+        if (!assertCanAccessCase(session, existing, res)) return;
         const patch = {};
         const events = [];
         const calendarEvents = [];
         let restrictionForOutcome = null;
+
+        if (
+          Object.prototype.hasOwnProperty.call(body, 'grievanceSubjectUids')
+          && (existing.processFamily || 'disciplinary') === 'grievance'
+        ) {
+          const subjects = await resolveGrievanceSubjects(body.grievanceSubjectUids);
+          if (!subjects.grievanceSubjectUids.length) {
+            res.status(400).json({ error: 'Select at least one person the grievance is about.' });
+            return;
+          }
+          if (subjects.grievanceSubjectUids.includes(existing.employeeUid)) {
+            res.status(400).json({ error: 'The person raising the grievance cannot also be listed as a subject.' });
+            return;
+          }
+          patch.grievanceSubjectUids = subjects.grievanceSubjectUids;
+          patch.grievanceSubjectNamesSnapshot = subjects.grievanceSubjectNamesSnapshot;
+          events.push(['grievance_subjects_updated', {
+            grievanceSubjectUids: subjects.grievanceSubjectUids,
+            grievanceSubjectNamesSnapshot: subjects.grievanceSubjectNamesSnapshot,
+          }]);
+        }
 
         const assignable = [
           'title', 'summary', 'status', 'dueAt', 'slaDueAt',
@@ -2242,7 +2503,59 @@ function createPeopleCasesApi({
           }
         }
 
+        const accidentFault = toTrimmedString(body.accidentFault).toLowerCase();
+        if (accidentFault === 'third_party' || accidentFault === 'driver') {
+          if ((existing.processFamily || '') !== 'vehicle_accident') {
+            res.status(400).json({ error: 'Fault decision only applies to vehicle accident cases.' });
+            return;
+          }
+          const currentStage = normalizeStage('vehicle_accident', existing.stage);
+          if (currentStage !== 'triage') {
+            res.status(400).json({ error: 'Fault can only be decided after the bump card is submitted (triage).' });
+            return;
+          }
+          patch.accidentFault = accidentFault;
+          if (accidentFault === 'third_party') {
+            patch.stage = 'closed';
+            patch.status = 'closed';
+            patch.closedAt = admin.firestore.FieldValue.serverTimestamp();
+            patch.closedByUid = session.profile.uid;
+            patch.closedByName = session.profile.fullName || session.profile.email || '';
+            patch.closeNotes = toTrimmedString(body.closeNotes) || 'Third party at fault — accident case closed.';
+            patch.outcomePreset = 'no_further_action';
+            events.push(['accident_fault_third_party', { fault: 'third_party' }]);
+            if (existing.vehiclesAccidentId) {
+              try {
+                await updateVehicleAccident(existing.vehiclesAccidentId, {
+                  status: 'closed',
+                  fault: 'third_party',
+                }, session.profile.uid);
+              } catch (vehError) {
+                console.error('updatePeopleCase vehicles accident close failed', vehError);
+              }
+            }
+          } else {
+            patch.processFamily = 'disciplinary';
+            patch.caseType = existing.caseType === 'vehicle_accident' ? 'conduct' : (existing.caseType || 'conduct');
+            patch.stage = 'fact_finding';
+            patch.status = 'open';
+            patch.convertedFromAccidentAt = admin.firestore.FieldValue.serverTimestamp();
+            events.push(['accident_converted_disciplinary', { fault: 'driver', stage: 'fact_finding' }]);
+            if (existing.vehiclesAccidentId) {
+              try {
+                await updateVehicleAccident(existing.vehiclesAccidentId, {
+                  status: 'converted_disciplinary',
+                  fault: 'driver',
+                }, session.profile.uid);
+              } catch (vehError) {
+                console.error('updatePeopleCase vehicles accident convert failed', vehError);
+              }
+            }
+          }
+        }
+
         if (body.openLinkedDisciplinary === true) {
+          // Legacy path kept for older accident cases; new flow converts the same case.
           const now = admin.firestore.FieldValue.serverTimestamp();
           const linked = await db.collection('disciplinary_cases').add({
             ...existing,
@@ -2327,6 +2640,23 @@ function createPeopleCasesApi({
         }
 
         const refreshed = await caseSnap.ref.get();
+        const refreshedData = refreshed.data() || {};
+        const restrictionAdded = events.some(([type]) => type === 'restriction_added');
+        const finalizedOutcome = events.find(([type]) => type === 'outcome_finalized');
+        try {
+          await notifyCaseStakeholders(db, {
+            getGmailCredentials,
+            caseId,
+            caseData: refreshedData,
+            restrictionAdded,
+            outcomePreset: finalizedOutcome?.[1]?.outcomePreset
+              || (body.finalizeOutcome === true ? toTrimmedString(body.outcomePreset) : ''),
+            finalizeOutcome: body.finalizeOutcome === true,
+          });
+        } catch (notifyError) {
+          console.error('Case stakeholder notification failed', notifyError);
+        }
+
         const responseBody = { case: serializeCase(refreshed), message: 'Case updated.' };
         if (fileNoteHtml) {
           responseBody.message = 'File note issued to the employee portal for digital signature. Manager signature applied. Case closed pending employee sign-off.';
@@ -2365,7 +2695,7 @@ function createPeopleCasesApi({
         return;
       }
       try {
-        const caseSnap = await loadCaseOrFail(caseId, res);
+        const caseSnap = await loadCaseOrFail(caseId, res, session);
         if (!caseSnap) return;
         const caseData = caseSnap.data();
         const now = admin.firestore.FieldValue.serverTimestamp();
@@ -2669,7 +2999,7 @@ function createPeopleCasesApi({
         return;
       }
       try {
-        const caseSnap = await loadCaseOrFail(caseId, res);
+        const caseSnap = await loadCaseOrFail(caseId, res, session);
         if (!caseSnap) return;
         const ref = await db.collection('case_reviews').add({
           caseId,
@@ -3212,6 +3542,76 @@ function createPeopleCasesApi({
     }),
   );
 
+  const getBumpCardContext = onRequest(
+    { region: 'europe-west2' },
+    withCors(async (req, res) => {
+      if (req.method !== 'GET') {
+        res.status(405).json({ error: 'Method not allowed.' });
+        return;
+      }
+      const session = await getVerifiedSessionUser(req);
+      if (!session) {
+        res.status(401).json({ error: 'Authentication required.' });
+        return;
+      }
+      const caseId = toTrimmedString(req.query?.caseId);
+      const promptId = toTrimmedString(req.query?.promptId);
+      const isManager = canManageCases(session.profile, getEffectivePortalRole);
+      try {
+        let prompt = null;
+        if (promptId) {
+          const promptSnap = await db.collection('bump_card_prompts').doc(promptId).get();
+          if (promptSnap.exists) {
+            const data = promptSnap.data() || {};
+            if (data.employeeUid === session.profile.uid || isManager) {
+              prompt = { id: promptSnap.id, ...data };
+            }
+          }
+        }
+        let caseData = null;
+        const resolvedCaseId = caseId || toTrimmedString(prompt?.caseId);
+        if (resolvedCaseId) {
+          const caseSnap = await db.collection('disciplinary_cases').doc(resolvedCaseId).get();
+          if (caseSnap.exists) {
+            const data = caseSnap.data() || {};
+            if (data.employeeUid === session.profile.uid || isManager) {
+              caseData = {
+                id: caseSnap.id,
+                employeeUid: data.employeeUid || '',
+                employeeNameSnapshot: data.employeeNameSnapshot || '',
+                vehicleReg: data.vehicleReg || '',
+                vehicleId: data.vehicleId || '',
+                incidentAt: data.incidentAt || '',
+                vehiclesAccidentId: data.vehiclesAccidentId || '',
+                stage: data.stage || '',
+                processFamily: data.processFamily || '',
+                title: data.title || '',
+              };
+            }
+          }
+        }
+        if (!prompt && !caseData && !promptId && !caseId) {
+          const openPrompt = await db.collection('bump_card_prompts')
+            .where('employeeUid', '==', session.profile.uid)
+            .where('status', '==', 'open')
+            .limit(1)
+            .get();
+          if (!openPrompt.empty) {
+            prompt = { id: openPrompt.docs[0].id, ...openPrompt.docs[0].data() };
+          }
+        }
+        res.status(200).json({
+          prompt,
+          case: caseData,
+          driverName: session.profile.fullName || '',
+        });
+      } catch (error) {
+        console.error('getBumpCardContext failed', error);
+        res.status(500).json({ error: 'Failed to load bump card context.' });
+      }
+    }),
+  );
+
   const createBumpCardPrompt = onRequest(
     { region: 'europe-west2' },
     withCors(async (req, res) => {
@@ -3232,11 +3632,30 @@ function createPeopleCasesApi({
           res.status(404).json({ error: 'Employee not found.' });
           return;
         }
+        const caseId = toTrimmedString(req.body?.caseId);
+        let casePrefill = {};
+        if (caseId) {
+          const caseSnap = await db.collection('disciplinary_cases').doc(caseId).get();
+          if (caseSnap.exists) {
+            const caseData = caseSnap.data() || {};
+            casePrefill = {
+              caseId,
+              vehiclesAccidentId: toTrimmedString(caseData.vehiclesAccidentId),
+              vehicleReg: toTrimmedString(caseData.vehicleReg),
+              vehicleId: toTrimmedString(caseData.vehicleId),
+              incidentAt: toTrimmedString(caseData.incidentAt),
+            };
+          }
+        }
         const ref = await db.collection('bump_card_prompts').add({
           employeeUid,
           employeeNameSnapshot: employee.fullName || '',
           notes: toTrimmedString(req.body?.notes),
           status: 'open',
+          ...casePrefill,
+          vehicleReg: toTrimmedString(req.body?.vehicleReg) || casePrefill.vehicleReg || '',
+          vehicleId: toTrimmedString(req.body?.vehicleId) || casePrefill.vehicleId || '',
+          incidentAt: toTrimmedString(req.body?.incidentAt) || casePrefill.incidentAt || '',
           createdByUid: session.profile.uid,
           createdAt: admin.firestore.FieldValue.serverTimestamp(),
         });
@@ -3274,53 +3693,167 @@ function createPeopleCasesApi({
           return;
         }
         const now = admin.firestore.FieldValue.serverTimestamp();
+        const caseIdInput = toTrimmedString(body.caseId);
+        const promptId = toTrimmedString(body.promptId);
+        const emergencyServicesTypes = Array.isArray(body.emergencyServicesTypes)
+          ? body.emergencyServicesTypes.map((item) => toTrimmedString(item)).filter(Boolean)
+          : [];
+        const imageUrls = Array.isArray(body.imageUrls)
+          ? body.imageUrls.map((item) => toTrimmedString(item)).filter(Boolean)
+          : [];
+        const roadDescription = toTrimmedString(body.roadDescription || body.description);
         const bump = {
           employeeUid: targetUid,
           employeeNameSnapshot: employee.fullName || '',
           incidentAt: toTrimmedString(body.incidentAt) || new Date().toISOString(),
           location: toTrimmedString(body.location),
-          vehicleReg: toTrimmedString(body.vehicleReg),
-          description: toTrimmedString(body.description),
-          injuries: toTrimmedString(body.injuries),
-          thirdParty: toTrimmedString(body.thirdParty),
+          vehicleReg: toTrimmedString(body.vehicleReg).toUpperCase(),
+          vehicleId: toTrimmedString(body.vehicleId),
+          description: roadDescription,
+          roadDescription,
           weather: toTrimmedString(body.weather),
-          policeInvolved: Boolean(body.policeInvolved),
+          visibility: toTrimmedString(body.visibility),
+          emergencyServices: Boolean(body.emergencyServices),
+          emergencyServicesTypes,
+          injuries: Boolean(body.injuries),
+          injuriesDetails: toTrimmedString(body.injuriesDetails),
+          hospital: Boolean(body.hospital),
+          hospitalDetails: toTrimmedString(body.hospitalDetails),
+          clVehicleDamage: Boolean(body.clVehicleDamage),
+          clVehicleDamageDetails: toTrimmedString(body.clVehicleDamageDetails),
+          thirdPartyVehicle: Boolean(body.thirdPartyVehicle),
+          thirdPartyReg: toTrimmedString(body.thirdPartyReg).toUpperCase(),
+          thirdPartyMake: toTrimmedString(body.thirdPartyMake),
+          thirdPartyModel: toTrimmedString(body.thirdPartyModel),
+          thirdPartyDriver: toTrimmedString(body.thirdPartyDriver),
+          thirdPartyDamage: toTrimmedString(body.thirdPartyDamage || body.thirdParty),
+          propertyDamage: Boolean(body.propertyDamage),
+          propertyDamageDetails: toTrimmedString(body.propertyDamageDetails),
+          imageUrls,
+          comments: toTrimmedString(body.comments),
+          policeInvolved: Boolean(body.policeInvolved)
+            || emergencyServicesTypes.map((v) => v.toLowerCase()).includes('police'),
           createdByUid: session.profile.uid,
           createdAt: now,
         };
-        const bumpRef = await db.collection('bump_cards').add(bump);
 
-        const caseDoc = await db.collection('disciplinary_cases').add({
-          employeeUid: targetUid,
-          employeeNameSnapshot: employee.fullName || '',
-          departmentSnapshot: employee.employeeProfile?.department || '',
-          managerUid: session.profile.uid,
-          ownerManagerUid: isManager ? session.profile.uid : (employee.managerUid || session.profile.uid),
-          managerNameSnapshot: session.profile.fullName || '',
-          processFamily: 'vehicle_accident',
-          caseType: 'vehicle_accident',
-          title: `Vehicle accident — ${employee.fullName || targetUid}`,
-          summary: bump.description,
-          status: 'open',
-          stage: 'triage',
-          bumpCardId: bumpRef.id,
-          origin: 'bump_card',
-          openedAt: now,
-          createdAt: now,
-          updatedAt: now,
-          createdByUid: session.profile.uid,
-          updatedByUid: session.profile.uid,
-          suspensionActive: false,
-          outcomePackSteps: [],
+        let caseRef = null;
+        let caseData = null;
+        if (caseIdInput) {
+          caseRef = db.collection('disciplinary_cases').doc(caseIdInput);
+          const caseSnap = await caseRef.get();
+          if (!caseSnap.exists) {
+            res.status(404).json({ error: 'Linked accident case not found.' });
+            return;
+          }
+          caseData = caseSnap.data() || {};
+          if (caseData.employeeUid && caseData.employeeUid !== targetUid && !isManager) {
+            res.status(403).json({ error: 'This bump card is for a different employee.' });
+            return;
+          }
+        }
+
+        const bumpRef = await db.collection('bump_cards').add({
+          ...bump,
+          caseId: caseRef ? caseRef.id : '',
+          vehiclesAccidentId: caseData?.vehiclesAccidentId || toTrimmedString(body.vehiclesAccidentId),
         });
 
-        await stampSharePointCaseFolderName(caseDoc, {
-          title: `Vehicle accident — ${employee.fullName || targetUid}`,
-          openedAt: new Date(),
-          incidentAt: bump.incidentAt,
-        });
+        let caseId = caseRef ? caseRef.id : '';
+        let vehiclesAccidentId = caseData?.vehiclesAccidentId || toTrimmedString(body.vehiclesAccidentId);
 
-        await bumpRef.update({ caseId: caseDoc.id });
+        if (caseRef) {
+          await caseRef.update({
+            stage: 'triage',
+            status: 'open',
+            bumpCardId: bumpRef.id,
+            incidentAt: bump.incidentAt || caseData.incidentAt || '',
+            vehicleReg: bump.vehicleReg || caseData.vehicleReg || '',
+            vehicleId: bump.vehicleId || caseData.vehicleId || '',
+            summary: roadDescription || caseData.summary || '',
+            updatedAt: now,
+            updatedByUid: session.profile.uid,
+          });
+          await bumpRef.update({ caseId: caseRef.id });
+        } else {
+          // Standalone unsolicited bump — create case at triage (backward compatible).
+          const employeeName = employee.fullName || targetUid;
+          const title = bump.vehicleReg
+            ? `${employeeName} — Vehicle accident — ${bump.vehicleReg}`
+            : `Vehicle accident — ${employeeName}`;
+          caseRef = await db.collection('disciplinary_cases').add({
+            employeeUid: targetUid,
+            employeeNameSnapshot: employeeName,
+            departmentSnapshot: employee.employeeProfile?.department || '',
+            managerUid: session.profile.uid,
+            ownerManagerUid: isManager ? session.profile.uid : (employee.managerUid || session.profile.uid),
+            managerNameSnapshot: session.profile.fullName || '',
+            processFamily: 'vehicle_accident',
+            caseType: 'vehicle_accident',
+            issue: bump.vehicleReg ? `Vehicle accident — ${bump.vehicleReg}` : 'Vehicle accident',
+            title,
+            summary: roadDescription,
+            status: 'open',
+            stage: 'triage',
+            bumpCardId: bumpRef.id,
+            incidentAt: bump.incidentAt,
+            vehicleReg: bump.vehicleReg,
+            vehicleId: bump.vehicleId,
+            vehiclesAccidentId: '',
+            accidentFault: 'pending',
+            origin: 'bump_card',
+            openedAt: now,
+            createdAt: now,
+            updatedAt: now,
+            createdByUid: session.profile.uid,
+            updatedByUid: session.profile.uid,
+            suspensionActive: false,
+            outcomePackSteps: [],
+          });
+          caseId = caseRef.id;
+          await stampSharePointCaseFolderName(caseRef, {
+            title,
+            openedAt: new Date(),
+            incidentAt: bump.incidentAt,
+          });
+          try {
+            const accident = await createVehicleAccident({
+              status: 'needs_triage',
+              fault: 'pending',
+              employeeUid: targetUid,
+              employeeName,
+              vehicleId: bump.vehicleId,
+              vehicleReg: bump.vehicleReg,
+              incidentAt: bump.incidentAt,
+              caseId,
+              bumpCardId: bumpRef.id,
+              bump,
+            }, session.profile.uid);
+            vehiclesAccidentId = accident?.id || '';
+            if (vehiclesAccidentId) {
+              await caseRef.update({ vehiclesAccidentId });
+            }
+          } catch (vehError) {
+            console.error('submitBumpCard create vehicles accident failed', vehError);
+          }
+          await bumpRef.update({ caseId, vehiclesAccidentId });
+        }
+
+        if (vehiclesAccidentId) {
+          try {
+            await updateVehicleAccident(vehiclesAccidentId, {
+              status: 'needs_triage',
+              bumpCardId: bumpRef.id,
+              caseId,
+              incidentAt: bump.incidentAt,
+              vehicleReg: bump.vehicleReg,
+              vehicleId: bump.vehicleId,
+              bump,
+            }, session.profile.uid);
+          } catch (vehError) {
+            console.error('submitBumpCard update vehicles accident failed', vehError);
+          }
+        }
 
         const openPrompts = await db.collection('bump_card_prompts')
           .where('employeeUid', '==', targetUid)
@@ -3328,12 +3861,30 @@ function createPeopleCasesApi({
           .get();
         const batch = db.batch();
         openPrompts.docs.forEach((doc) => {
-          batch.update(doc.ref, { status: 'completed', completedAt: now, caseId: caseDoc.id });
+          const prompt = doc.data() || {};
+          const matchesCase = !caseId || !prompt.caseId || prompt.caseId === caseId;
+          const matchesPrompt = !promptId || doc.id === promptId;
+          if (matchesCase && matchesPrompt) {
+            batch.update(doc.ref, {
+              status: 'completed',
+              completedAt: now,
+              caseId,
+              bumpCardId: bumpRef.id,
+            });
+          }
         });
         await batch.commit();
 
-        await appendEvent(caseDoc.id, 'bump_card_submitted', { bumpCardId: bumpRef.id }, session.profile);
-        res.status(200).json({ bumpCardId: bumpRef.id, caseId: caseDoc.id, message: 'Bump card submitted.' });
+        await appendEvent(caseId, 'bump_card_submitted', {
+          bumpCardId: bumpRef.id,
+          vehiclesAccidentId,
+        }, session.profile);
+        res.status(200).json({
+          bumpCardId: bumpRef.id,
+          caseId,
+          vehiclesAccidentId,
+          message: 'Bump card submitted.',
+        });
       } catch (error) {
         console.error('submitBumpCard failed', error);
         res.status(500).json({ error: 'Failed to submit bump card.' });
@@ -3363,7 +3914,7 @@ function createPeopleCasesApi({
           res.status(503).json({ error: 'SharePoint is not configured. Templates are stored in Employee Files/Templates.' });
           return;
         }
-        const caseSnap = await loadCaseOrFail(caseId, res);
+        const caseSnap = await loadCaseOrFail(caseId, res, session);
         if (!caseSnap) return;
         const caseData = caseSnap.data();
         const template = CASE_DOCUMENT_TEMPLATES.find((item) => item.id === templateId);
@@ -3470,7 +4021,7 @@ function createPeopleCasesApi({
         return;
       }
       try {
-        const caseSnap = await loadCaseOrFail(caseId, res);
+        const caseSnap = await loadCaseOrFail(caseId, res, session);
         if (!caseSnap) return;
         const related = await listRelated(caseId);
         const payload = {
@@ -4993,7 +5544,7 @@ function createPeopleCasesApi({
       }
 
       try {
-        const caseSnap = await loadCaseOrFail(caseId, res);
+        const caseSnap = await loadCaseOrFail(caseId, res, session);
         if (!caseSnap) return;
         const caseData = caseSnap.data();
         const { sharePointCleanup } = await deleteCaseAndRelated(caseId, caseData);
@@ -5025,6 +5576,56 @@ function createPeopleCasesApi({
     }),
   );
 
+  const getCaseNotificationSettings = onRequest(
+    { region: 'europe-west2' },
+    withCors(async (req, res) => {
+      if (req.method !== 'GET') {
+        res.status(405).json({ error: 'Method not allowed.' });
+        return;
+      }
+      const session = await getVerifiedSessionUser(req);
+      if (!assertMasterAdmin(session, res)) return;
+      try {
+        const settings = await loadCaseNotificationSettings(db);
+        res.status(200).json({
+          settings,
+          channels: CASE_NOTIFICATION_CHANNELS,
+        });
+      } catch (error) {
+        console.error('getCaseNotificationSettings failed', error);
+        res.status(500).json({ error: 'Failed to load notification settings.' });
+      }
+    }),
+  );
+
+  const saveCaseNotificationSettingsApi = onRequest(
+    { region: 'europe-west2' },
+    withCors(async (req, res) => {
+      if (req.method !== 'POST') {
+        res.status(405).json({ error: 'Method not allowed.' });
+        return;
+      }
+      const session = await getVerifiedSessionUser(req);
+      if (!assertMasterAdmin(session, res)) return;
+      try {
+        const settings = await saveCaseNotificationSettings(
+          db,
+          admin,
+          req.body?.settings || req.body || {},
+          session.profile,
+        );
+        res.status(200).json({
+          settings,
+          channels: CASE_NOTIFICATION_CHANNELS,
+          message: 'Notification settings saved.',
+        });
+      } catch (error) {
+        console.error('saveCaseNotificationSettings failed', error);
+        res.status(500).json({ error: 'Failed to save notification settings.' });
+      }
+    }),
+  );
+
   return {
     getPeopleCaseMeta,
     getPeopleCases,
@@ -5038,6 +5639,7 @@ function createPeopleCasesApi({
     getEmployeeCaseActions,
     downloadEmployeeCaseDocument,
     signFileNoteDocument,
+    getBumpCardContext,
     createBumpCardPrompt,
     submitBumpCard,
     downloadCaseDocumentTemplate,
@@ -5055,6 +5657,8 @@ function createPeopleCasesApi({
     mapBonusSharePointEmployee,
     saveBonusManualAdjustment,
     deleteBonusManualAdjustment,
+    getCaseNotificationSettings,
+    saveCaseNotificationSettings: saveCaseNotificationSettingsApi,
     DOCUMENT_TYPES,
   };
 }

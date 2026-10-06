@@ -227,7 +227,7 @@ export default function BonusPaymentSchedule() {
             <h2 className="text-sm font-semibold text-white">Scheduled payments</h2>
           </div>
           {loading ? (
-            <p className="px-5 py-6 text-sm text-slate-400">Loading…</p>
+            <p className="px-5 py-6 text-sm text-slate-400">Loading bonus payment schedule…</p>
           ) : runs.length === 0 ? (
             <p className="px-5 py-6 text-sm text-slate-500">No payment schedules yet.</p>
           ) : (

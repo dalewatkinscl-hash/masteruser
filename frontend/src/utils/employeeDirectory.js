@@ -173,7 +173,7 @@ export function getColumnOptionValue(employee, column) {
 export function collectColumnFilterOptions(employees, columnId) {
   const values = new Set();
   for (const employee of employees) {
-    values.add(getColumnOptionValue(employee, columnId));
+    values.add(String(getColumnOptionValue(employee, columnId) ?? '—'));
   }
   return [...values].sort((left, right) => left.localeCompare(right, undefined, {
     sensitivity: 'base',

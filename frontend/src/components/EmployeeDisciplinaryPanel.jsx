@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { readJsonResponse } from '../utils/employeeProfile';
 import {
@@ -6,6 +6,7 @@ import {
   caseProgressToneClass,
   getCaseProgressStatus,
 } from '../utils/peopleCasesAccess';
+import { caseDateSortKey, formatCaseDate, formatCaseTitleDisplay } from '../utils/peopleCasesDirectory';
 import { useAuth } from '../context/AuthContext';
 
 export default function EmployeeDisciplinaryPanel({ employeeUid, employeeName, embedded = false }) {
@@ -40,6 +41,15 @@ export default function EmployeeDisciplinaryPanel({ employeeUid, employeeName, e
 
     load();
   }, [canView, employeeUid]);
+
+  const sortedCases = useMemo(() => (
+    [...cases].sort((left, right) => {
+      const a = caseDateSortKey(left) || '0000-00-00';
+      const b = caseDateSortKey(right) || '0000-00-00';
+      if (a !== b) return b.localeCompare(a);
+      return String(right.id || '').localeCompare(String(left.id || ''));
+    })
+  ), [cases]);
 
   if (!canView) return null;
 
@@ -78,6 +88,7 @@ export default function EmployeeDisciplinaryPanel({ employeeUid, employeeName, e
               <table className="w-full">
                 <thead>
                   <tr className="border-b border-[#1a2540]">
+                    <th className="px-3 py-2 text-left text-xs text-slate-500 uppercase">Date</th>
                     <th className="px-3 py-2 text-left text-xs text-slate-500 uppercase">Title</th>
                     <th className="px-3 py-2 text-left text-xs text-slate-500 uppercase">Family</th>
                     <th className="px-3 py-2 text-left text-xs text-slate-500 uppercase">Progress</th>
@@ -85,11 +96,12 @@ export default function EmployeeDisciplinaryPanel({ employeeUid, employeeName, e
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-[#1a2540]">
-                  {cases.map((item) => {
+                  {sortedCases.map((item) => {
                     const progress = getCaseProgressStatus(item);
                     return (
                       <tr key={item.id} className="hover:bg-[#060e1a]">
-                        <td className="px-3 py-3 text-sm text-white">{item.title || '—'}</td>
+                        <td className="px-3 py-3 text-sm text-slate-300 whitespace-nowrap">{formatCaseDate(item)}</td>
+                        <td className="px-3 py-3 text-sm text-white">{formatCaseTitleDisplay(item.title)}</td>
                         <td className="px-3 py-3 text-sm text-slate-300 capitalize">
                           {(item.processFamily || 'disciplinary').replace(/_/g, ' ')}
                         </td>

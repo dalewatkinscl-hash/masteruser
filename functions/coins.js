@@ -116,6 +116,9 @@ async function awardCoins(db, {
     if (meta.dayKey) ledgerDoc.dayKey = String(meta.dayKey).slice(0, 20);
     if (meta.source) ledgerDoc.source = String(meta.source).slice(0, 80);
     if (meta.gameKey) ledgerDoc.gameKey = String(meta.gameKey).slice(0, 40);
+    if (meta.message) ledgerDoc.message = String(meta.message).trim().slice(0, 280);
+    if (meta.grantedByUid) ledgerDoc.grantedByUid = String(meta.grantedByUid).slice(0, 128);
+    if (meta.grantedByName) ledgerDoc.grantedByName = String(meta.grantedByName).trim().slice(0, 120);
 
     tx.set(ledgerRef, ledgerDoc);
     tx.set(walletRef, {
@@ -242,6 +245,8 @@ async function listRecentLedger(db, uid, limit = 8) {
       dayKey: data.dayKey || null,
       gameKey: data.gameKey || null,
       source: data.source || null,
+      message: data.message || null,
+      grantedByName: data.grantedByName || null,
       createdAt: data.createdAt?.toDate
         ? data.createdAt.toDate().toISOString()
         : (data.createdAt || null),

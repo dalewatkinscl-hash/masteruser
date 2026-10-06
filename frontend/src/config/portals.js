@@ -129,6 +129,15 @@ export const KNOWN_PORTALS = [
     ],
   },
   {
+    key: 'vehicles_app',
+    label: 'Vehicles',
+    roles: [
+      { value: 'viewer', label: 'Viewer' },
+      { value: 'manager', label: 'Manager' },
+      { value: 'admin', label: 'Admin' },
+    ],
+  },
+  {
     key: 'cases_app',
     label: 'People Cases',
     roles: [

@@ -260,7 +260,12 @@ export default function EmployeeCaseActionsPanel() {
             </p>
             <p className="text-sm text-slate-500 mt-1">{progress.label}</p>
           </div>
-          <Link to="/dashboard/bump-card" className="text-sm text-indigo-300">Submit bump card</Link>
+          <Link
+            to={selectedCase?.id ? `/dashboard/bump-card?caseId=${encodeURIComponent(selectedCase.id)}` : '/dashboard/bump-card'}
+            className="text-sm text-indigo-300"
+          >
+            Submit bump card
+          </Link>
         </div>
 
         {error && <div className="bg-red-500/10 border border-red-500/25 rounded-lg p-3 text-sm text-red-300">{error}</div>}
@@ -442,7 +447,16 @@ export default function EmployeeCaseActionsPanel() {
           {data.bumpPrompts.map((prompt) => (
             <div key={prompt.id} className="flex items-center justify-between gap-3 text-sm text-amber-50">
               <span>{prompt.notes || 'Please complete a bump card for a reported incident.'}</span>
-              <Link to="/dashboard/bump-card" className="px-3 py-1.5 rounded-lg bg-amber-500 text-slate-900 text-xs font-semibold">
+              <Link
+                to={
+                  prompt.caseId
+                    ? `/dashboard/bump-card?caseId=${encodeURIComponent(prompt.caseId)}${prompt.id ? `&promptId=${encodeURIComponent(prompt.id)}` : ''}`
+                    : prompt.id
+                      ? `/dashboard/bump-card?promptId=${encodeURIComponent(prompt.id)}`
+                      : '/dashboard/bump-card'
+                }
+                className="px-3 py-1.5 rounded-lg bg-amber-500 text-slate-900 text-xs font-semibold"
+              >
                 Complete bump card
               </Link>
             </div>
@@ -771,7 +785,16 @@ export default function EmployeeCaseActionsPanel() {
       <section className="rounded-xl border border-[#1a2540] bg-[#0b1220] p-4 space-y-3">
         <div className="flex items-center justify-between gap-3">
           <h3 className="text-white font-medium">Your cases</h3>
-          <Link to="/dashboard/bump-card" className="text-sm text-indigo-300">Submit bump card</Link>
+          <Link
+            to={
+              data.bumpPrompts?.[0]?.caseId
+                ? `/dashboard/bump-card?caseId=${encodeURIComponent(data.bumpPrompts[0].caseId)}`
+                : '/dashboard/bump-card'
+            }
+            className="text-sm text-indigo-300"
+          >
+            Submit bump card
+          </Link>
         </div>
         {(data.cases || []).length === 0 ? (
           <p className="text-sm text-slate-500">No cases.</p>

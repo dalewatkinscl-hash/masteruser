@@ -388,7 +388,7 @@ export default function EnclosePanel({
   const popupByCell = useMemo(() => {
     const map = new Map();
     if (!harvest) return map;
-    for (const popup of harvest.popups) {
+    for (const popup of (harvest.popups || [])) {
       const key = `${popup.r},${popup.c}`;
       if (!map.has(key)) map.set(key, []);
       map.get(key).push(popup);

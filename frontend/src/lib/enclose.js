@@ -421,6 +421,14 @@ export function getPuzzleById(id) {
 }
 
 export function clonePuzzle(puzzle) {
+  if (!puzzle || typeof puzzle !== 'object') {
+    return {
+      horse: {},
+      water: [],
+      items: {},
+      portals: [],
+    };
+  }
   return {
     ...puzzle,
     horse: { ...(puzzle.horse || {}) },

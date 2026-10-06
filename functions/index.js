@@ -226,6 +226,7 @@ const {
   pickDispatchAssets: coachDepotPickDispatchAssets,
   applyPurchase: coachDepotApplyPurchase,
   applyInspectionAfterClaim: coachDepotApplyInspectionAfterClaim,
+  applyStaffContractAfterClaim: coachDepotApplyStaffContractAfterClaim,
   loadMapConfig: loadCoachDepotMapConfig,
   saveMapConfig: saveCoachDepotMapConfig,
   serializeMapConfig: serializeCoachDepotMapConfig,
@@ -943,7 +944,7 @@ function getEffectivePortalRole(profile, portal) {
     return explicitRole.trim();
   }
 
-  // Master admins implicitly get HR, CPC, and Cases admin access.
+  // Master admins implicitly get HR, CPC, Cases, and Vehicles admin access.
   if (portal === 'hr_app' && profile?.portalsAccess?.master_admin === MASTER_ADMIN_ROLE) {
     return 'admin';
   }
@@ -951,6 +952,9 @@ function getEffectivePortalRole(profile, portal) {
     return 'admin';
   }
   if (portal === 'cases_app' && profile?.portalsAccess?.master_admin === MASTER_ADMIN_ROLE) {
+    return 'admin';
+  }
+  if (portal === 'vehicles_app' && profile?.portalsAccess?.master_admin === MASTER_ADMIN_ROLE) {
     return 'admin';
   }
 
@@ -972,6 +976,9 @@ function buildEffectiveProfile(profile) {
   }
   if (!nextPortalsAccess.cpc_app && profile?.portalsAccess?.master_admin === MASTER_ADMIN_ROLE) {
     nextPortalsAccess.cpc_app = 'admin';
+  }
+  if (!nextPortalsAccess.vehicles_app && profile?.portalsAccess?.master_admin === MASTER_ADMIN_ROLE) {
+    nextPortalsAccess.vehicles_app = 'admin';
   }
 
   return {
@@ -2599,6 +2606,35 @@ exports.getTyreProfiles = onRequest(
   }),
 );
 
+const { listFleetVehicles } = require('./vehiclesPortalClient');
+
+exports.getFleetVehicles = onRequest(
+  { region: 'europe-west2' },
+  withCors(async (req, res) => {
+    if (req.method !== 'GET') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
+
+    const verified = await verifyAnySessionCookie(req.headers.cookie);
+    if (!verified) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+
+    try {
+      const vehicles = await listFleetVehicles();
+      res.status(200).json({ vehicles, source: 'vehicles_portal' });
+    } catch (error) {
+      console.error('getFleetVehicles failed', error);
+      const status = error.status && error.status >= 400 && error.status < 600 ? error.status : 502;
+      res.status(status).json({
+        error: error.message || 'Vehicles portal is unreachable right now.',
+      });
+    }
+  }),
+);
+
 // Map portal keys to their app metadata.
 const PORTAL_APP_MAP = {
   mentoring_app: {
@@ -2665,6 +2701,11 @@ const PORTAL_APP_MAP = {
     label: 'Events Transport',
     shortCode: 'EV',
     href: 'https://events.countrylion.co.uk',
+  },
+  vehicles_app: {
+    label: 'Vehicles',
+    shortCode: 'VH',
+    href: 'https://vehicles.countrylion.co.uk',
   },
   master_admin: {
     label: 'Admin Portal',
@@ -3956,11 +3997,6 @@ exports.uploadDisciplinaryDocument = onRequest(
       return;
     }
 
-    if (!canManageCases(session.profile, getEffectivePortalRole)) {
-      res.status(403).json({ error: 'Cases manager access required.' });
-      return;
-    }
-
     const sharePointConfig = getSharePointConfig();
     if (!isSharePointConfigured(sharePointConfig)) {
       res.status(503).json({ error: 'SharePoint integration is not configured yet.' });
@@ -3977,9 +4013,16 @@ exports.uploadDisciplinaryDocument = onRequest(
     const stageKey = toTrimmedString(req.body?.stageKey);
     const source = toTrimmedString(req.body?.source) || (templateId ? 'template_upload' : 'upload');
     const relatedDocumentId = toTrimmedString(req.body?.relatedDocumentId);
+    const isManagerUploader = canManageCases(session.profile, getEffectivePortalRole);
+    const isBumpCardImageUpload = source === 'bump_card_image';
 
     if (!caseId || !fileName || !contentBase64) {
       res.status(400).json({ error: 'caseId, fileName, and contentBase64 are required.' });
+      return;
+    }
+
+    if (!isManagerUploader && !isBumpCardImageUpload) {
+      res.status(403).json({ error: 'Cases manager access required.' });
       return;
     }
 
@@ -4009,6 +4052,14 @@ exports.uploadDisciplinaryDocument = onRequest(
       }
 
       const caseData = caseSnap.data();
+      if (
+        !isManagerUploader
+        && isBumpCardImageUpload
+        && caseData.employeeUid !== session.profile.uid
+      ) {
+        res.status(403).json({ error: 'You can only upload bump card images for your own case.' });
+        return;
+      }
       const employee = await getUserProfile(caseData.employeeUid);
       if (!employee) {
         res.status(404).json({ error: 'Employee not found for this case.' });
@@ -4179,6 +4230,11 @@ const peopleCasesApi = createPeopleCasesApi({
   uploadDisciplinaryDocument,
   isSharePointConfigured,
   getSharePointConfig,
+  gmailSecrets: [gmailUser, gmailPass],
+  getGmailCredentials: () => ({
+    user: gmailUser.value(),
+    pass: gmailPass.value(),
+  }),
 });
 
 exports.getPeopleCaseMeta = peopleCasesApi.getPeopleCaseMeta;
@@ -4186,6 +4242,8 @@ exports.getPeopleCases = peopleCasesApi.getPeopleCases;
 exports.getPeopleCase = peopleCasesApi.getPeopleCase;
 exports.createPeopleCase = peopleCasesApi.createPeopleCase;
 exports.updatePeopleCase = peopleCasesApi.updatePeopleCase;
+exports.getCaseNotificationSettings = peopleCasesApi.getCaseNotificationSettings;
+exports.saveCaseNotificationSettings = peopleCasesApi.saveCaseNotificationSettings;
 exports.createCaseMinutes = peopleCasesApi.createCaseMinutes;
 exports.respondCaseMinutes = peopleCasesApi.respondCaseMinutes;
 exports.createCaseReview = peopleCasesApi.createCaseReview;
@@ -4193,6 +4251,7 @@ exports.completeCaseReview = peopleCasesApi.completeCaseReview;
 exports.getEmployeeCaseActions = peopleCasesApi.getEmployeeCaseActions;
 exports.downloadEmployeeCaseDocument = peopleCasesApi.downloadEmployeeCaseDocument;
 exports.signFileNoteDocument = peopleCasesApi.signFileNoteDocument;
+exports.getBumpCardContext = peopleCasesApi.getBumpCardContext;
 exports.createBumpCardPrompt = peopleCasesApi.createBumpCardPrompt;
 exports.submitBumpCard = peopleCasesApi.submitBumpCard;
 exports.exportPeopleCase = peopleCasesApi.exportPeopleCase;
@@ -8491,6 +8550,7 @@ exports.getDailyToolboxKick = onRequest(
         powerSnap.exists ? powerSnap.data() || {} : {},
         dayKey,
       );
+      const wallet = await getWallet(db, session.profile.uid);
 
       res.status(200).json({
         practice,
@@ -8507,6 +8567,8 @@ exports.getDailyToolboxKick = onRequest(
         allTimeTop10: practice ? [] : allTimeTop10,
         totalSolved: leaderboard.length,
         superRage,
+        walletBalance: wallet.balance,
+        doubleSpeedCost: 250,
       });
     } catch (error) {
       console.error('getDailyToolboxKick failed', error);
@@ -8965,6 +9027,97 @@ exports.activateToolboxSuperRage = onRequest(
       }
       console.error('activateToolboxSuperRage failed', error);
       res.status(error.status || 500).json({ error: error.message || 'Failed to activate energy drink.' });
+    }
+  }),
+);
+
+const TOOLBOX_DOUBLE_SPEED_COST = 250;
+
+// POST { purchaseId } → spend 250 portal coins for ×2 launch speed on the next kick.
+exports.buyToolboxKickDoubleSpeed = onRequest(
+  { region: 'europe-west2' },
+  withCors(async (req, res) => {
+    if (req.method !== 'POST') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
+
+    const session = await getVerifiedSessionUser(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+
+    try {
+      const todayKey = getToolboxKickDayKey();
+      const sandbox = parseSandboxFlag(req) && canManagePortalAccess(session.profile);
+      if (todayKey < TOOLBOX_KICK_LIVE_FROM && !sandbox) {
+        res.status(403).json({
+          error: `Little Dicks Toolbox goes live ${TOOLBOX_KICK_LIVE_FROM}.`,
+          toolboxKickLiveFrom: TOOLBOX_KICK_LIVE_FROM,
+        });
+        return;
+      }
+      if (!sandbox) {
+        await enforceFunGameAccess('toolboxkick', {
+          dayKey: todayKey,
+          practice: false,
+          sandbox: false,
+        });
+      }
+
+      const purchaseId = sanitizeIdempotencyKey(
+        String(req.body?.purchaseId || '').trim() || `${Date.now()}`,
+      );
+      if (!purchaseId) {
+        res.status(400).json({ error: 'purchaseId is required.' });
+        return;
+      }
+
+      const uid = session.profile.uid;
+      const spend = await spendCoins(db, {
+        uid,
+        amount: TOOLBOX_DOUBLE_SPEED_COST,
+        reason: 'toolbox_double_speed',
+        idempotencyKey: `toolboxkick:double_speed:${todayKey}:${uid}:${purchaseId}`,
+        FieldValue: admin.firestore.FieldValue,
+        fullName: session.profile.fullName || session.profile.email || '',
+        meta: {
+          gameKey: 'toolboxkick',
+          source: 'double_speed_purchase',
+          dayKey: todayKey,
+          refType: 'toolbox_double_speed',
+          refId: purchaseId,
+        },
+      });
+
+      if (spend.error === 'insufficient_funds') {
+        res.status(400).json({
+          error: `Not enough coins — double speed costs ${TOOLBOX_DOUBLE_SPEED_COST}.`,
+          walletBalance: spend.balance,
+          cost: TOOLBOX_DOUBLE_SPEED_COST,
+        });
+        return;
+      }
+      if (!spend.spent && !spend.duplicate) {
+        res.status(500).json({
+          error: 'Could not spend coins for double speed.',
+          walletBalance: spend.balance,
+        });
+        return;
+      }
+
+      res.status(200).json({
+        ok: true,
+        spent: Boolean(spend.spent),
+        duplicate: Boolean(spend.duplicate),
+        cost: TOOLBOX_DOUBLE_SPEED_COST,
+        walletBalance: spend.balance,
+        doubleSpeed: { armed: true },
+      });
+    } catch (error) {
+      console.error('buyToolboxKickDoubleSpeed failed', error);
+      res.status(error.status || 500).json({ error: error.message || 'Failed to buy double speed.' });
     }
   }),
 );
@@ -9589,6 +9742,8 @@ async function settleReadyCoachDepotJobs(uid, session, { jobIds = null } = {}) {
       jobsCompleted: (depot.jobsCompleted || 0) + 1,
     };
     depot = coachDepotApplyInspectionAfterClaim(depot, job.vehicleId || null);
+    const contractResult = coachDepotApplyStaffContractAfterClaim(depot, job.staffId || null);
+    depot = contractResult.depot;
     await doc.ref.set({
       status: 'claimed',
       claimedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -9603,6 +9758,10 @@ async function settleReadyCoachDepotJobs(uid, session, { jobIds = null } = {}) {
       reward,
       driverSlot: job.driverSlot ?? null,
       vehicleId: job.vehicleId || null,
+      staffId: job.staffId || null,
+      staffDeparted: contractResult.departed
+        ? { id: contractResult.departed.id, name: contractResult.departed.name }
+        : null,
     });
   }
 
@@ -9860,6 +10019,8 @@ exports.buyCoachDepotUpgrade = onRequest(
           return;
         }
       }
+      const placementId = String(req.body?.placementId || req.body?.id || '').trim();
+      const facing = String(req.body?.facing || '').trim();
       const purchase = coachDepotApplyPurchase(depot, kind, {
         key,
         grade,
@@ -9869,6 +10030,8 @@ exports.buyCoachDepotUpgrade = onRequest(
         bayId: req.body?.bayId || null,
         staffId: req.body?.staffId || null,
         vehicleId,
+        placementId,
+        facing,
         sandbox,
       });
       if (purchase.error) {
@@ -9879,6 +10042,17 @@ exports.buyCoachDepotUpgrade = onRequest(
       let spent = 0;
       let refunded = 0;
       let balance = null;
+      const clientPurchaseId = String(req.body?.purchaseId || '').trim().slice(0, 80);
+      const moveTileKey = (kind === 'moveBuilding' || kind === 'move')
+        ? `${Math.floor(Number(x))},${Math.floor(Number(y))}`
+        : '';
+      const purchaseIdem = (kind === 'moveBuilding' || kind === 'move')
+        ? `coach_depot:move:${uid}:${key || req.body?.bayId || 'x'}:${moveTileKey}:${clientPurchaseId || `${depot.jobsCompleted}:${(depot.placements || []).map((p) => `${p.id}:${p.x},${p.y}`).join('|')}`}`
+        : (kind === 'rotateDecoration' || kind === 'setDecorationFacing')
+          ? `coach_depot:rotate:${uid}:${placementId}:${facing || 'next'}:${clientPurchaseId || Date.now()}`
+          : (kind === 'sellPlacement' || kind === 'sellDecoration' || kind === 'sellRoad')
+            ? `coach_depot:sell:${uid}:${placementId}:${depot.jobsCompleted}:${(depot.placements || []).length}`
+            : `coach_depot:buy:${uid}:${kind}:${key || grade || tier || req.body?.staffId || req.body?.vehicleId || placementId || 'x'}:${facing || ''}:${cost}:${depot.jobsCompleted}:${depot.age}:${depot.bays}:${depot.plots}:${depot.staff.length}:${depot.fleet.length}:${depot.officeLevel}`;
 
       if (sandbox) {
         // Testing: show catalog prices in UI but do not deduct/award coins.
@@ -9886,17 +10060,18 @@ exports.buyCoachDepotUpgrade = onRequest(
         balance = wallet.wallet.balance;
       } else if (cost < 0) {
         const refund = Math.abs(cost);
+        const sellRef = String(vehicleId || placementId || '');
         const award = await awardCoins(db, {
           uid,
           amount: refund,
           reason: 'coach_depot_sell',
-          idempotencyKey: `coach_depot:sell:${uid}:${vehicleId}:${depot.fleet.length}:${depot.jobsCompleted}`,
+          idempotencyKey: purchaseIdem,
           FieldValue: admin.firestore.FieldValue,
           fullName: session.profile.fullName || session.profile.email || '',
           meta: {
             gameKey: 'coachdepot',
             refType: 'coach_depot_sell',
-            refId: String(vehicleId || ''),
+            refId: sellRef,
             source: kind,
           },
         });
@@ -9907,13 +10082,13 @@ exports.buyCoachDepotUpgrade = onRequest(
           uid,
           amount: cost,
           reason: 'coach_depot_upgrade',
-          idempotencyKey: `coach_depot:buy:${uid}:${kind}:${key || grade || tier || req.body?.staffId || req.body?.vehicleId || 'x'}:${cost}:${depot.jobsCompleted}:${depot.age}:${depot.bays}:${depot.plots}:${depot.staff.length}:${depot.fleet.length}:${depot.officeLevel}`,
+          idempotencyKey: purchaseIdem,
           FieldValue: admin.firestore.FieldValue,
           fullName: session.profile.fullName || session.profile.email || '',
           meta: {
             gameKey: 'coachdepot',
             refType: 'coach_depot_upgrade',
-            refId: `${kind}:${key || grade || tier || req.body?.staffId || ''}`,
+            refId: `${kind}:${key || grade || tier || req.body?.staffId || moveTileKey || ''}`,
             source: kind,
           },
         });
@@ -10062,9 +10237,10 @@ exports.adminGrantCoachDepotCoins = onRequest(
   }),
 );
 
-// POST → admin: wipe depot progress + active jobs back to Age 1 starter yard.
+// POST { all?: true } → admin: wipe depot progress + active jobs back to starter yard.
+// all:true resets every coach_depots doc (balance economy wipe for all players).
 exports.adminResetCoachDepot = onRequest(
-  { region: 'europe-west2', invoker: 'public' },
+  { region: 'europe-west2', invoker: 'public', timeoutSeconds: 300 },
   withCors(async (req, res) => {
     if (req.method !== 'POST') {
       res.status(405).json({ error: 'Method not allowed.' });
@@ -10080,6 +10256,73 @@ exports.adminResetCoachDepot = onRequest(
       return;
     }
     try {
+      const resetAll = Boolean(req.body?.all);
+      const mapConfig = await loadCoachDepotMapConfig(db);
+      const now = admin.firestore.FieldValue.serverTimestamp();
+
+      if (resetAll) {
+        let cancelledJobs = 0;
+        let resetDepots = 0;
+
+        // Cancel every active job (paged).
+        let jobQuery = db.collection('coach_depot_jobs')
+          .where('status', '==', 'active')
+          .limit(400);
+        for (;;) {
+          const jobsSnap = await jobQuery.get();
+          if (jobsSnap.empty) break;
+          const batch = db.batch();
+          jobsSnap.docs.forEach((doc) => {
+            batch.update(doc.ref, {
+              status: 'cancelled',
+              cancelledAt: now,
+              cancelReason: 'admin_reset_all',
+            });
+            cancelledJobs += 1;
+          });
+          await batch.commit();
+          if (jobsSnap.size < 400) break;
+          const last = jobsSnap.docs[jobsSnap.docs.length - 1];
+          jobQuery = db.collection('coach_depot_jobs')
+            .where('status', '==', 'active')
+            .startAfter(last)
+            .limit(400);
+        }
+
+        // Reset every depot doc (paged).
+        let depotQuery = db.collection('coach_depots').limit(200);
+        for (;;) {
+          const depotSnap = await depotQuery.get();
+          if (depotSnap.empty) break;
+          const batch = db.batch();
+          for (const doc of depotSnap.docs) {
+            const data = doc.data() || {};
+            const fresh = emptyCoachDepot(mapConfig);
+            batch.set(doc.ref, {
+              ...fresh,
+              uid: data.uid || doc.id,
+              fullName: data.fullName || '',
+              updatedAt: now,
+              resetAt: now,
+              resetReason: 'admin_reset_all',
+            });
+            resetDepots += 1;
+          }
+          await batch.commit();
+          if (depotSnap.size < 200) break;
+          const last = depotSnap.docs[depotSnap.docs.length - 1];
+          depotQuery = db.collection('coach_depots').startAfter(last).limit(200);
+        }
+
+        res.status(200).json({
+          reset: true,
+          all: true,
+          cancelledJobs,
+          resetDepots,
+        });
+        return;
+      }
+
       const uid = session.profile.uid;
       const jobsSnap = await db.collection('coach_depot_jobs')
         .where('uid', '==', uid)
@@ -10089,18 +10332,17 @@ exports.adminResetCoachDepot = onRequest(
       jobsSnap.docs.forEach((doc) => {
         batch.update(doc.ref, {
           status: 'cancelled',
-          cancelledAt: admin.firestore.FieldValue.serverTimestamp(),
+          cancelledAt: now,
           cancelReason: 'admin_reset',
         });
       });
-      const mapConfig = await loadCoachDepotMapConfig(db);
       const fresh = emptyCoachDepot(mapConfig);
       batch.set(db.collection('coach_depots').doc(uid), {
         ...fresh,
         uid,
         fullName: session.profile.fullName || session.profile.email || '',
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        resetAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: now,
+        resetAt: now,
       });
       await batch.commit();
       const next = await loadCoachDepotState(uid);
@@ -11227,6 +11469,281 @@ exports.adminClawbackFunWinCoins = onRequest(
     } catch (error) {
       console.error('adminClawbackFunWinCoins failed', error);
       res.status(500).json({ error: error.message || 'Failed to claw back fun_win coins.' });
+    }
+  }),
+);
+
+const COACH_CAPITALIST_CONFIG_DOC = 'coach_capitalist/config';
+
+function normalizeCoachCapitalistNameConfig(raw) {
+  const out = { depots: {} };
+  const src = raw && typeof raw === 'object' ? raw : {};
+  const depotsIn = src.depots && typeof src.depots === 'object' ? src.depots : {};
+  const depotIds = ['local', 'regional', 'national'];
+  for (const depotId of depotIds) {
+    const entry = depotsIn[depotId] && typeof depotsIn[depotId] === 'object' ? depotsIn[depotId] : {};
+    const businesses = {};
+    const bizSrc = entry.businesses && typeof entry.businesses === 'object' ? entry.businesses : {};
+    for (const [id, name] of Object.entries(bizSrc)) {
+      const cleanId = String(id || '').trim().slice(0, 80);
+      const cleanName = String(name || '').trim().slice(0, 80);
+      if (cleanId && cleanName) businesses[cleanId] = cleanName;
+    }
+    const upgrades = {};
+    const upSrc = entry.upgrades && typeof entry.upgrades === 'object' ? entry.upgrades : {};
+    for (const [id, name] of Object.entries(upSrc)) {
+      const cleanId = String(id || '').trim().slice(0, 80);
+      const cleanName = String(name || '').trim().slice(0, 80);
+      if (cleanId && cleanName) upgrades[cleanId] = cleanName;
+    }
+    const depotName = String(entry.name || '').trim().slice(0, 80);
+    out.depots[depotId] = {
+      ...(depotName ? { name: depotName } : {}),
+      businesses,
+      upgrades,
+    };
+  }
+  return out;
+}
+
+// GET → shared Coach Capitalist display-name overrides (all signed-in staff).
+exports.getCoachCapitalistConfig = onRequest(
+  { region: 'europe-west2' },
+  withCors(async (req, res) => {
+    if (req.method !== 'GET') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
+    const session = await getVerifiedSessionUser(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+    try {
+      const snap = await db.doc(COACH_CAPITALIST_CONFIG_DOC).get();
+      const data = snap.exists ? (snap.data() || {}) : {};
+      res.status(200).json({
+        names: normalizeCoachCapitalistNameConfig(data.names || data),
+      });
+    } catch (error) {
+      console.error('getCoachCapitalistConfig failed', error);
+      res.status(500).json({ error: error.message || 'Failed to load Coach Capitalist config.' });
+    }
+  }),
+);
+
+// POST { names } → admin: save Coach Capitalist display-name overrides.
+exports.saveCoachCapitalistConfig = onRequest(
+  { region: 'europe-west2' },
+  withCors(async (req, res) => {
+    if (req.method !== 'POST') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
+    const session = await getVerifiedSessionUser(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+    if (!canManagePortalAccess(session.profile)) {
+      res.status(403).json({ error: 'Admin access is required.' });
+      return;
+    }
+    try {
+      const names = normalizeCoachCapitalistNameConfig(req.body?.names || req.body || {});
+      await db.doc(COACH_CAPITALIST_CONFIG_DOC).set({
+        names,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedByUid: session.profile.uid,
+        updatedByName: session.profile.fullName || session.profile.email || '',
+      }, { merge: true });
+      res.status(200).json({ names });
+    } catch (error) {
+      console.error('saveCoachCapitalistConfig failed', error);
+      res.status(500).json({ error: error.message || 'Failed to save Coach Capitalist config.' });
+    }
+  }),
+);
+
+// POST { lifetimeEarnings } → sync personal all-time Coach Capitalist earnings for leaderboard.
+exports.syncCoachCapitalistScore = onRequest(
+  { region: 'europe-west2' },
+  withCors(async (req, res) => {
+    if (req.method !== 'POST') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
+    const session = await getVerifiedSessionUser(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+    try {
+      const lifetimeEarnings = Math.max(0, Number(req.body?.lifetimeEarnings) || 0);
+      if (!Number.isFinite(lifetimeEarnings)) {
+        res.status(400).json({ error: 'lifetimeEarnings must be a number.' });
+        return;
+      }
+      const uid = session.profile.uid;
+      const ref = db.collection('coach_capitalist_scores').doc(uid);
+      const prev = await ref.get();
+      const previous = prev.exists ? Number(prev.data()?.lifetimeEarnings) || 0 : 0;
+      // Only ever increase — prevents accidental resets wiping the board.
+      const next = Math.max(previous, lifetimeEarnings);
+      await ref.set({
+        uid,
+        fullName: session.profile.fullName || session.profile.email || 'Employee',
+        lifetimeEarnings: next,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      }, { merge: true });
+      res.status(200).json({ lifetimeEarnings: next, updated: next > previous });
+    } catch (error) {
+      console.error('syncCoachCapitalistScore failed', error);
+      res.status(500).json({ error: error.message || 'Failed to sync score.' });
+    }
+  }),
+);
+
+// GET → admin: all-time Coach Capitalist earnings leaderboard.
+exports.adminCoachCapitalistLeaderboard = onRequest(
+  { region: 'europe-west2', timeoutSeconds: 60 },
+  withCors(async (req, res) => {
+    if (req.method !== 'GET') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
+    const session = await getVerifiedSessionUser(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+    if (!canManagePortalAccess(session.profile)) {
+      res.status(403).json({ error: 'Admin access is required.' });
+      return;
+    }
+    try {
+      let rows = [];
+      try {
+        const snap = await db.collection('coach_capitalist_scores')
+          .orderBy('lifetimeEarnings', 'desc')
+          .limit(100)
+          .get();
+        rows = snap.docs.map((doc) => {
+          const data = doc.data() || {};
+          return {
+            uid: doc.id,
+            fullName: data.fullName || 'Employee',
+            lifetimeEarnings: Number(data.lifetimeEarnings) || 0,
+            updatedAt: data.updatedAt?.toDate?.()?.toISOString?.() || null,
+          };
+        });
+      } catch (queryError) {
+        // Missing index fallback
+        console.warn('adminCoachCapitalistLeaderboard ordered query failed', queryError?.message || queryError);
+        const snap = await db.collection('coach_capitalist_scores').limit(200).get();
+        rows = snap.docs
+          .map((doc) => {
+            const data = doc.data() || {};
+            return {
+              uid: doc.id,
+              fullName: data.fullName || 'Employee',
+              lifetimeEarnings: Number(data.lifetimeEarnings) || 0,
+              updatedAt: data.updatedAt?.toDate?.()?.toISOString?.() || null,
+            };
+          })
+          .sort((a, b) => b.lifetimeEarnings - a.lifetimeEarnings)
+          .slice(0, 100);
+      }
+      res.status(200).json({ leaderboard: rows, count: rows.length });
+    } catch (error) {
+      console.error('adminCoachCapitalistLeaderboard failed', error);
+      res.status(500).json({ error: error.message || 'Failed to load leaderboard.' });
+    }
+  }),
+);
+
+// POST { uid, amount, message? } → admin: manually grant portal coins with a note.
+exports.adminGrantCoins = onRequest(
+  {
+    region: 'europe-west2',
+    timeoutSeconds: 60,
+  },
+  withCors(async (req, res) => {
+    if (req.method !== 'POST') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
+
+    const session = await getVerifiedSessionUser(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+    if (!canManagePortalAccess(session.profile)) {
+      res.status(403).json({ error: 'Admin access is required.' });
+      return;
+    }
+
+    const uid = String(req.body?.uid || '').trim();
+    const message = String(req.body?.message || '').trim().slice(0, 280);
+    const amount = Math.floor(Number(req.body?.amount));
+
+    if (!uid) {
+      res.status(400).json({ error: 'uid is required.' });
+      return;
+    }
+    if (!Number.isFinite(amount) || amount < 1 || amount > 50000) {
+      res.status(400).json({ error: 'amount must be an integer between 1 and 50000.' });
+      return;
+    }
+    if (!message) {
+      res.status(400).json({ error: 'message is required.' });
+      return;
+    }
+
+    try {
+      const profile = await getUserProfile(uid);
+      if (!profile || profile.isActive === false) {
+        res.status(404).json({ error: 'Employee not found.' });
+        return;
+      }
+
+      const stamp = Date.now();
+      const adminUid = session.profile.uid;
+      const adminName = session.profile.fullName || session.profile.email || 'Admin';
+      const result = await awardCoins(db, {
+        uid,
+        amount,
+        reason: 'admin_grant',
+        idempotencyKey: `admin_grant:${uid}:${adminUid}:${stamp}`,
+        FieldValue: admin.firestore.FieldValue,
+        fullName: profile.fullName || profile.email || '',
+        meta: {
+          source: 'fun_admin',
+          refType: 'admin_grant',
+          refId: `${adminUid}:${stamp}`,
+          message,
+          grantedByUid: adminUid,
+          grantedByName: adminName,
+        },
+      });
+
+      const wallet = await getWallet(db, uid);
+      res.status(200).json({
+        awarded: Boolean(result.awarded),
+        amount: result.awarded ? result.amount : 0,
+        balance: result.balance,
+        lifetimeEarned: wallet.lifetimeEarned,
+        uid,
+        fullName: profile.fullName || 'Employee',
+        message,
+        coinsAwarded: result.awarded
+          ? [{ amount: result.amount, reason: result.reason, message }]
+          : [],
+      });
+    } catch (error) {
+      console.error('adminGrantCoins failed', error);
+      res.status(500).json({ error: error.message || 'Failed to grant coins.' });
     }
   }),
 );

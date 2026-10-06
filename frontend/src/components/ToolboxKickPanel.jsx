@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+﻿import { useCallback, useEffect, useRef, useState } from 'react';
 import FunDayPicker, { getLondonDayKey } from './FunDayPicker';
 import FunLeaderboardRow from './FunLeaderboardRow';
 import { TOOLBOX_KICK_LIVE_FROM } from '../lib/funRotation';
@@ -10,10 +10,15 @@ import {
   sampleWind,
   windProfileForAttempt,
 } from '../utils/toolboxKickV2';
+import { createToolboxKickGfx, TOOLBOX_KICK_GFX_ENABLED } from '../utils/toolboxKickGfx';
+import { GameUiBadge, GameUiButton, GameUiPanel } from './gameUi';
+
+const GUI_FONT = '"Kenney Future Narrow", "Kenney Future", Kenney Future Narrow, Kenney Future, system-ui, Segoe UI, sans-serif';
+const GUI_FONT_DISPLAY = '"Kenney Future", "Kenney Future Narrow", Kenney Future Narrow, Kenney Future, system-ui, Segoe UI, sans-serif';
 
 /**
  * Toolbox Kick — Kitten Cannon–style.
- * Space ×2: lock power, then lock angle (~45° ideal). Kick the toolbox past coaches.
+ * Space ×2: lock power, then lock angle (~45Â° ideal). Kick the toolbox past coaches.
  * Competitive Fun: one round per day (all-or-nothing or 3 goes); distance leaderboard.
  */
 
@@ -76,6 +81,43 @@ const MAX_ATTEMPTS = 3;
 const MAX_ATTEMPTS_DEV_V2 = 4;
 const DEV_QTE_PRACTICE_ATTEMPT = 4;
 const TOOLBOX_PENDING_SCORE_KEY = 'toolbox-kick-pending-score';
+const TOOLBOX_BEST_KEY = 'toolbox-kick-best';
+
+/** Safe localStorage read — private mode / blocked storage must not crash Fun. */
+function readToolboxBest() {
+  try {
+    return Math.max(0, Math.floor(Number(localStorage.getItem(TOOLBOX_BEST_KEY) || 0)));
+  } catch {
+    return 0;
+  }
+}
+
+function writeToolboxBest(dist) {
+  try {
+    localStorage.setItem(TOOLBOX_BEST_KEY, String(Math.max(0, Math.floor(Number(dist) || 0))));
+  } catch {
+    // ignore
+  }
+}
+
+/** Older WebViews lack Path2D.roundRect / ctx.roundRect. */
+function ensureRoundRectPolyfill() {
+  if (typeof CanvasRenderingContext2D === 'undefined') return;
+  if (typeof CanvasRenderingContext2D.prototype.roundRect === 'function') return;
+  CanvasRenderingContext2D.prototype.roundRect = function roundRect(x, y, w, h, radii) {
+    const r = typeof radii === 'number'
+      ? radii
+      : (Array.isArray(radii) ? Number(radii[0]) || 0 : 0);
+    const radius = Math.max(0, Math.min(r, w / 2, h / 2));
+    this.moveTo(x + radius, y);
+    this.arcTo(x + w, y, x + w, y + h, radius);
+    this.arcTo(x + w, y + h, x, y + h, radius);
+    this.arcTo(x, y + h, x, y, radius);
+    this.arcTo(x, y, x + w, y, radius);
+    this.closePath();
+  };
+}
+ensureRoundRectPolyfill();
 
 function readPendingToolboxScore() {
   try {
@@ -452,12 +494,12 @@ function drawRpgStatPanel(ctx, x, y, w, h, opts) {
   ctx.textBaseline = 'middle';
 
   ctx.fillStyle = gold ? 'rgba(253,230,138,0.85)' : 'rgba(226,232,240,0.7)';
-  ctx.font = '800 11px system-ui, Segoe UI, sans-serif';
+  ctx.font = '800 11px Kenney Future Narrow, Kenney Future, system-ui, Segoe UI, sans-serif';
   ctx.shadowColor = 'rgba(11,18,32,0.85)';
   ctx.shadowBlur = 4;
   ctx.fillText(title.toUpperCase(), cx, y + 12);
 
-  ctx.font = '900 40px system-ui, Segoe UI, sans-serif';
+  ctx.font = '900 40px Kenney Future Narrow, Kenney Future, system-ui, Segoe UI, sans-serif';
   ctx.lineWidth = 5;
   ctx.strokeStyle = 'rgba(11,18,32,0.8)';
   ctx.shadowBlur = 0;
@@ -469,7 +511,7 @@ function drawRpgStatPanel(ctx, x, y, w, h, opts) {
   ctx.shadowBlur = 0;
 
   const valueW = ctx.measureText(value).width;
-  ctx.font = '900 15px system-ui, Segoe UI, sans-serif';
+  ctx.font = '900 15px Kenney Future Narrow, Kenney Future, system-ui, Segoe UI, sans-serif';
   ctx.textAlign = 'left';
   ctx.lineWidth = 3;
   ctx.strokeStyle = 'rgba(11,18,32,0.8)';
@@ -536,6 +578,40 @@ function drawTopStatsBar(ctx, st) {
   });
 }
 
+/** Screen-space chevron when the toolbox is above the visible playfield. */
+function drawToolboxOffscreenArrow(ctx, screenX, frame = 0) {
+  const x = clamp(screenX, 28, W - 28);
+  const pulse = 1 + 0.08 * Math.sin(frame * 0.22);
+  const tipY = STAT_BAR_H + 4;
+  ctx.save();
+  ctx.translate(x, tipY);
+  ctx.scale(pulse, pulse);
+  ctx.fillStyle = 'rgba(251, 191, 36, 0.95)';
+  ctx.strokeStyle = 'rgba(11, 18, 32, 0.9)';
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.moveTo(0, 0);
+  ctx.lineTo(16, 20);
+  ctx.lineTo(6, 20);
+  ctx.lineTo(6, 36);
+  ctx.lineTo(-6, 36);
+  ctx.lineTo(-6, 20);
+  ctx.lineTo(-16, 20);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+  ctx.fillStyle = 'rgba(15, 23, 42, 0.72)';
+  ctx.beginPath();
+  ctx.roundRect(-22, 40, 44, 16, 4);
+  ctx.fill();
+  ctx.fillStyle = '#fde68a';
+  ctx.font = 'bold 10px Kenney Future Narrow, Kenney Future, system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('▲ UP', 0, 48);
+  ctx.restore();
+}
+
 function drawHitTally(ctx, st) {
   const tally = st.hitTally || {};
   const rows = HIT_TALLY_ORDER
@@ -549,7 +625,7 @@ function drawHitTally(ctx, st) {
   ctx.textAlign = 'right';
   ctx.textBaseline = 'top';
 
-  ctx.font = '800 11px system-ui, Segoe UI, sans-serif';
+  ctx.font = '800 11px Kenney Future Narrow, Kenney Future, system-ui, Segoe UI, sans-serif';
   ctx.lineWidth = 3;
   ctx.strokeStyle = 'rgba(11,18,32,0.8)';
   ctx.strokeText('HIT', x, startY - 16);
@@ -557,7 +633,7 @@ function drawHitTally(ctx, st) {
   ctx.fillText('HIT', x, startY - 16);
 
   if (rows.length) {
-    ctx.font = '900 17px system-ui, Segoe UI, sans-serif';
+    ctx.font = '900 17px Kenney Future Narrow, Kenney Future, system-ui, Segoe UI, sans-serif';
     rows.forEach((line, i) => {
       const ly = startY + i * lineH;
       ctx.lineWidth = 4;
@@ -571,7 +647,7 @@ function drawHitTally(ctx, st) {
       ctx.shadowBlur = 0;
     });
   } else {
-    ctx.font = '800 14px system-ui, Segoe UI, sans-serif';
+    ctx.font = '800 14px Kenney Future Narrow, Kenney Future, system-ui, Segoe UI, sans-serif';
     ctx.lineWidth = 3;
     ctx.strokeStyle = 'rgba(11,18,32,0.8)';
     ctx.strokeText('none yet', x, startY);
@@ -605,7 +681,7 @@ function drawWindSock(ctx, wind, frame = 0) {
   ctx.arc(0, -28, 3.5, 0, Math.PI * 2);
   ctx.fill();
 
-  // Sock cone pointed with the wind (0° = +x / downrange)
+  // Sock cone pointed with the wind (0Â° = +x / downrange)
   const rad = ((angleDeg + flap * 25) * Math.PI) / 180;
   ctx.save();
   ctx.rotate(rad);
@@ -633,10 +709,10 @@ function drawWindSock(ctx, wind, frame = 0) {
 
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
-  ctx.font = '800 10px system-ui, Segoe UI, sans-serif';
+  ctx.font = '800 10px Kenney Future Narrow, Kenney Future, system-ui, Segoe UI, sans-serif';
   ctx.fillStyle = 'rgba(226,232,240,0.9)';
   ctx.fillText((wind.label || 'Wind').toUpperCase(), 0, 26);
-  ctx.font = '900 12px system-ui, Segoe UI, sans-serif';
+  ctx.font = '900 12px Kenney Future Narrow, Kenney Future, system-ui, Segoe UI, sans-serif';
   ctx.fillStyle = wind.mode === 'storm' ? '#fbbf24' : '#e2e8f0';
   const mphApprox = Math.round(speed * 28);
   ctx.fillText(wind.mode === 'calm' ? '0 mph' : `${mphApprox} mph`, 0, 38);
@@ -661,18 +737,18 @@ function drawRecordFlag(ctx, sx, marker) {
   ctx.fill();
   ctx.textAlign = 'center';
   ctx.textBaseline = 'bottom';
-  ctx.font = '800 11px system-ui, Segoe UI, sans-serif';
+  ctx.font = '800 11px Kenney Future Narrow, Kenney Future, system-ui, Segoe UI, sans-serif';
   ctx.lineWidth = 3;
   ctx.strokeStyle = 'rgba(11,18,32,0.85)';
   ctx.strokeText(marker.title || 'Record', sx + 8, GROUND_Y - poleH - 6);
   ctx.fillStyle = '#f8fafc';
   ctx.fillText(marker.title || 'Record', sx + 8, GROUND_Y - poleH - 6);
   if (marker.sub) {
-    ctx.font = '700 10px system-ui, Segoe UI, sans-serif';
+    ctx.font = '700 10px Kenney Future Narrow, Kenney Future, system-ui, Segoe UI, sans-serif';
     ctx.fillStyle = 'rgba(226,232,240,0.85)';
     ctx.fillText(marker.sub, sx + 8, GROUND_Y - poleH - 18);
   }
-  ctx.font = '800 10px system-ui, Segoe UI, sans-serif';
+  ctx.font = '800 10px Kenney Future Narrow, Kenney Future, system-ui, Segoe UI, sans-serif';
   ctx.fillStyle = marker.color || '#fbbf24';
   ctx.fillText(formatDistance(marker.distanceM), sx + 8, GROUND_Y - 4);
   ctx.restore();
@@ -695,10 +771,10 @@ function drawFlightCoin(ctx, sx, frame = 0) {
   ctx.lineWidth = 2.5;
   ctx.stroke();
   ctx.fillStyle = '#78350f';
-  ctx.font = '900 14px system-ui, Segoe UI, sans-serif';
+  ctx.font = '900 14px Kenney Future Narrow, Kenney Future, system-ui, Segoe UI, sans-serif';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText('£', 0, 1);
+  ctx.fillText('Â£', 0, 1);
   ctx.restore();
 }
 
@@ -710,7 +786,7 @@ function drawComboHud(ctx, combo, frame = 0) {
   ctx.scale(pulse, pulse);
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.font = '900 22px system-ui, Segoe UI, sans-serif';
+  ctx.font = '900 22px Kenney Future Narrow, Kenney Future, system-ui, Segoe UI, sans-serif';
   ctx.lineWidth = 4;
   ctx.strokeStyle = 'rgba(11,18,32,0.85)';
   const label = combo >= 3 ? `COMBO ×${combo}` : `HIT ×${combo}`;
@@ -750,7 +826,7 @@ function drawDickQtePrompt(ctx, catchSt, frame = 0) {
   ctx.scale(pulse, pulse);
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.font = '900 28px system-ui, Segoe UI, sans-serif';
+  ctx.font = '900 28px Kenney Future Narrow, Kenney Future, system-ui, Segoe UI, sans-serif';
   ctx.lineWidth = 5;
   ctx.strokeStyle = 'rgba(11,18,32,0.9)';
   const text = open ? 'TAP NOW!' : (f < DICK_QTE_READY_UNTIL ? 'Get ready…' : 'Too late!');
@@ -760,7 +836,7 @@ function drawDickQtePrompt(ctx, catchSt, frame = 0) {
   ctx.shadowBlur = open ? 18 : 0;
   ctx.fillText(text, 0, 0);
   ctx.shadowBlur = 0;
-  ctx.font = '800 13px system-ui, Segoe UI, sans-serif';
+  ctx.font = '800 13px Kenney Future Narrow, Kenney Future, system-ui, Segoe UI, sans-serif';
   ctx.fillStyle = 'rgba(226,232,240,0.9)';
   ctx.fillText('Stop the kickback — boost forward!', 0, 28);
   ctx.restore();
@@ -843,10 +919,14 @@ function slowdownDensityAtKm(km) {
     tier,
     // Fewer empty gaps as distance grows
     skipChance: Math.max(0.04, 0.2 - Math.min(80, tier) * 0.0025),
-    // Balloons from 1,000 km; denser every km after that
+    // Balloons from 1,000 km; denser every km after that — pack the sky when zoomed out
     balloonChance: balloonTier < 1
       ? 0
-      : Math.min(0.32, 0.02 + (balloonTier - 1) * 0.0075),
+      : Math.min(0.62, 0.1 + (balloonTier - 1) * 0.014),
+    /** Extra balloons per spawn so high sky stays filled under camera pull-out. */
+    balloonColumn: balloonTier < 1
+      ? 0
+      : Math.min(6, 2 + Math.floor((balloonTier - 1) / 12)),
     // More birds / coaches in the regular roll mix
     birdBias: Math.min(0.22, 0.1 + Math.min(80, tier) * 0.002),
     coachBias: Math.min(0.42, 0.28 + Math.min(80, tier) * 0.0025),
@@ -930,22 +1010,30 @@ function appendProps(items, fromX, toX, next, features = {}) {
       x += 400 + next() * 700;
       continue;
     }
-    // Hot-air balloons — airborne slowdown from 1,000 km; denser thereafter
+    // Hot-air balloons — airborne slowdown from 1,000 km; denser thereafter.
+    // Spawn a vertical column so the sky stays packed even when the camera pulls out.
     if (newProps && dens.balloonChance > 0 && next() < dens.balloonChance) {
-      const palette = BALLOON_COLORS[Math.floor(next() * BALLOON_COLORS.length)] || BALLOON_COLORS[0];
-      items.push({
-        type: 'balloon',
-        x,
-        y: GROUND_Y - (90 + next() * 140),
-        bobPhase: next() * Math.PI * 2,
-        color: palette[0],
-        colorDark: palette[1],
-        scale: 0.85 + next() * 0.45,
-        id: `balloon-${items.length}-${x | 0}`,
-      });
+      const column = Math.max(1, dens.balloonColumn || 2);
+      for (let b = 0; b < column; b += 1) {
+        const palette = BALLOON_COLORS[Math.floor(next() * BALLOON_COLORS.length)] || BALLOON_COLORS[0];
+        // Bias higher altitudes (quadratic) so zoom-out still fills the top of the screen.
+        // World Y ~ GROUND_Y-70 … GROUND_Y-900 covers visible sky at MIN_ZOOM.
+        const heightFrac = next();
+        const alt = 70 + heightFrac * heightFrac * 830;
+        items.push({
+          type: 'balloon',
+          x: x + (next() - 0.5) * 100,
+          y: GROUND_Y - alt,
+          bobPhase: next() * Math.PI * 2,
+          color: palette[0],
+          colorDark: palette[1],
+          scale: 0.75 + next() * 0.55,
+          id: `balloon-${items.length}-${x | 0}-${b}`,
+        });
+      }
       // Pack tighter at higher tiers
-      const gapScale = Math.max(0.45, 1 - dens.tier * 0.008);
-      x += (160 + next() * 280) * gapScale;
+      const gapScale = Math.max(0.35, 1 - dens.tier * 0.008);
+      x += (120 + next() * 220) * gapScale;
       continue;
     }
     const roll = next();
@@ -1214,18 +1302,18 @@ function gradeAngle(deg) {
   const off = Math.abs(45 - deg);
   const pct = Math.round(clamp(100 - off * 4, 0, 100));
   if (off <= 1) {
-    return { label: 'Perfect!', sub: `${deg.toFixed(0)}° ANGLE`, gold: true, color: '#fbbf24', glow: '#f59e0b' };
+    return { label: 'Perfect!', sub: `${deg.toFixed(0)}Â° ANGLE`, gold: true, color: '#fbbf24', glow: '#f59e0b' };
   }
   if (off <= 3) {
-    return { label: 'Excellent!', sub: `${deg.toFixed(0)}° ANGLE`, gold: false, color: '#e9d5ff', glow: '#a855f7' };
+    return { label: 'Excellent!', sub: `${deg.toFixed(0)}Â° ANGLE`, gold: false, color: '#e9d5ff', glow: '#a855f7' };
   }
   if (off <= 7) {
-    return { label: 'Great!', sub: `${deg.toFixed(0)}° ANGLE`, gold: false, color: '#bae6fd', glow: '#0ea5e9' };
+    return { label: 'Great!', sub: `${deg.toFixed(0)}Â° ANGLE`, gold: false, color: '#bae6fd', glow: '#0ea5e9' };
   }
   if (off <= 14) {
-    return { label: 'Good', sub: `${deg.toFixed(0)}° ANGLE`, gold: false, color: '#bbf7d0', glow: '#22c55e' };
+    return { label: 'Good', sub: `${deg.toFixed(0)}Â° ANGLE`, gold: false, color: '#bbf7d0', glow: '#22c55e' };
   }
-  return { label: 'Off', sub: `${deg.toFixed(0)}° · want 45°`, gold: false, color: '#cbd5e1', glow: '#64748b', pct };
+  return { label: 'Off', sub: `${deg.toFixed(0)}Â° · want 45Â°`, gold: false, color: '#cbd5e1', glow: '#64748b', pct };
 }
 
 function isPerfectPower(power01) {
@@ -1240,6 +1328,13 @@ function isPerfectAngle(deg) {
 const PERFECT_LAUNCH_BOOST = 1.25;
 /** Weekly power-up: +80% launch speed for one kick. */
 const SUPER_RAGE_BOOST = 1.8;
+/** Paid boost: spend portal coins for ×2 launch speed on one kick. */
+const DOUBLE_SPEED_BOOST = 2;
+const DOUBLE_SPEED_COST = 250;
+/** Dice of Fortune — snake eyes (1+1) jackpot. */
+const FORTUNE_SNAKE_MULT = 3;
+/** Dice of Fortune — any other roll. */
+const FORTUNE_MISS_MULT = 0.75;
 
 function perfectLaunchGrade() {
   return {
@@ -1261,6 +1356,79 @@ function superRageGrade() {
     color: '#fecaca',
     glow: '#ef4444',
   };
+}
+
+function doubleSpeedGrade() {
+  return {
+    label: 'DOUBLE SPEED!!!',
+    sub: `${DOUBLE_SPEED_COST} coins · ×2 launch speed`,
+    gold: true,
+    epic: true,
+    color: '#a5f3fc',
+    glow: '#06b6d4',
+  };
+}
+
+function fortuneSnakeEyesGrade(d1, d2) {
+  return {
+    label: 'SNAKE EYES!!!',
+    sub: `${d1} + ${d2} · ×3 launch power`,
+    gold: true,
+    epic: true,
+    color: '#fde68a',
+    glow: '#f59e0b',
+  };
+}
+
+function fortuneMissGrade(d1, d2) {
+  return {
+    label: 'Fortune frowned',
+    sub: `${d1} + ${d2} · −25% launch power`,
+    gold: false,
+    color: '#fda4af',
+    glow: '#e11d48',
+  };
+}
+
+function rollFortuneDice() {
+  const d1 = 1 + Math.floor(Math.random() * 6);
+  const d2 = 1 + Math.floor(Math.random() * 6);
+  const snakeEyes = d1 === 1 && d2 === 1;
+  return {
+    d1,
+    d2,
+    snakeEyes,
+    mult: snakeEyes ? FORTUNE_SNAKE_MULT : FORTUNE_MISS_MULT,
+  };
+}
+
+/** Pip positions for a standard die face (1–6), normalised 0–1 in a square. */
+const DIE_PIPS = {
+  1: [[0.5, 0.5]],
+  2: [[0.28, 0.28], [0.72, 0.72]],
+  3: [[0.28, 0.28], [0.5, 0.5], [0.72, 0.72]],
+  4: [[0.28, 0.28], [0.72, 0.28], [0.28, 0.72], [0.72, 0.72]],
+  5: [[0.28, 0.28], [0.72, 0.28], [0.5, 0.5], [0.28, 0.72], [0.72, 0.72]],
+  6: [[0.28, 0.28], [0.72, 0.28], [0.28, 0.5], [0.72, 0.5], [0.28, 0.72], [0.72, 0.72]],
+};
+
+function FortuneDieFace({ value }) {
+  const n = clamp(Math.floor(Number(value) || 1), 1, 6);
+  const pips = DIE_PIPS[n] || DIE_PIPS[1];
+  return (
+    <div
+      className="relative w-16 h-16 sm:w-20 sm:h-20 rounded-xl bg-slate-100 border-2 border-slate-300 shadow-lg"
+      aria-hidden
+    >
+      {pips.map(([px, py], i) => (
+        <span
+          key={`${n}-${i}`}
+          className="absolute w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full bg-slate-900 -translate-x-1/2 -translate-y-1/2"
+          style={{ left: `${px * 100}%`, top: `${py * 100}%` }}
+        />
+      ))}
+    </div>
+  );
 }
 
 function launchSpeedForPower(power01, tuning) {
@@ -1570,29 +1738,57 @@ function drawToolbox(ctx, x, y, rot, flying, oiled = false) {
 }
 
 function drawCoach(ctx, x, y, w, h) {
+  // High-impact side-view coach (Country Lion maroon + cream stripe)
   ctx.save();
   ctx.translate(x, y);
-  ctx.fillStyle = '#6b1c2a';
-  ctx.strokeStyle = '#3f0f18';
+  ctx.fillStyle = 'rgba(0,0,0,0.2)';
+  ctx.beginPath();
+  ctx.ellipse(w * 0.5, 4, w * 0.48, 7, 0, 0, Math.PI * 2);
+  ctx.fill();
+  const grad = ctx.createLinearGradient(0, -h, 0, 0);
+  grad.addColorStop(0, '#9f1239');
+  grad.addColorStop(0.45, '#7f1d1d');
+  grad.addColorStop(1, '#450a0a');
+  ctx.fillStyle = grad;
+  ctx.strokeStyle = '#1a0508';
   ctx.lineWidth = 2;
   ctx.beginPath();
-  ctx.roundRect(0, -h, w, h, 6);
+  ctx.roundRect(0, -h, w, h, 10);
   ctx.fill();
   ctx.stroke();
-  ctx.fillStyle = '#8b2a3b';
-  ctx.fillRect(0, -h + 10, w, 8);
-  ctx.fillStyle = '#f5e6d3';
-  ctx.fillRect(0, -h + 18, w, 3);
-  ctx.fillStyle = '#93c5fd';
-  const winCount = Math.max(3, Math.floor(w / 28));
+  ctx.fillStyle = 'rgba(255,255,255,0.14)';
+  ctx.fillRect(6, -h + 4, w - 12, 6);
+  ctx.fillStyle = '#fef3c7';
+  ctx.fillRect(0, -h + h * 0.38, w, 7);
+  ctx.fillStyle = '#fde68a';
+  ctx.fillRect(0, -h + h * 0.38 + 7, w, 2);
+  const winCount = Math.max(3, Math.floor(w / 30));
+  const winW = Math.min(16, (w - 24) / winCount - 4);
   for (let i = 0; i < winCount; i += 1) {
-    ctx.fillRect(8 + i * (w / winCount), -h + 26, 14, 14);
+    const wx = 12 + i * ((w - 24) / winCount);
+    ctx.fillStyle = '#93c5fd';
+    ctx.beginPath();
+    ctx.roundRect(wx, -h + 16, winW, 16, 3);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.4)';
+    ctx.fillRect(wx + 2, -h + 17, winW * 0.35, 5);
   }
-  ctx.fillStyle = '#111';
+  ctx.fillStyle = 'rgba(0,0,0,0.28)';
   ctx.beginPath();
-  ctx.arc(18, 0, 8, 0, Math.PI * 2);
-  ctx.arc(w - 18, 0, 8, 0, Math.PI * 2);
+  ctx.roundRect(w - 28, -h + 14, 16, h - 28, 3);
   ctx.fill();
+  const wheels = [22, w - 22];
+  if (w > 90) wheels.splice(1, 0, w * 0.42);
+  for (const cx of wheels) {
+    ctx.fillStyle = '#111';
+    ctx.beginPath();
+    ctx.arc(cx, 0, 11, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = '#64748b';
+    ctx.beginPath();
+    ctx.arc(cx, 0, 5, 0, Math.PI * 2);
+    ctx.fill();
+  }
   ctx.restore();
 }
 
@@ -1769,7 +1965,7 @@ function drawSmoker(ctx, x, y, frame = 0) {
   ctx.roundRect(-36, -92, 72, 16, 4);
   ctx.fill();
   ctx.fillStyle = '#facc15';
-  ctx.font = 'bold 10px system-ui, sans-serif';
+  ctx.font = 'bold 10px Kenney Future Narrow, Kenney Future, system-ui, sans-serif';
   ctx.textAlign = 'center';
   ctx.fillText('SMOKE BREAK', 0, -81);
 
@@ -1976,7 +2172,7 @@ function drawMacan(ctx, x, y, frame = 0) {
 
   // badge hint
   ctx.fillStyle = 'rgba(250, 250, 250, 0.7)';
-  ctx.font = 'bold 8px system-ui, sans-serif';
+  ctx.font = 'bold 8px Kenney Future Narrow, Kenney Future, system-ui, sans-serif';
   ctx.textAlign = 'center';
   ctx.fillText('MACAN', w * 0.45, -12);
 
@@ -2063,7 +2259,7 @@ function drawChelle(ctx, x, y, frame = 0, pose = 'reading') {
     ctx.fillStyle = '#ede9fe';
     ctx.fillRect(-1, -30, 2, 14);
     ctx.fillStyle = '#c4b5fd';
-    ctx.font = 'bold 6px system-ui, sans-serif';
+    ctx.font = 'bold 6px Kenney Future Narrow, Kenney Future, system-ui, sans-serif';
     ctx.textAlign = 'center';
     ctx.fillText('HR', 0, -21);
 
@@ -2326,37 +2522,34 @@ function RpgPopup({ popup }) {
       aria-live="polite"
     >
       <div
-        className={`text-center rounded-xl border backdrop-blur-sm ${
+        className={`gui-panel text-center ${
           epic
             ? 'px-6 py-4 animate-[tkPopEpic_1.7s_ease-out_forwards]'
             : 'px-5 py-3 animate-[tkPop_1.15s_ease-out_forwards]'
         }`}
         style={{
-          borderColor: popup.gold ? 'rgba(251,191,36,0.75)' : 'rgba(148,163,184,0.35)',
-          background: popup.gold
-            ? 'linear-gradient(180deg, rgba(120,80,10,0.95), rgba(40,28,8,0.94))'
-            : 'rgba(11,18,32,0.88)',
+          borderColor: popup.gold ? 'rgba(251,191,36,0.85)' : undefined,
           boxShadow: epic
             ? `0 0 42px ${popup.glow}aa, 0 0 18px ${popup.glow}66`
             : popup.gold
               ? `0 0 28px ${popup.glow}88`
-              : `0 0 18px ${popup.glow}44`,
+              : undefined,
         }}
       >
         <p
-          className={`font-black tracking-wide uppercase ${
+          className={`gui-font font-black tracking-wide uppercase ${
             epic ? 'text-3xl sm:text-5xl' : 'text-2xl sm:text-3xl'
           }`}
           style={{
             color: popup.color,
-            textShadow: popup.gold ? `0 0 16px ${popup.glow}` : '0 1px 0 rgba(0,0,0,0.5)',
+            textShadow: popup.gold ? `0 0 16px ${popup.glow}` : '0 1px 0 rgba(0,0,0,0.35)',
           }}
         >
           {popup.label}
         </p>
         <p
-          className={`font-semibold mt-0.5 ${epic ? 'text-base sm:text-lg' : 'text-sm'}`}
-          style={{ color: popup.gold ? '#fde68a' : '#e2e8f0' }}
+          className={`gui-font-narrow font-semibold mt-0.5 ${epic ? 'text-base sm:text-lg' : 'text-sm'}`}
+          style={{ color: popup.gold ? '#854d0e' : '#334155' }}
         >
           {popup.sub}
         </p>
@@ -2383,13 +2576,12 @@ function RpgPopup({ popup }) {
 function EnergyDrinkBanner({ practice = false, superRage = null, alreadyDone = false }) {
   if (practice) {
     return (
-      <div className="rounded-xl border border-lime-500/35 bg-lime-500/10 px-4 py-3 space-y-1">
-        <p className="text-sm font-semibold text-lime-100">Dick’s energy drink · practice</p>
-        <p className="text-xs text-slate-300 leading-relaxed">
+      <GameUiPanel title="Dick’s energy drink · practice" header="green" dark>
+        <p className="text-xs text-slate-200 leading-relaxed">
           Free to try here. In the real daily game you get <span className="text-white font-medium">one drink per week</span>
           {' '}(+80% launch speed on one kick). Everyone’s fridge refills on Monday.
         </p>
-      </div>
+      </GameUiPanel>
     );
   }
 
@@ -2397,17 +2589,12 @@ function EnergyDrinkBanner({ practice = false, superRage = null, alreadyDone = f
   const refill = superRage?.refillDayKey || 'Monday';
 
   return (
-    <div
-      className={`rounded-xl border px-4 py-3 space-y-1 ${
-        ready
-          ? 'border-rose-500/40 bg-rose-500/10'
-          : 'border-slate-500/35 bg-slate-500/10'
-      }`}
+    <GameUiPanel
+      title={ready ? 'Dick’s energy drink · ready' : 'Dick’s energy drink · empty'}
+      header={ready ? 'red' : 'grey'}
+      dark
     >
-      <p className={`text-sm font-semibold ${ready ? 'text-rose-100' : 'text-slate-200'}`}>
-        {ready ? 'Dick’s energy drink · ready' : 'Dick’s energy drink · empty'}
-      </p>
-      <p className="text-xs text-slate-300 leading-relaxed">
+      <p className="text-xs text-slate-200 leading-relaxed">
         {ready ? (
           <>
             One can this week. Tap <span className="text-white font-medium">Drink energy drink</span> before a kick
@@ -2423,7 +2610,7 @@ function EnergyDrinkBanner({ practice = false, superRage = null, alreadyDone = f
           </>
         )}
       </p>
-    </div>
+    </GameUiPanel>
   );
 }
 
@@ -2435,6 +2622,9 @@ function ToolboxKickGame({
   devCheats = false,
   superRageAvailable = false,
   onActivateSuperRage = null,
+  walletBalance = null,
+  onBuyDoubleSpeed = null,
+  onWalletBalance = null,
   caughtCheating = false,
   punished = false,
   /** Toolbox 2.0 — sandbox / preview only when TOOLBOX_V2_DEV && (devCheats or forceV2). */
@@ -2446,6 +2636,15 @@ function ToolboxKickGame({
   const canvasRef = useRef(null);
   const stageRef = useRef(null);
   const stateRef = useRef(null);
+  const gfxRef = useRef(null);
+  if (!gfxRef.current && TOOLBOX_KICK_GFX_ENABLED) {
+    try {
+      gfxRef.current = createToolboxKickGfx();
+    } catch (err) {
+      console.warn('Toolbox gfx init failed', err);
+      gfxRef.current = null;
+    }
+  }
   const tuningRef = useRef(DEFAULT_TUNING);
   const modeRef = useRef(mode);
   const competitiveRef = useRef(competitive);
@@ -2458,20 +2657,22 @@ function ToolboxKickGame({
   const punishedRef = useRef(punished);
   const onRoundCompleteRef = useRef(onRoundComplete);
   const rageUiRef = useRef({ onConsumed: null });
+  const doubleSpeedUiRef = useRef({ onConsumed: null });
   const popupIdRef = useRef(0);
   const [hud, setHud] = useState({
     phase: PHASE.READY,
     distance: 0,
     speedMph: 0,
     altitudeM: 0,
-    best: Number(localStorage.getItem('toolbox-kick-best') || 0),
+    best: readToolboxBest(),
     attempt: 1,
     roundBest: 0,
     airCombo: 0,
     windLabel: 'Calm',
+    fortuneMult: 1,
     message: mode === 'allOrNothing'
-      ? 'All or nothing — one shot. Tap to set POWER'
-      : `Attempt 1/${MAX_ATTEMPTS} — tap to set POWER`,
+      ? 'All or nothing — Kick, or roll the Dice of Fortune'
+      : `Attempt 1/${MAX_ATTEMPTS} — Kick, or roll the Dice of Fortune`,
   });
   const [popup, setPopup] = useState(null);
   const [haHaFlash, setHaHaFlash] = useState(false);
@@ -2484,6 +2685,143 @@ function ToolboxKickGame({
   const [rageArmed, setRageArmed] = useState(false);
   const [rageBusy, setRageBusy] = useState(false);
   const [rageError, setRageError] = useState('');
+  const [doubleSpeedArmed, setDoubleSpeedArmed] = useState(false);
+  const [doubleSpeedBusy, setDoubleSpeedBusy] = useState(false);
+  const [doubleSpeedError, setDoubleSpeedError] = useState('');
+  const [coinsBalance, setCoinsBalance] = useState(
+    Number.isFinite(Number(walletBalance)) ? Math.max(0, Math.floor(Number(walletBalance))) : null,
+  );
+  const [sfxMuted, setSfxMuted] = useState(() => {
+    try {
+      return localStorage.getItem('toolbox-kick-sfx-muted') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const [gfxReady, setGfxReady] = useState(false);
+  /** Pre-kick: choice | rolling | result | null (hidden once power starts). */
+  const [fortuneUi, setFortuneUi] = useState({ mode: 'choice', d1: 1, d2: 1, rolling: false });
+  const fortuneTimerRef = useRef(null);
+  const fortuneSpinRef = useRef(null);
+
+  useEffect(() => {
+    const gfx = gfxRef.current;
+    if (!gfx) return undefined;
+    let cancelled = false;
+    gfx.setMuted(sfxMuted);
+    gfx.preload().then((ok) => {
+      if (!cancelled) setGfxReady(Boolean(ok));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    gfxRef.current?.setMuted(sfxMuted);
+    try {
+      localStorage.setItem('toolbox-kick-sfx-muted', sfxMuted ? '1' : '0');
+    } catch {
+      /* ignore */
+    }
+  }, [sfxMuted]);
+
+  useEffect(() => () => {
+    if (fortuneTimerRef.current) {
+      window.clearTimeout(fortuneTimerRef.current);
+      fortuneTimerRef.current = null;
+    }
+    if (fortuneSpinRef.current) {
+      window.clearInterval(fortuneSpinRef.current);
+      fortuneSpinRef.current = null;
+    }
+  }, []);
+
+  const beginPowerMeter = useCallback(() => {
+    const st = stateRef.current;
+    if (!st || st.phase !== PHASE.READY) return;
+    const gfx = gfxRef.current;
+    st.fortuneChosen = true;
+    st.phase = PHASE.POWER;
+    st.powerT = Math.random();
+    const fortuneNote = st.fortuneMult === FORTUNE_SNAKE_MULT
+      ? ' · Fortune ×3!'
+      : st.fortuneMult === FORTUNE_MISS_MULT
+        ? ' · Fortune −25%'
+        : '';
+    st.message = `Tap to set power…${fortuneNote}`;
+    gfx?.play('select');
+    setFortuneUi((u) => ({ ...u, mode: null }));
+    setHud((h) => ({
+      ...h,
+      phase: st.phase,
+      message: st.message,
+      fortuneMult: Number(st.fortuneMult) || 1,
+    }));
+  }, []);
+
+  const chooseKick = useCallback(() => {
+    const st = stateRef.current;
+    if (!st || st.phase !== PHASE.READY) return;
+    st.fortuneMult = 1;
+    st.fortuneDice = null;
+    gfxRef.current?.play('select');
+    beginPowerMeter();
+  }, [beginPowerMeter]);
+
+  const chooseFortune = useCallback(() => {
+    const st = stateRef.current;
+    if (!st || st.phase !== PHASE.READY) return;
+    if (fortuneTimerRef.current) {
+      window.clearTimeout(fortuneTimerRef.current);
+      fortuneTimerRef.current = null;
+    }
+    if (fortuneSpinRef.current) {
+      window.clearInterval(fortuneSpinRef.current);
+      fortuneSpinRef.current = null;
+    }
+    const gfx = gfxRef.current;
+    gfx?.unlock();
+    gfx?.play('select');
+    st.message = 'Rolling the Dice of Fortune…';
+    setHud((h) => ({ ...h, message: st.message }));
+    setFortuneUi({ mode: 'rolling', d1: 1, d2: 1, rolling: true });
+
+    let ticks = 0;
+    fortuneSpinRef.current = window.setInterval(() => {
+      ticks += 1;
+      setFortuneUi({
+        mode: 'rolling',
+        d1: 1 + Math.floor(Math.random() * 6),
+        d2: 1 + Math.floor(Math.random() * 6),
+        rolling: true,
+      });
+      if (ticks >= 12) {
+        window.clearInterval(fortuneSpinRef.current);
+        fortuneSpinRef.current = null;
+        const roll = rollFortuneDice();
+        st.fortuneMult = roll.mult;
+        st.fortuneDice = [roll.d1, roll.d2];
+        st.fortuneChosen = true;
+        setFortuneUi({ mode: 'result', d1: roll.d1, d2: roll.d2, rolling: false, snakeEyes: roll.snakeEyes });
+        if (roll.snakeEyes) {
+          gfx?.play('jingleWin', { vol: 0.85 });
+          gfx?.play('perfect');
+          popupFnRef.current?.(fortuneSnakeEyesGrade(roll.d1, roll.d2), 2200);
+          st.message = 'SNAKE EYES — ×3 launch power! Set POWER…';
+        } else {
+          gfx?.play('bump');
+          popupFnRef.current?.(fortuneMissGrade(roll.d1, roll.d2), 1800);
+          st.message = 'Fortune −25% power — set POWER…';
+        }
+        setHud((h) => ({ ...h, message: st.message, fortuneMult: roll.mult }));
+        fortuneTimerRef.current = window.setTimeout(() => {
+          fortuneTimerRef.current = null;
+          beginPowerMeter();
+        }, 1600);
+      }
+    }, 70);
+  }, [beginPowerMeter]);
 
   useEffect(() => {
     modeRef.current = mode;
@@ -2532,6 +2870,12 @@ function ToolboxKickGame({
   }, [superRageAvailable]);
 
   useEffect(() => {
+    if (Number.isFinite(Number(walletBalance))) {
+      setCoinsBalance(Math.max(0, Math.floor(Number(walletBalance))));
+    }
+  }, [walletBalance]);
+
+  useEffect(() => {
     rageUiRef.current.onConsumed = () => {
       setRageArmed(false);
       // Sandbox / practice: free Super Rage every kick.
@@ -2540,6 +2884,12 @@ function ToolboxKickGame({
       }
     };
   }, [onActivateSuperRage]);
+
+  useEffect(() => {
+    doubleSpeedUiRef.current.onConsumed = () => {
+      setDoubleSpeedArmed(false);
+    };
+  }, []);
 
   const showRpgPopup = useCallback((grade, durationMs = 1150) => {
     const id = (popupIdRef.current += 1);
@@ -2577,6 +2927,50 @@ function ToolboxKickGame({
     }
   }, [rageBusy, rageArmed, roundDone, onActivateSuperRage, showRpgPopup]);
 
+  const armDoubleSpeed = useCallback(async () => {
+    if (doubleSpeedBusy || doubleSpeedArmed || roundDone) return;
+    const st = stateRef.current;
+    if (st && (st.phase === PHASE.FLIGHT || st.phase === PHASE.RUNUP || st.phase === PHASE.LANDED)) {
+      setDoubleSpeedError('Buy double speed before you kick.');
+      return;
+    }
+    if (
+      typeof onBuyDoubleSpeed === 'function'
+      && Number.isFinite(coinsBalance)
+      && coinsBalance < DOUBLE_SPEED_COST
+    ) {
+      setDoubleSpeedError(`Need ${DOUBLE_SPEED_COST} coins (you have ${coinsBalance}).`);
+      return;
+    }
+    setDoubleSpeedError('');
+    setDoubleSpeedBusy(true);
+    try {
+      if (typeof onBuyDoubleSpeed === 'function') {
+        const result = await onBuyDoubleSpeed();
+        if (Number.isFinite(Number(result?.walletBalance))) {
+          const next = Math.max(0, Math.floor(Number(result.walletBalance)));
+          setCoinsBalance(next);
+          if (typeof onWalletBalance === 'function') onWalletBalance(next);
+        }
+      }
+      setDoubleSpeedArmed(true);
+      if (stateRef.current) stateRef.current.doubleSpeedArmed = true;
+      showRpgPopup(doubleSpeedGrade(), 1400);
+    } catch (err) {
+      setDoubleSpeedError(err?.message || 'Could not buy double speed.');
+    } finally {
+      setDoubleSpeedBusy(false);
+    }
+  }, [
+    doubleSpeedBusy,
+    doubleSpeedArmed,
+    roundDone,
+    onBuyDoubleSpeed,
+    onWalletBalance,
+    coinsBalance,
+    showRpgPopup,
+  ]);
+
   const initShot = useCallback((opts = {}) => {
     const keepBest = typeof opts === 'boolean' ? opts : opts.keepBest !== false;
     const attempt = typeof opts === 'object' && opts.attempt ? opts.attempt : 1;
@@ -2588,9 +2982,7 @@ function ToolboxKickGame({
       : (typeof opts === 'object' && Array.isArray(opts.attemptDistances)
         ? opts.attemptDistances
         : []);
-    const best = keepBest
-      ? Number(localStorage.getItem('toolbox-kick-best') || 0)
-      : 0;
+    const best = keepBest ? readToolboxBest() : 0;
     const rng = makeRng(Date.now() ^ (Math.random() * 1e9));
     const items = [];
     const startX = 380 + rng() * 220;
@@ -2625,8 +3017,8 @@ function ToolboxKickGame({
         ? ` · ${windProfile.label}`
         : (v2 ? ' · calm skies' : ''));
     const message = attempts === 1
-      ? `All or nothing — one shot. Tap to set POWER${windHint}`
-      : `Attempt ${attempt}/${attempts} — tap to set POWER${windHint}`;
+      ? `All or nothing — Kick, or roll the Dice of Fortune${windHint}`
+      : `Attempt ${attempt}/${attempts} — Kick, or roll the Dice of Fortune${windHint}`;
     stateRef.current = {
       phase: PHASE.READY,
       frame: 0,
@@ -2678,6 +3070,10 @@ function ToolboxKickGame({
         ? false
         : Boolean(opts.keepRageArmed || (stateRef.current && stateRef.current.superRageArmed)),
       superRageUsed: false,
+      doubleSpeedArmed: opts.freshRound
+        ? false
+        : Boolean(opts.keepDoubleSpeedArmed || (stateRef.current && stateRef.current.doubleSpeedArmed)),
+      doubleSpeedUsed: false,
       roundBestUsedEnergyDrink: opts.freshRound
         ? false
         : Boolean(opts.roundBestUsedEnergyDrink
@@ -2693,6 +3089,9 @@ function ToolboxKickGame({
       flightCoinPlan: v2 ? buildFlightCoinPlan(windDayKey) : null,
       collectedCoinSlots: new Set(),
       qtePractice: Boolean(qtePractice),
+      fortuneMult: 1,
+      fortuneDice: null,
+      fortuneChosen: false,
     };
     setHud({
       phase: PHASE.READY,
@@ -2704,14 +3103,18 @@ function ToolboxKickGame({
       roundBest,
       airCombo: 0,
       windLabel: windProfile.label || 'Calm',
+      fortuneMult: 1,
       message,
     });
     setQteFlash(null);
+    setFortuneUi({ mode: 'choice', d1: 1, d2: 1, rolling: false });
   }, []);
 
   const doSpace = useCallback(() => {
     const st = stateRef.current;
     if (!st) return;
+    const gfx = gfxRef.current;
+    gfx?.unlock();
     const attempts = st.maxAttempts || (modeRef.current === 'allOrNothing' ? 1 : MAX_ATTEMPTS);
 
     // Toolbox 2.0 — Little Dick kickback QTE (Space / tap / overlay button)
@@ -2722,6 +3125,7 @@ function ToolboxKickGame({
         st.dickCatch.qteSuccess = true;
         st.message = 'Nice! You broke free — boost incoming…';
         setQteFlash(null);
+        gfx?.play('qteOk');
         showRpgPopup(dickQteSuccessGrade(), 1600);
         setHud((h) => ({ ...h, message: st.message }));
         return;
@@ -2734,30 +3138,34 @@ function ToolboxKickGame({
       st.dickCatch.qteResolved = true;
       st.dickCatch.qteSuccess = false;
       setQteFlash(null);
+      gfx?.play('qteFail');
       st.message = 'Missed the QTE — here comes the boot-back…';
       setHud((h) => ({ ...h, message: st.message }));
       return;
     }
 
     if (st.phase === PHASE.READY) {
-      st.phase = PHASE.POWER;
-      st.powerT = Math.random();
-      st.message = 'Tap to set power…';
-      setHud((h) => ({ ...h, phase: st.phase, message: st.message }));
+      // Ignore taps while dice are spinning / revealing.
+      if (fortuneUi?.mode === 'rolling' || fortuneUi?.mode === 'result') return;
+      // Space / tap = Kick (skip the dice). Dice needs the Fortune button.
+      chooseKick();
     } else if (st.phase === PHASE.POWER) {
       st.power = meterValue(st.powerT);
       const pct = Math.round(st.power * 100);
       if (pct >= 99) st.power = 1;
       const showPct = Math.round(st.power * 100);
       showRpgPopup(gradePower(showPct));
+      gfx?.play(showPct >= 100 ? 'perfect' : 'lock');
       st.phase = PHASE.ANGLE;
       st.angleT = Math.random();
-      st.message = 'Tap to set angle — chase 45°…';
+      st.message = 'Tap to set angle — chase 45Â°…';
       setHud((h) => ({ ...h, phase: st.phase, message: st.message }));
     } else if (st.phase === PHASE.ANGLE) {
       st.angleDeg = 15 + meterValue(st.angleT) * 60;
       st.perfectLaunch = isPerfectPower(st.power) && isPerfectAngle(st.angleDeg);
       showRpgPopup(gradeAngle(st.angleDeg));
+      gfx?.play(st.perfectLaunch ? 'perfect' : 'lock');
+      if (st.perfectLaunch) gfx?.play('jingleHit', { vol: 0.7 });
       st.phase = PHASE.RUNUP;
       st.runup = 0;
       st.message = st.perfectLaunch
@@ -2778,7 +3186,7 @@ function ToolboxKickGame({
         initShot({ keepBest: true, attempt: 1, freshRound: true });
       }
     }
-  }, [initShot, showRpgPopup]);
+  }, [initShot, showRpgPopup, chooseKick, fortuneUi]);
 
   /** Dev cheat (sandbox / practice only): Y = perfect launch, or smoker boost in flight. */
   const doCheatY = useCallback(() => {
@@ -2790,13 +3198,16 @@ function ToolboxKickGame({
       st.power = 1;
       st.angleDeg = 45;
       st.perfectLaunch = true;
+      st.fortuneChosen = true;
+      st.fortuneMult = st.fortuneMult || 1;
       st.phase = PHASE.RUNUP;
       st.runup = 0;
       st.mechX = MECH_START_X;
       st.message = 'CHEAT · perfect launch — here comes the boot…';
+      setFortuneUi((u) => ({ ...u, mode: null }));
       showRpgPopup({
         label: 'CHEAT · Perfect!',
-        sub: '100% power · 45° angle',
+        sub: '100% power · 45Â° angle',
         gold: true,
         color: '#fbbf24',
         glow: '#f59e0b',
@@ -2880,6 +3291,31 @@ function ToolboxKickGame({
     let lastTs = 0;
     let simAccum = 0;
 
+    const syncCanvasSize = () => {
+      const stage = stageRef.current;
+      if (!stage || !ctx) return;
+      const cssW = Math.max(320, Math.floor(stage.clientWidth || 0) || W);
+      const cssH = Math.max(140, Math.round(cssW * (H / W)));
+      const dpr = Math.min(2.5, window.devicePixelRatio || 1);
+      const bufW = Math.max(1, Math.floor(cssW * dpr));
+      const bufH = Math.max(1, Math.floor(cssH * dpr));
+      if (canvas.width !== bufW || canvas.height !== bufH) {
+        canvas.width = bufW;
+        canvas.height = bufH;
+      }
+      if (canvas.style.width !== `${cssW}px`) canvas.style.width = `${cssW}px`;
+      if (canvas.style.height !== `${cssH}px`) canvas.style.height = `${cssH}px`;
+      // Keep gameplay authored in logical W×H; stretch crisply to the stage.
+      ctx.setTransform(bufW / W, 0, 0, bufH / H, 0, 0);
+    };
+
+    syncCanvasSize();
+    const ro = typeof ResizeObserver !== 'undefined'
+      ? new ResizeObserver(() => syncCanvasSize())
+      : null;
+    if (ro && stageRef.current) ro.observe(stageRef.current);
+    window.addEventListener('resize', syncCanvasSize);
+
     const syncHud = (st) => {
       setHud({
         phase: st.phase,
@@ -2891,6 +3327,7 @@ function ToolboxKickGame({
         roundBest: st.roundBest || 0,
         airCombo: st.airCombo || 0,
         windLabel: st.windNow?.label || st.windProfile?.label || 'Calm',
+        fortuneMult: Number(st.fortuneMult) || 1,
         message: st.message,
       });
     };
@@ -2899,6 +3336,8 @@ function ToolboxKickGame({
       const st = stateRef.current;
       const tun = tuningRef.current || DEFAULT_TUNING;
       const bar = BAR_SPEED[modeRef.current] || BAR_SPEED.careful;
+      const gfx = gfxRef.current;
+      syncCanvasSize();
       if (!st) {
         raf = requestAnimationFrame(step);
         return;
@@ -2949,6 +3388,19 @@ function ToolboxKickGame({
               rageUiRef.current.onConsumed();
             }
           }
+          if (st.doubleSpeedArmed) {
+            speed *= DOUBLE_SPEED_BOOST;
+            st.doubleSpeedArmed = false;
+            st.doubleSpeedUsed = true;
+            popupFnRef.current?.(doubleSpeedGrade(), 1800);
+            if (typeof doubleSpeedUiRef.current?.onConsumed === 'function') {
+              doubleSpeedUiRef.current.onConsumed();
+            }
+          }
+          const fortuneMult = Number(st.fortuneMult) || 1;
+          if (fortuneMult !== 1) {
+            speed *= fortuneMult;
+          }
           speed *= speedFactor;
           st.launchSpeed = speed;
           st.launchAngleDeg = st.angleDeg;
@@ -2976,6 +3428,10 @@ function ToolboxKickGame({
                   ? 'Perfect launch!!! Fly, toolbox, fly…'
                   : 'Fly, toolbox, fly…';
           }
+          gfx?.play('kick', { vol: 0.9 });
+          gfx?.burst(st.box.x, st.box.y, { count: 14, color: '#fbbf24', speed: 4.5, life: 22 });
+          gfx?.dust(st.box.x, GROUND_Y, 1);
+          gfx?.addShake(st.perfectLaunch ? 9 : 5);
           syncHud(st);
         }
       } else if (st.phase === PHASE.FLIGHT && st.dickCatch) {
@@ -3015,12 +3471,14 @@ function ToolboxKickGame({
           if (f === DICK_QTE_OPEN) {
             setQteFlash('go');
             st.message = 'TAP NOW — Space / tap the screen!';
+            gfx?.play('qte');
             syncHud(st);
           }
           if (f === DICK_QTE_CLOSE + 1) {
             catchSt.qteResolved = true;
             catchSt.qteSuccess = false;
             setQteFlash(null);
+            gfx?.play('qteFail');
             st.message = 'Missed the QTE — here comes the boot-back…';
             syncHud(st);
           }
@@ -3053,6 +3511,9 @@ function ToolboxKickGame({
             st.dickCatch = null;
             st.returningFromBoot = false;
             st.hitIds = new Set();
+            gfx?.play(returnRescue ? 'boost' : 'boost', { vol: 0.95 });
+            gfx?.burst(box.x, box.y, { count: 18, color: '#f59e0b', speed: 5.5, life: 26 });
+            gfx?.addShake(8);
             st.message = returnRescue
               ? 'COMEBACK! Little Dick boots you forward!'
               : 'QTE! Little Dick whiffs — toolbox rockets onward!';
@@ -3071,6 +3532,8 @@ function ToolboxKickGame({
             st.hitIds = new Set(); // re-collide with obstacles on the way back
             ensureReturnPathProps(st, box.x);
             seedReturnRescueProps(st, box.x);
+            gfx?.play('metalHeavy', { vol: 0.85 });
+            gfx?.addShake(10);
             st.message = 'Little Dick sent it BACK — catch him again to rebound!';
             syncHud(st);
           }
@@ -3112,6 +3575,10 @@ function ToolboxKickGame({
           box.y = GROUND_Y - 40;
           st.chelleReact = null;
           st.returningFromBoot = false;
+          gfx?.play('rare');
+          gfx?.play('jingleWin', { vol: 0.75 });
+          gfx?.burst(box.x, box.y, { count: 28, color: '#c4b5fd', speed: 7, life: 30 });
+          gfx?.addShake(12);
           st.message = st.caughtCheating
             ? 'CHELLE! (but you’re sluggish…)'
             : 'CHELLE! 3× Julies Car!';
@@ -3193,6 +3660,9 @@ function ToolboxKickGame({
                   box.vy = Math.min(box.vy, 2);
                 }
                 st.message = 'Hit a coach — slowed down!';
+                gfx?.play('coach');
+                gfx?.dust(box.x, GROUND_Y, box.vx >= 0 ? 1 : -1);
+                gfx?.addShake(3);
                 syncHud(st);
               } else {
                 box.vx *= tun.coachDrag;
@@ -3234,6 +3704,10 @@ function ToolboxKickGame({
                 st.message = rescue
                   ? 'Smoke break save — back downrange!'
                   : 'Driver on a ciggy break — sent flying!';
+                gfx?.play('boost');
+                gfx?.play('rare', { vol: 0.55 });
+                gfx?.burst(box.x, box.y, { count: 16, color: '#fb923c', speed: 5, life: 24 });
+                gfx?.addShake(7);
                 popupFnRef.current?.(smokerBoostGrade(false), 1600);
                 syncHud(st);
               }
@@ -3249,6 +3723,10 @@ function ToolboxKickGame({
                 applyMacanBoost(box, (st.caughtCheating || st.punished) ? CAUGHT_CHEAT_SPEED_FACTOR : 1);
                 st.returningFromBoot = false;
                 st.message = 'JULIES CAR!';
+                gfx?.play('rare');
+                gfx?.play('jingleHit', { vol: 0.8 });
+                gfx?.burst(box.x, box.y, { count: 22, color: '#e2e8f0', speed: 6.5, life: 28 });
+                gfx?.addShake(9);
                 popupFnRef.current?.(macanBoostGrade(), 2000);
                 syncHud(st);
               }
@@ -3413,6 +3891,9 @@ function ToolboxKickGame({
             box.vy = -box.vy * bounceDamp;
             box.vx *= bounceFric;
             box.spin *= wetGrass ? 0.55 : 0.92;
+            gfx?.play(wetGrass ? 'grass' : 'bounce', { vol: wetGrass ? 0.7 : 0.45, rate: 0.9 + Math.random() * 0.2 });
+            gfx?.dust(box.x, GROUND_Y, box.vx >= 0 ? 1 : -1);
+            if (impactVy > 4) gfx?.addShake(Math.min(6, impactVy * 0.35));
             if (wetGrass && impactVy > 3.2) {
               st.landThump = Math.max(st.landThump || 0, Math.min(14, 6 + Math.floor(impactVy)));
               if (!st._wetThumpNoted) {
@@ -3458,7 +3939,7 @@ function ToolboxKickGame({
                 st.attemptDistances = [...st.attemptDistances, dist];
                 if (dist > st.best) {
                   st.best = dist;
-                  localStorage.setItem('toolbox-kick-best', String(dist));
+                  writeToolboxBest(dist);
                 }
                 if (st.punished) {
                   setHaHaFlash(true);
@@ -3621,8 +4102,26 @@ function ToolboxKickGame({
       const weatherMode = st.v2 && st.windProfile?.mode === 'storm'
         ? 'storm'
         : (st.v2 && st.windProfile?.mode === 'steady' ? 'steady' : 'calm');
-      drawSky(ctx, cam, weatherMode);
-      drawGround(ctx, cam, weatherMode);
+      const wetWorld = weatherMode === 'storm';
+      const usedGfxBg = Boolean(
+        gfx?.drawWorldBackground(ctx, {
+          W,
+          H,
+          groundY: GROUND_Y,
+          camX: cam,
+          wet: wetWorld,
+          frame: animFrame,
+        }),
+      );
+      if (!usedGfxBg) {
+        drawSky(ctx, cam, weatherMode);
+        drawGround(ctx, cam, weatherMode);
+      }
+
+      const mph = speedMphFromBox(st.box);
+      gfx?.setSpeedLines(st.phase === PHASE.FLIGHT ? clamp((mph - 80) / 220, 0, 1) : 0);
+      gfx?.tickVfx();
+      const shake = gfx?.getShake?.() || { x: 0, y: 0 };
 
       const thump = Math.max(0, st.landThump || 0);
       if (thump > 0) {
@@ -3630,9 +4129,12 @@ function ToolboxKickGame({
         const mag = Math.min(7, thump * 0.55);
         ctx.save();
         ctx.translate(
-          (Math.random() - 0.5) * mag * 2,
-          mag * 0.85 + (Math.random() - 0.5) * mag,
+          (Math.random() - 0.5) * mag * 2 + shake.x,
+          mag * 0.85 + (Math.random() - 0.5) * mag + shake.y,
         );
+      } else if (shake.x || shake.y) {
+        ctx.save();
+        ctx.translate(shake.x, shake.y);
       }
 
       const pivotX = W * 0.35;
@@ -3666,15 +4168,34 @@ function ToolboxKickGame({
         else if (it.type === 'cone') drawCone(ctx, sx, GROUND_Y);
         else if (it.type === 'drum') drawDrum(ctx, sx, GROUND_Y, Boolean(it.spilled));
         else if (it.type === 'oilSpill') drawOilSpill(ctx, sx, GROUND_Y, animFrame);
-        else if (it.type === 'smoker') drawSmoker(ctx, sx, GROUND_Y, animFrame);
+        else if (it.type === 'smoker') {
+          const bob = Math.sin(animFrame * 0.12) * 1.5;
+          if (!gfx?.drawCharSprite(ctx, 'smokerIdle', sx, GROUND_Y, { scale: 1.05, bob })) {
+            drawSmoker(ctx, sx, GROUND_Y, animFrame);
+          } else {
+            // Keep the cigarette smoke puff from the procedural drawer
+            ctx.save();
+            ctx.globalAlpha = 0.55;
+            ctx.fillStyle = 'rgba(200,200,200,0.5)';
+            const puff = (animFrame * 0.08) % 1;
+            ctx.beginPath();
+            ctx.ellipse(sx + 10, GROUND_Y - 58 - puff * 18, 6 + puff * 4, 5 + puff * 3, 0, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+          }
+        }
         else if (it.type === 'macan') drawMacan(ctx, sx, GROUND_Y, animFrame);
         else if (it.type === 'chelle') {
           const reacting = st.chelleReact && st.chelleReact.x === it.x;
           let poseChelle = 'reading';
+          let spr = 'chelleRead';
           if (reacting) {
             poseChelle = st.chelleReact.frame < 18 ? 'startled' : 'launch';
+            spr = st.chelleReact.frame < 18 ? 'chelleIdle' : 'chelleLaunch';
           }
-          drawChelle(ctx, sx, GROUND_Y, animFrame, poseChelle);
+          if (!gfx?.drawCharSprite(ctx, spr, sx, GROUND_Y, { scale: 1.05 })) {
+            drawChelle(ctx, sx, GROUND_Y, animFrame, poseChelle);
+          }
           if (reacting && st.chelleReact.frame < 22) {
             ctx.save();
             ctx.fillStyle = 'rgba(255,255,255,0.95)';
@@ -3695,7 +4216,7 @@ function ToolboxKickGame({
             ctx.closePath();
             ctx.fill();
             ctx.fillStyle = '#5b21b6';
-            ctx.font = 'bold 11px system-ui, sans-serif';
+            ctx.font = 'bold 11px Kenney Future Narrow, Kenney Future, system-ui, sans-serif';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             ctx.fillText("I'm trying to read!", sx, by + bh / 2);
@@ -3706,7 +4227,7 @@ function ToolboxKickGame({
             ctx.roundRect(sx - 28, GROUND_Y - 92, 56, 16, 4);
             ctx.fill();
             ctx.fillStyle = '#ddd6fe';
-            ctx.font = 'bold 10px system-ui, sans-serif';
+            ctx.font = 'bold 10px Kenney Future Narrow, Kenney Future, system-ui, sans-serif';
             ctx.textAlign = 'center';
             ctx.fillText('CHELLE', sx, GROUND_Y - 81);
           }
@@ -3715,18 +4236,25 @@ function ToolboxKickGame({
           const catching = st.dickCatch && st.dickCatch.x === it.x;
           const face = catching ? (st.dickCatch.facing || 1) : 1;
           const kicking = catching && st.dickCatch.frame >= DICK_QTE_FLASH && st.dickCatch.frame < DICK_QTE_BOOT + 8;
-          ctx.save();
-          ctx.translate(sx, GROUND_Y);
-          ctx.scale(face < 0 ? -1 : 1, 1);
-          drawMechanic(ctx, 0, 0, st.frame, { kicking, running: false });
-          ctx.restore();
+          const spr = kicking ? 'dickKick' : (catching ? 'dickHit' : 'dickIdle');
+          const drew = gfx?.drawCharSprite(ctx, spr, sx, GROUND_Y, {
+            flip: face < 0,
+            scale: 1.1,
+          });
+          if (!drew) {
+            ctx.save();
+            ctx.translate(sx, GROUND_Y);
+            ctx.scale(face < 0 ? -1 : 1, 1);
+            drawMechanic(ctx, 0, 0, st.frame, { kicking, running: false });
+            ctx.restore();
+          }
           if (!catching) {
             ctx.fillStyle = 'rgba(15, 23, 42, 0.75)';
             ctx.beginPath();
             ctx.roundRect(sx - 40, GROUND_Y - 96, 80, 16, 4);
             ctx.fill();
             ctx.fillStyle = '#fdba74';
-            ctx.font = 'bold 10px system-ui, sans-serif';
+            ctx.font = 'bold 10px Kenney Future Narrow, Kenney Future, system-ui, sans-serif';
             ctx.textAlign = 'center';
             ctx.fillText('LITTLE DICK', sx, GROUND_Y - 85);
           }
@@ -3754,7 +4282,12 @@ function ToolboxKickGame({
       const running = st.phase === PHASE.RUNUP && st.runup < KICK_FRAME;
       const kicking = st.phase === PHASE.RUNUP && st.runup >= KICK_FRAME;
       if (mechDrawX - cam > visMinSx && mechDrawX - cam < visMaxSx) {
-        drawMechanic(ctx, mechDrawX - cam, GROUND_Y, animFrame, { kicking, running });
+        let mechSpr = 'mechIdle';
+        if (kicking) mechSpr = 'mechKick';
+        else if (running) mechSpr = (Math.floor(animFrame / 6) % 2 === 0) ? 'mechWalkA' : 'mechWalkB';
+        if (!gfx?.drawCharSprite(ctx, mechSpr, mechDrawX - cam, GROUND_Y, { scale: 1.08 })) {
+          drawMechanic(ctx, mechDrawX - cam, GROUND_Y, animFrame, { kicking, running });
+        }
       }
 
       // Punishment revenge: Little Dick walks in / grabs / boots Mach 2
@@ -3802,7 +4335,7 @@ function ToolboxKickGame({
             ctx.closePath();
             ctx.fill();
             ctx.fillStyle = '#9a3412';
-            ctx.font = 'bold 12px system-ui, sans-serif';
+            ctx.font = 'bold 12px Kenney Future Narrow, Kenney Future, system-ui, sans-serif';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             ctx.fillText(lines[0], sx, by + 13);
@@ -3814,7 +4347,7 @@ function ToolboxKickGame({
             ctx.roundRect(sx - 40, GROUND_Y - 96, 80, 16, 4);
             ctx.fill();
             ctx.fillStyle = '#fdba74';
-            ctx.font = 'bold 10px system-ui, sans-serif';
+            ctx.font = 'bold 10px Kenney Future Narrow, Kenney Future, system-ui, sans-serif';
             ctx.textAlign = 'center';
             ctx.fillText('LITTLE DICK', sx, GROUND_Y - 85);
           }
@@ -3822,13 +4355,29 @@ function ToolboxKickGame({
       }
 
       const oiled = Boolean(st.box.oiled);
-      if (st.phase === PHASE.READY || st.phase === PHASE.POWER || st.phase === PHASE.ANGLE) {
-        drawToolbox(ctx, boxDrawX - cam, boxDrawY, -0.15, false, oiled);
-      } else if (st.phase === PHASE.RUNUP && st.runup < LAUNCH_FRAME) {
-        drawToolbox(ctx, BOX_REST_X - cam, GROUND_Y - 12, -0.2, false, oiled);
-      } else {
-        drawToolbox(ctx, boxDrawX - cam, boxDrawY, boxDrawRot, st.phase === PHASE.FLIGHT, oiled);
+      const drawBoxSprite = (sx, sy, rot, flying) => {
+        if (gfx?.drawToolboxSprite(ctx, sx, sy, rot, flying, oiled)) return;
+        drawToolbox(ctx, sx, sy, rot, flying, oiled);
+      };
+      if (st.phase === PHASE.FLIGHT) {
+        gfx?.drawTrailGhosts(ctx, {
+          x: boxDrawX,
+          y: boxDrawY,
+          vx: st.box.vx,
+          vy: st.box.vy,
+          rot: boxDrawRot,
+          spin: st.box.spin,
+        }, cam, (gx, gy, grot) => drawBoxSprite(gx, gy, grot, true));
       }
+      if (st.phase === PHASE.READY || st.phase === PHASE.POWER || st.phase === PHASE.ANGLE) {
+        drawBoxSprite(boxDrawX - cam, boxDrawY, -0.15, false);
+      } else if (st.phase === PHASE.RUNUP && st.runup < LAUNCH_FRAME) {
+        drawBoxSprite(BOX_REST_X - cam, GROUND_Y - 12, -0.2, false);
+      } else {
+        drawBoxSprite(boxDrawX - cam, boxDrawY, boxDrawRot, st.phase === PHASE.FLIGHT);
+      }
+
+      gfx?.drawParticles(ctx, cam);
 
       if (st.kickFlash > 0) {
         const flashX = st.punishRevenge && (st.punishRevenge.stage === 'grab' || st.punishRevenge.stage === 'flight')
@@ -3846,9 +4395,11 @@ function ToolboxKickGame({
 
       ctx.restore();
 
-      if (thump > 0) {
+      if (thump > 0 || shake.x || shake.y) {
         ctx.restore();
       }
+
+      gfx?.drawSpeedLines(ctx, W, H, GROUND_Y, mph > 80 ? clamp((mph - 80) / 220, 0, 1) : 0);
 
       if (weatherMode === 'storm') {
         drawStormWeather(ctx, animFrame, st.windNow || st.windProfile);
@@ -3860,6 +4411,14 @@ function ToolboxKickGame({
 
       if (st.phase === PHASE.FLIGHT || st.phase === PHASE.LANDED) {
         drawTopStatsBar(ctx, st);
+        if (st.phase === PHASE.FLIGHT) {
+          // Screen-space position of the toolbox after camera zoom (pivot at ground).
+          const screenBoxX = pivotX + (boxDrawX - cam - pivotX) * zoom;
+          const screenBoxY = GROUND_Y + (boxDrawY - GROUND_Y) * zoom;
+          if (screenBoxY < STAT_BAR_H + 18) {
+            drawToolboxOffscreenArrow(ctx, screenBoxX, animFrame);
+          }
+        }
         if (st.v2) {
           drawWindSock(ctx, st.windNow || sampleWind(st.windProfile, animFrame), animFrame);
           drawComboHud(ctx, st.airCombo || 0, animFrame);
@@ -3873,7 +4432,7 @@ function ToolboxKickGame({
           ctx.save();
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
-          ctx.font = '600 14px system-ui, sans-serif';
+          ctx.font = '600 14px Kenney Future Narrow, Kenney Future, system-ui, sans-serif';
           ctx.fillStyle = parts.negative
             ? 'rgba(252,165,165,0.95)'
             : 'rgba(226,232,240,0.9)';
@@ -3900,7 +4459,7 @@ function ToolboxKickGame({
         ctx.roundRect(meterX, meterY, 200, 56, 8);
         ctx.fill();
         ctx.fillStyle = '#94a3b8';
-        ctx.font = '12px system-ui, sans-serif';
+        ctx.font = '12px Kenney Future Narrow, Kenney Future, system-ui, sans-serif';
         if (st.phase === PHASE.POWER) {
           ctx.fillText('POWER — Space / tap to lock', meterX + 10, meterY + 18);
           ctx.fillStyle = '#1e293b';
@@ -3913,7 +4472,7 @@ function ToolboxKickGame({
           ctx.fillStyle = grad;
           ctx.fillRect(meterX + 10, meterY + 28, pw, 14);
         } else {
-          ctx.fillText('ANGLE — Space / tap (45° ideal)', meterX + 10, meterY + 18);
+          ctx.fillText('ANGLE — Space / tap (45Â° ideal)', meterX + 10, meterY + 18);
           ctx.fillStyle = '#1e293b';
           ctx.fillRect(meterX + 10, meterY + 28, 180, 14);
           ctx.fillStyle = 'rgba(34,197,94,0.35)';
@@ -3927,8 +4486,12 @@ function ToolboxKickGame({
       if (st.phase === PHASE.ANGLE) {
         const rad = (st.angleDeg * Math.PI) / 180;
         const rage = Boolean(st.superRageArmed);
+        const doubleSpeed = Boolean(st.doubleSpeedArmed);
+        const fortuneMult = Number(st.fortuneMult) || 1;
         let speed = launchSpeedForPower(st.power, tun);
         if (rage) speed *= SUPER_RAGE_BOOST;
+        if (doubleSpeed) speed *= DOUBLE_SPEED_BOOST;
+        if (fortuneMult !== 1) speed *= fortuneMult;
         let gx = BOX_REST_X;
         let gy = GROUND_Y - 12;
         let vx = Math.cos(rad) * speed;
@@ -3945,13 +4508,29 @@ function ToolboxKickGame({
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
         ctx.setLineDash([]);
-        ctx.strokeStyle = rage ? 'rgba(239,68,68,0.35)' : 'rgba(255,255,255,0.55)';
+        ctx.strokeStyle = rage
+          ? 'rgba(239,68,68,0.35)'
+          : doubleSpeed
+            ? 'rgba(34,211,238,0.4)'
+            : fortuneMult > 1
+              ? 'rgba(251,191,36,0.4)'
+              : fortuneMult < 1
+                ? 'rgba(251,113,133,0.35)'
+                : 'rgba(255,255,255,0.55)';
         ctx.lineWidth = 7;
         ctx.beginPath();
         points.forEach((p, i) => (i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y)));
         ctx.stroke();
         // Bright dashed aim line
-        ctx.strokeStyle = rage ? 'rgba(248,113,113,0.98)' : 'rgba(14,165,233,0.95)';
+        ctx.strokeStyle = rage
+          ? 'rgba(248,113,113,0.98)'
+          : doubleSpeed
+            ? 'rgba(34,211,238,0.98)'
+            : fortuneMult > 1
+              ? 'rgba(251,191,36,0.95)'
+              : fortuneMult < 1
+                ? 'rgba(251,113,133,0.95)'
+                : 'rgba(14,165,233,0.95)';
         ctx.lineWidth = 3.5;
         ctx.setLineDash([10, 7]);
         ctx.beginPath();
@@ -3959,7 +4538,7 @@ function ToolboxKickGame({
         ctx.stroke();
         ctx.setLineDash([]);
         // Origin marker
-        ctx.fillStyle = rage ? '#f87171' : '#38bdf8';
+        ctx.fillStyle = rage ? '#f87171' : doubleSpeed ? '#22d3ee' : '#38bdf8';
         ctx.beginPath();
         ctx.arc(points[0].x, points[0].y, 5, 0, Math.PI * 2);
         ctx.fill();
@@ -3972,7 +4551,11 @@ function ToolboxKickGame({
     };
 
     raf = requestAnimationFrame(step);
-    return () => cancelAnimationFrame(raf);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener('resize', syncCanvasSize);
+      ro?.disconnect();
+    };
   }, []);
 
   /** Dev cheat (sandbox only): P = toggle punishment (10% power + HA-HA on land). */
@@ -4041,55 +4624,136 @@ function ToolboxKickGame({
   }, [doSpace, doCheatY, doCheatU, doCheatSpawn, doCheatPunish]);
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3 w-full max-w-none">
       {devCheats && cheatPunished ? (
-        <div className="rounded-xl border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-xs text-rose-100">
+        <div className="mx-3 sm:mx-4 rounded-xl border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-xs text-rose-100">
           Punishment cheat ON (P to toggle) — 10% · coaches · HA-HA · Little Dick Mach 2
         </div>
       ) : null}
-      <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
-        <p className="text-slate-300">{hud.message}</p>
-        <div className="flex flex-wrap gap-3 text-xs text-slate-400">
-          <span>
-            Attempt{' '}
-            <span className="text-orange-200 font-semibold tabular-nums">
-              {hud.attempt || 1}/{mode === 'allOrNothing' ? 1 : (TOOLBOX_V2_DEV && (devCheats || forceV2) ? MAX_ATTEMPTS_DEV_V2 : MAX_ATTEMPTS)}
-            </span>
-          </span>
-          <span>
-            Round best{' '}
-            <span className="text-sky-200 font-semibold tabular-nums">
-              {formatDistance(hud.roundBest || 0)}
-            </span>
-          </span>
-          <span>
-            All-time{' '}
-            <span className="text-amber-200 font-semibold tabular-nums">
-              {formatDistance(hud.best)}
-            </span>
-          </span>
-          {TOOLBOX_V2_LIVE || (TOOLBOX_V2_DEV && (devCheats || forceV2)) ? (
-            <>
+      <div className="px-3 sm:px-4">
+        <GameUiPanel dark flush className="!rounded-xl" bodyClassName="!py-2 !px-3">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+            <p className="gui-font-narrow text-slate-200">{hud.message}</p>
+            <div className="flex flex-wrap gap-3 text-xs text-slate-400 gui-font-narrow">
               <span>
-                Wind{' '}
-                <span className="text-sky-200 font-semibold">{hud.windLabel || 'Calm'}</span>
-              </span>
-              {(hud.airCombo || 0) >= 2 ? (
-                <span>
-                  Combo{' '}
-                  <span className="text-amber-200 font-semibold tabular-nums">×{hud.airCombo}</span>
+                Attempt{' '}
+                <span className="text-orange-200 font-semibold tabular-nums">
+                  {hud.attempt || 1}/{mode === 'allOrNothing' ? 1 : (TOOLBOX_V2_DEV && (devCheats || forceV2) ? MAX_ATTEMPTS_DEV_V2 : MAX_ATTEMPTS)}
                 </span>
+              </span>
+              <span>
+                Round best{' '}
+                <span className="text-sky-200 font-semibold tabular-nums">
+                  {formatDistance(hud.roundBest || 0)}
+                </span>
+              </span>
+              <span>
+                All-time{' '}
+                <span className="text-amber-200 font-semibold tabular-nums">
+                  {formatDistance(hud.best)}
+                </span>
+              </span>
+              {TOOLBOX_V2_LIVE || (TOOLBOX_V2_DEV && (devCheats || forceV2)) ? (
+                <>
+                  <span>
+                    Wind{' '}
+                    <span className="text-sky-200 font-semibold">{hud.windLabel || 'Calm'}</span>
+                  </span>
+                  {(hud.airCombo || 0) >= 2 ? (
+                    <span>
+                      Combo{' '}
+                      <span className="text-amber-200 font-semibold tabular-nums">×{hud.airCombo}</span>
+                    </span>
+                  ) : null}
+                </>
               ) : null}
-            </>
-          ) : null}
-        </div>
+              {hud.fortuneMult === FORTUNE_SNAKE_MULT ? (
+                <span className="text-amber-200 font-semibold">Fortune ×3</span>
+              ) : hud.fortuneMult === FORTUNE_MISS_MULT ? (
+                <span className="text-rose-300 font-semibold">Fortune −25%</span>
+              ) : null}
+            </div>
+          </div>
+        </GameUiPanel>
       </div>
 
       <div
         ref={stageRef}
-        className="relative overflow-hidden rounded-xl border border-[#1a2540] bg-[#0b1220] [&:fullscreen]:flex [&:fullscreen]:items-center [&:fullscreen]:justify-center [&:fullscreen]:rounded-none [&:fullscreen]:border-0 [&:fullscreen]:min-h-screen [&:fullscreen]:w-screen"
+        className="relative w-full overflow-hidden border-y border-[#1a2540] bg-[#0b1220] sm:rounded-none rounded-none [&:fullscreen]:flex [&:fullscreen]:items-center [&:fullscreen]:justify-center [&:fullscreen]:rounded-none [&:fullscreen]:border-0 [&:fullscreen]:min-h-screen [&:fullscreen]:w-screen"
       >
         <RpgPopup popup={popup} />
+        {hud.phase === PHASE.READY && fortuneUi?.mode ? (
+          <div className="absolute inset-0 z-[25] flex items-center justify-center bg-black/45 px-4 pointer-events-auto">
+            <div className="w-full max-w-md">
+              <GameUiPanel
+                title={
+                  fortuneUi.mode === 'choice'
+                    ? 'Before you kick…'
+                    : fortuneUi.mode === 'rolling'
+                      ? 'Rolling…'
+                      : fortuneUi.snakeEyes
+                        ? 'Snake eyes!'
+                        : 'Fortune result'
+                }
+                header="yellow"
+                dark
+              >
+                {fortuneUi.mode === 'choice' ? (
+                  <div className="space-y-3 text-center">
+                    <p className="text-xs text-slate-300 leading-relaxed">
+                      Kick normally, or risk the Dice of Fortune — snake eyes (1+1) = ×3 launch power;
+                      anything else = −25% power.
+                    </p>
+                    <div className="grid sm:grid-cols-2 gap-3 pt-1">
+                      <GameUiButton
+                        variant="accent"
+                        muted={sfxMuted}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          chooseKick();
+                        }}
+                        className="!flex-col !h-auto !py-3"
+                      >
+                        Kick
+                        <span className="block text-[10px] font-normal opacity-80 mt-1 normal-case tracking-normal">
+                          Normal power · Space / tap
+                        </span>
+                      </GameUiButton>
+                      <GameUiButton
+                        variant="danger"
+                        muted={sfxMuted}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          chooseFortune();
+                        }}
+                        className="!flex-col !h-auto !py-3"
+                      >
+                        Dice of Fortune
+                        <span className="block text-[10px] font-normal opacity-80 mt-1 normal-case tracking-normal">
+                          Snake eyes ×3 · else −25%
+                        </span>
+                      </GameUiButton>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-2 text-center">
+                    <div className="flex items-center justify-center gap-4 py-2">
+                      <FortuneDieFace value={fortuneUi.d1} />
+                      <FortuneDieFace value={fortuneUi.d2} />
+                    </div>
+                    {fortuneUi.mode === 'result' ? (
+                      <p className={`gui-font-narrow text-sm font-semibold ${fortuneUi.snakeEyes ? 'text-amber-200' : 'text-rose-200'}`}>
+                        {fortuneUi.snakeEyes ? '×3 launch power' : '−25% launch power'}
+                      </p>
+                    ) : (
+                      <p className="text-xs text-slate-400">Lady luck is deciding…</p>
+                    )}
+                  </div>
+                )}
+              </GameUiPanel>
+            </div>
+          </div>
+        ) : null}
         {haHaFlash ? (
           <div className="absolute inset-0 z-30 flex items-center justify-center pointer-events-none bg-black/35">
             <img
@@ -4130,9 +4794,22 @@ function ToolboxKickGame({
           type="button"
           onClick={(e) => {
             e.stopPropagation();
+            gfxRef.current?.unlock();
+            setSfxMuted((m) => !m);
+          }}
+          className="gui-btn gui-btn--sm gui-btn--grey absolute top-[5.6rem] right-2 z-20"
+          aria-pressed={sfxMuted}
+          title={sfxMuted ? 'Unmute sound' : 'Mute sound'}
+        >
+          {sfxMuted ? 'SFX off' : 'SFX on'}
+        </button>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
             toggleFullscreen();
           }}
-          className="absolute top-2 right-2 z-20 px-2.5 py-1.5 rounded-md text-xs font-medium border border-slate-500/40 bg-[#0b1220]/85 text-slate-200 hover:bg-white/10 backdrop-blur-sm"
+          className="gui-btn gui-btn--sm gui-btn--grey absolute top-[7.85rem] right-2 z-20"
           aria-pressed={fullscreen}
         >
           {fullscreen ? 'Exit fullscreen' : 'Fullscreen'}
@@ -4141,10 +4818,10 @@ function ToolboxKickGame({
           ref={canvasRef}
           width={W}
           height={H}
-          className={`block w-full max-w-full touch-none cursor-pointer${
-            fullscreen ? ' max-h-screen w-auto max-w-[min(100vw,calc(100vh*960/420))]' : ''
+          className={`block w-full h-auto touch-none cursor-pointer${
+            fullscreen ? ' max-h-screen w-auto max-w-[min(100vw,calc(100vh*960/420))] mx-auto' : ''
           }`}
-          style={{ imageRendering: 'auto' }}
+          style={{ imageRendering: 'auto', aspectRatio: `${W} / ${H}` }}
           tabIndex={0}
           role="img"
           aria-label="Little Dicks Toolbox game canvas"
@@ -4153,44 +4830,75 @@ function ToolboxKickGame({
             doSpace();
           }}
         />
+        {gfxReady ? (
+          <p className="absolute bottom-1 left-2 z-10 text-[9px] text-slate-500/80 pointer-events-none">
+            Art &amp; SFX · Kenney.nl (CC0)
+          </p>
+        ) : null}
       </div>
 
-      <div className="flex flex-wrap gap-2">
-        <button
-          type="button"
+      <div className="flex flex-wrap gap-2 px-3 sm:px-4 items-center">
+        <GameUiButton
+          variant="accent"
+          muted={sfxMuted}
           onClick={doSpace}
           disabled={competitive && roundDone}
-          className="px-3 py-2 rounded-lg text-sm border border-orange-500/40 text-orange-100 hover:bg-orange-500/10 disabled:opacity-40 disabled:pointer-events-none"
         >
-          Space / tap action
-        </button>
+          Space / tap {hud.phase === PHASE.READY ? '· Kick' : 'action'}
+        </GameUiButton>
         {(rageAvailable || rageArmed) && !roundDone ? (
-          <button
-            type="button"
+          <GameUiButton
+            variant="danger"
+            muted={sfxMuted}
+            pressed={rageArmed}
             onClick={armSuperRage}
             disabled={rageBusy || rageArmed || (competitive && !rageAvailable && !rageArmed)}
-            className={`px-3 py-2 rounded-lg text-sm font-semibold border disabled:opacity-50 ${
-              rageArmed
-                ? 'border-rose-400/60 bg-rose-500/25 text-rose-100'
-                : 'border-rose-500/45 text-rose-100 hover:bg-rose-500/15'
-            }`}
           >
             {rageBusy
               ? 'Chugging…'
               : rageArmed
                 ? 'Energy drink active · next kick'
                 : 'Drink energy drink (+80%)'}
-          </button>
+          </GameUiButton>
+        ) : null}
+        {!roundDone ? (
+          <GameUiButton
+            variant="primary"
+            muted={sfxMuted}
+            pressed={doubleSpeedArmed}
+            onClick={armDoubleSpeed}
+            disabled={
+              doubleSpeedBusy
+              || doubleSpeedArmed
+              || (
+                typeof onBuyDoubleSpeed === 'function'
+                && Number.isFinite(coinsBalance)
+                && coinsBalance < DOUBLE_SPEED_COST
+              )
+            }
+            title={
+              Number.isFinite(coinsBalance)
+                ? `${coinsBalance} coins available`
+                : `${DOUBLE_SPEED_COST} coins`
+            }
+          >
+            {doubleSpeedBusy
+              ? 'Buying…'
+              : doubleSpeedArmed
+                ? 'Double speed active · next kick'
+                : `Double speed ×2 · ${DOUBLE_SPEED_COST} coins`}
+          </GameUiButton>
         ) : null}
         {!competitive ? (
           <>
-            <button
-              type="button"
+            <GameUiButton
+              variant="neutral"
+              line
+              muted={sfxMuted}
               onClick={() => initShot({ keepBest: true, attempt: 1, freshRound: true })}
-              className="px-3 py-2 rounded-lg text-sm border border-[#1a2540] text-slate-300 hover:bg-white/[0.04]"
             >
               New round
-            </button>
+            </GameUiButton>
             {devCheats ? (
               <p className="w-full text-xs text-slate-500">
                 Dev keys: Y perfect/smoker boost · U nudge · M Julies Car · C Chelle · L Little Dick
@@ -4199,19 +4907,32 @@ function ToolboxKickGame({
           </>
         ) : null}
         {!competitive && typeof onChangeMode === 'function' ? (
-          <button
-            type="button"
-            onClick={onChangeMode}
-            className="px-3 py-2 rounded-lg text-sm border border-sky-500/35 text-sky-100 hover:bg-sky-500/10"
-          >
+          <GameUiButton variant="primary" line muted={sfxMuted} onClick={onChangeMode}>
             Change mode
-          </button>
+          </GameUiButton>
+        ) : null}
+        {Number.isFinite(coinsBalance) ? (
+          <GameUiBadge className="ml-auto">
+            {coinsBalance} coins
+          </GameUiBadge>
         ) : null}
       </div>
-      {rageError ? <p className="text-xs text-rose-300">{rageError}</p> : null}
+      {rageError ? <p className="text-xs text-rose-300 px-3 sm:px-4">{rageError}</p> : null}
+      {doubleSpeedError ? <p className="text-xs text-rose-300 px-3 sm:px-4">{doubleSpeedError}</p> : null}
       {rageArmed ? (
-        <p className="text-xs text-rose-200/90">
+        <p className="text-xs text-rose-200/90 px-3 sm:px-4">
           Energy drink active — next kick gets +80% speed. One drink per week; everyone refills Monday.
+        </p>
+      ) : null}
+      {doubleSpeedArmed ? (
+        <p className="text-xs text-cyan-200/90 px-3 sm:px-4">
+          Double speed active — next kick launches at ×2 speed
+          {typeof onBuyDoubleSpeed === 'function' ? ` (${DOUBLE_SPEED_COST} coins spent)` : ' (practice)'}.
+          {Number.isFinite(coinsBalance) ? ` Balance: ${coinsBalance}.` : ''}
+        </p>
+      ) : Number.isFinite(coinsBalance) && !roundDone ? (
+        <p className="text-xs text-slate-500 px-3 sm:px-4">
+          Coin balance: {coinsBalance}. Spend {DOUBLE_SPEED_COST} for a ×2 launch on your next kick.
         </p>
       ) : null}
     </div>
@@ -4226,55 +4947,58 @@ function IntroBubble({ open, onClose }) {
       <div
         role="dialog"
         aria-labelledby="toolbox-kick-intro-title"
-        className="w-full max-w-md rounded-2xl border border-orange-500/35 bg-[#0b1220] shadow-xl overflow-hidden"
+        className="w-full max-w-md"
       >
-        <div className="px-5 pt-5 pb-4 space-y-3">
-          <p className="text-xs font-semibold uppercase tracking-wider text-orange-300/80">Little Dicks Toolbox</p>
-          <h2 id="toolbox-kick-intro-title" className="text-lg font-semibold text-slate-100">
-            Little Dick is mad
-          </h2>
-          <img
-            src="/toolbox-kick/little-dick.png"
-            alt="Little Dick in an orange boilersuit, furious, holding a wrench"
-            className="w-full rounded-xl border border-[#1a2540] object-cover object-top max-h-64"
-          />
-          <div className="relative rounded-xl border border-[#1a2540] bg-[#060e1a] px-4 py-3">
-            <div
-              className="absolute -bottom-2 left-8 w-3 h-3 bg-[#060e1a] border-r border-b border-[#1a2540] rotate-45"
-              aria-hidden
+        <GameUiPanel
+          title="Little Dicks Toolbox"
+          header="yellow"
+          dark
+          onClose={() => {
+            if (dontShowAgain) markIntroSeen();
+            onClose();
+          }}
+        >
+          <div className="space-y-3">
+            <h2 id="toolbox-kick-intro-title" className="gui-font text-lg text-amber-100">
+              Little Dick is mad
+            </h2>
+            <img
+              src="/toolbox-kick/little-dick.png"
+              alt="Little Dick in an orange boilersuit, furious, holding a wrench"
+              className="w-full rounded-xl border border-slate-600 object-cover object-top max-h-64"
             />
-            <p className="text-sm text-slate-300 leading-relaxed">
-              Little Dick is mad. Drivers keep defecting buses, he can&apos;t get the part to fit,
-              and he&apos;s just dropped his 10mm right in the engine bay. He&apos;s about to kick
-              his toolbox — see how far it can go!
-            </p>
-            <p className="text-sm text-rose-200/90 leading-relaxed mt-2">
-              Once a week he can chug an energy drink for Super Rage (+80% speed on one kick).
-              Everyone&apos;s fridge refills on Monday.
-            </p>
+            <div className="gui-card gui-card--dark px-4 py-3 space-y-2">
+              <p className="text-sm text-slate-200 leading-relaxed">
+                Little Dick is mad. Drivers keep defecting buses, he can&apos;t get the part to fit,
+                and he&apos;s just dropped his 10mm right in the engine bay. He&apos;s about to kick
+                his toolbox — see how far it can go!
+              </p>
+              <p className="text-sm text-rose-200/90 leading-relaxed">
+                Once a week he can chug an energy drink for Super Rage (+80% speed on one kick).
+                Everyone&apos;s fridge refills on Monday.
+              </p>
+            </div>
+            <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={dontShowAgain}
+                onChange={(e) => setDontShowAgain(e.target.checked)}
+                className="rounded border-slate-600"
+              />
+              Don&apos;t show again
+            </label>
+            <GameUiButton
+              variant="accent"
+              block
+              onClick={() => {
+                if (dontShowAgain) markIntroSeen();
+                onClose();
+              }}
+            >
+              Let&apos;s kick
+            </GameUiButton>
           </div>
-          <label className="flex items-center gap-2 text-xs text-slate-400 cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={dontShowAgain}
-              onChange={(e) => setDontShowAgain(e.target.checked)}
-              className="rounded border-slate-600"
-            />
-            Don&apos;t show again
-          </label>
-        </div>
-        <div className="px-5 pb-5 flex justify-end">
-          <button
-            type="button"
-            onClick={() => {
-              if (dontShowAgain) markIntroSeen();
-              onClose();
-            }}
-            className="px-4 py-2 rounded-lg text-sm bg-orange-600 hover:bg-orange-500 text-white font-medium"
-          >
-            Let&apos;s kick
-          </button>
-        </div>
+        </GameUiPanel>
       </div>
     </div>
   );
@@ -4282,8 +5006,8 @@ function IntroBubble({ open, onClose }) {
 
 function ModeSelect({ onPick, competitive = false, busy = false }) {
   return (
-    <div className="rounded-xl border border-[#1a2540] p-5 space-y-4">
-      <p className="text-sm text-slate-300">
+    <GameUiPanel title="Pick your kick" header="blue" dark>
+      <p className="text-sm text-slate-200 mb-3">
         How do you want to boot Dick&apos;s toolbox?
         {competitive
           ? ' One competitive round per day — pick a mode, then your best distance hits today’s leaderboard. One energy drink per week (refills Monday).'
@@ -4294,10 +5018,10 @@ function ModeSelect({ onPick, competitive = false, busy = false }) {
           type="button"
           disabled={busy}
           onClick={() => onPick('allOrNothing')}
-          className="text-left rounded-xl border border-rose-500/40 bg-rose-500/10 hover:bg-rose-500/15 px-4 py-4 space-y-1 transition-colors disabled:opacity-50"
+          className="gui-card gui-card--dark text-left px-4 py-4 space-y-1 disabled:opacity-50 border-rose-400/50"
         >
-          <p className="text-base font-semibold text-rose-100">All or nothing</p>
-          <p className="text-xs text-slate-400 leading-relaxed">
+          <p className="gui-font-narrow text-base font-semibold text-rose-100">All or nothing</p>
+          <p className="text-xs text-slate-300 leading-relaxed">
             One chance only. Slower power and angle bars — be careful.
           </p>
         </button>
@@ -4305,16 +5029,16 @@ function ModeSelect({ onPick, competitive = false, busy = false }) {
           type="button"
           disabled={busy}
           onClick={() => onPick('careful')}
-          className="text-left rounded-xl border border-sky-500/40 bg-sky-500/10 hover:bg-sky-500/15 px-4 py-4 space-y-1 transition-colors disabled:opacity-50"
+          className="gui-card gui-card--dark text-left px-4 py-4 space-y-1 disabled:opacity-50 border-sky-400/50"
         >
-          <p className="text-base font-semibold text-sky-100">3 goes</p>
-          <p className="text-xs text-slate-400 leading-relaxed">
+          <p className="gui-font-narrow text-base font-semibold text-sky-100">3 goes</p>
+          <p className="text-xs text-slate-300 leading-relaxed">
             Three attempts. Normal-speed bars. Best of three counts.
           </p>
         </button>
       </div>
-      {busy ? <p className="text-xs text-slate-500">Locking today’s round…</p> : null}
-    </div>
+      {busy ? <p className="gui-font-narrow text-xs text-slate-400 mt-3 uppercase">Locking today’s round…</p> : null}
+    </GameUiPanel>
   );
 }
 
@@ -4329,7 +5053,7 @@ export function ToolboxKickSandbox() {
     : { available: false, usedThisWeek: true, refillDayKey: '2026-09-14', boostPct: 80 };
 
   const sandboxMarkers = useCallback(() => {
-    const pr = Math.max(0, Math.floor(Number(localStorage.getItem('toolbox-kick-best') || 0)));
+    const pr = readToolboxBest();
     const today = Math.max(pr, Math.floor(pr * 1.08) || 2500);
     const allTime = Math.max(today + 1800, 12000);
     return buildRecordMarkers({
@@ -4475,6 +5199,7 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
   const [allTimeRecord, setAllTimeRecord] = useState(null);
   const [allTimeTop10, setAllTimeTop10] = useState([]);
   const [superRage, setSuperRage] = useState(null);
+  const [walletBalance, setWalletBalance] = useState(null);
   const [mode, setMode] = useState(null);
   const [introOpen, setIntroOpen] = useState(() => !hasSeenIntro());
   const practice = dayKey !== todayKey;
@@ -4493,6 +5218,7 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
       setAllTimeRecord(null);
       setAllTimeTop10([]);
       setSuperRage(null);
+      setWalletBalance(null);
       setMode(null);
       roundLockedRef.current = false;
       setError(payload.message || 'Little Dicks Toolbox isn’t in today’s Fun rotation.');
@@ -4504,6 +5230,9 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
     setAllTimeRecord(payload.allTimeRecord || null);
     setAllTimeTop10(Array.isArray(payload.allTimeTop10) ? payload.allTimeTop10 : []);
     setSuperRage(payload.superRage || null);
+    if (Number.isFinite(Number(payload.walletBalance))) {
+      setWalletBalance(Math.max(0, Math.floor(Number(payload.walletBalance))));
+    }
     if (payload.game?.status === 'won' && payload.game?.roundComplete !== false) {
       setMode(payload.game.mode || 'careful');
       roundLockedRef.current = false;
@@ -4738,6 +5467,30 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
     if (payload.superRage) setSuperRage(payload.superRage);
   }, [practice]);
 
+  const buyDoubleSpeed = useCallback(async () => {
+    if (practice) return { walletBalance };
+    const purchaseId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    const response = await fetch('/api/buyToolboxKickDoubleSpeed', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ purchaseId }),
+    });
+    const payload = (await readJsonResponse(response)) || {};
+    if (!response.ok) {
+      if (Number.isFinite(Number(payload.walletBalance))) {
+        setWalletBalance(Math.max(0, Math.floor(Number(payload.walletBalance))));
+      }
+      throw new Error(payload.error || 'Could not buy double speed.');
+    }
+    if (Number.isFinite(Number(payload.walletBalance))) {
+      setWalletBalance(Math.max(0, Math.floor(Number(payload.walletBalance))));
+    }
+    return payload;
+  }, [practice, walletBalance]);
+
   const claimFlightCoin = useCallback(async ({ slot, amount, dayKey: coinDay }) => {
     if (practice) return;
     try {
@@ -4756,10 +5509,13 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
     }
   }, [practice, dayKey]);
 
+  if (loading) return <p className="text-sm text-slate-400">Loading Little Dicks Toolbox…</p>;
+  if (error && !game) return <p className="text-sm text-rose-300">{error}</p>;
+
   const v2Markers = (() => {
     const pr = Math.max(
       0,
-      Math.floor(Number(localStorage.getItem('toolbox-kick-best') || 0)),
+      readToolboxBest(),
       Math.floor(Number(game?.distanceM) || 0),
     );
     const todayBest = leaderboard[0];
@@ -4773,9 +5529,6 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
     });
   })();
 
-  if (loading) return <p className="text-sm text-slate-400">Loading Little Dicks Toolbox…</p>;
-  if (error && !game) return <p className="text-sm text-rose-300">{error}</p>;
-
   const alreadyDone = game?.status === 'won' && game?.roundComplete !== false;
   const forfeited = Boolean(game?.forfeited);
   const punished = Boolean(game?.punished);
@@ -4786,7 +5539,8 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
   const rageReady = practice || Boolean(superRage?.available);
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-3 w-full max-w-none">
+      <div className="space-y-3 px-3 sm:px-4">
       <FunDayPicker
         dayKey={dayKey}
         todayKey={todayKey}
@@ -4796,62 +5550,57 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
       />
 
       {practice ? (
-        <p className="text-xs text-amber-200/90 border border-amber-500/30 bg-amber-500/10 rounded-md px-3 py-2">
-          Practice day — scores won’t count on the leaderboard.
-        </p>
+        <GameUiPanel title="Practice day" header="yellow" dark bodyClassName="!py-2">
+          <p className="gui-font-narrow text-xs text-amber-100/90">
+            Scores won&apos;t count on the leaderboard.
+          </p>
+        </GameUiPanel>
       ) : (
-        <p className="text-sm text-slate-400">
+        <p className="gui-font-narrow text-sm text-slate-400">
           One competitive round per London day. Furthest distance wins. Leaderboard resets each weekday.
         </p>
       )}
 
       <EnergyDrinkBanner practice={practice} superRage={superRage} alreadyDone={alreadyDone} />
 
-      {error ? <p className="text-sm text-rose-300">{error}</p> : null}
+      {error ? <p className="gui-font-narrow text-sm text-rose-300">{error}</p> : null}
 
       <IntroBubble open={introOpen} onClose={() => setIntroOpen(false)} />
 
       {!alreadyDone && punished ? (
-        <div className="rounded-xl border border-rose-500/40 bg-rose-500/10 px-4 py-3 space-y-1">
-          <p className="text-sm text-rose-100 font-medium">Punishment active</p>
-          <p className="text-xs text-slate-400">
+        <GameUiPanel title="Punishment active" header="red" dark bodyClassName="!py-2">
+          <p className="gui-font-narrow text-xs text-slate-300">
             10% toolbox power. Coaches on kick. HA-HA on landing, then Little Dick boots it Mach 2
-            backwards. Each attempt is logged to today’s board as you go.
+            backwards. Each attempt is logged to today&apos;s board as you go.
           </p>
-        </div>
+        </GameUiPanel>
       ) : null}
 
       {!alreadyDone && runCount > 1 && !punished ? (
-        <div className="rounded-xl border border-slate-500/40 bg-slate-500/10 px-4 py-3 space-y-1">
-          <p className="text-sm text-slate-200 font-medium">
-            Run {runCount} today
-          </p>
-          <p className="text-xs text-slate-400">
+        <GameUiPanel title={`Run ${runCount} today`} header="grey" dark bodyClassName="!py-2">
+          <p className="gui-font-narrow text-xs text-slate-300">
             Reload/restart detected earlier. Your best distance still counts — no speed penalty.
           </p>
-        </div>
+        </GameUiPanel>
       ) : null}
 
       {alreadyDone && forfeited ? (
-        <div className="rounded-xl border border-rose-500/40 bg-rose-500/10 px-4 py-3 space-y-1">
-          <p className="text-sm text-rose-100 font-medium">
-            Forfeit · quit/reload · 0 m
+        <GameUiPanel title="Forfeit · quit/reload · 0 m" header="red" dark bodyClassName="!py-2">
+          <p className="gui-font-narrow text-xs text-slate-300">
+            Today&apos;s go was forfeited.
           </p>
-          <p className="text-xs text-slate-400">
-            Today’s go was forfeited.
-          </p>
-        </div>
+        </GameUiPanel>
       ) : null}
 
       {alreadyDone && !forfeited ? (
-        <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 space-y-1">
-          <p className="text-sm text-emerald-100 font-medium">
-            Today’s kick logged · {formatDistance(game.distanceM)}
+        <GameUiPanel title="Today's kick logged" header="green" dark bodyClassName="!py-2">
+          <p className="gui-font-narrow text-sm text-emerald-100 font-medium">
+            {formatDistance(game.distanceM)}
             {punished ? ' · punished (10% speed)' : ''}
             {investigate ? ' · investigate (4+ runs)' : ''}
             {submitting ? ' · Saving…' : ''}
           </p>
-          <p className="text-xs text-slate-400">
+          <p className="gui-font-narrow text-xs text-slate-400 mt-1">
             Mode: {modeLabel}
             {game.energyDrinkUsed ? ' · energy drink' : ''}
             {runCount > 1 ? ` · ${runCount} runs` : ''}
@@ -4859,14 +5608,16 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
               ? ` · attempts ${game.attempts.map((n) => formatDistance(n)).join(', ')}`
               : ''}
           </p>
-        </div>
+        </GameUiPanel>
       ) : null}
 
       {!alreadyDone && !mode ? (
         <ModeSelect competitive={!practice} onPick={startRound} busy={starting} />
       ) : null}
+      </div>
 
       {!alreadyDone && mode ? (
+        <div className="w-full">
         <ToolboxKickGame
           key={`${dayKey}-${mode}-${speedNerfed ? 'nerf' : 'clean'}-${punished ? 'pun' : 'free'}-${runCount}`}
           mode={mode}
@@ -4874,6 +5625,9 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
           onRoundComplete={practice ? null : submitRound}
           superRageAvailable={rageReady}
           onActivateSuperRage={practice ? null : activateSuperRage}
+          walletBalance={walletBalance}
+          onBuyDoubleSpeed={practice ? null : buyDoubleSpeed}
+          onWalletBalance={setWalletBalance}
           caughtCheating={false}
           punished={punished}
           forceV2
@@ -4881,31 +5635,25 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
           recordMarkers={v2Markers}
           onFlightCoin={practice ? null : claimFlightCoin}
         />
+        </div>
       ) : null}
 
+      <div className="toolbox-gui space-y-3 px-3 sm:px-4">
       {!practice && allTimeRecord ? (
-        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3">
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-amber-200/90">
-            All-time record
-          </p>
-          <p className="text-sm text-amber-50 mt-1">
+        <GameUiPanel title="All-time record" header="yellow" dark bodyClassName="!py-2">
+          <p className="gui-font-narrow text-sm text-amber-50">
             <span className="font-semibold">{allTimeRecord.resultLabel || formatDistance(allTimeRecord.distanceM)}</span>
             {' · '}
             {allTimeRecord.fullName}
             {allTimeRecord.uid === currentUserUid ? ' (you)' : ''}
             {allTimeRecord.dayKey ? ` · ${allTimeRecord.dayKey}` : ''}
           </p>
-        </div>
+        </GameUiPanel>
       ) : null}
 
       {!practice && alreadyDone && allTimeTop10.length ? (
-        <div className="rounded-xl border border-[#1a2540] overflow-hidden">
-          <div className="px-4 py-3 border-b border-[#1a2540]">
-            <h4 className="text-sm font-semibold text-amber-200">
-              Wall of fame · top 10 all-time kicks
-            </h4>
-          </div>
-          <ol className="divide-y divide-[#1a2540] px-4 py-2">
+        <GameUiPanel title="Wall of fame · top 10" header="yellow" dark flush>
+          <ol className="toolbox-gui__board divide-y divide-slate-700/80 px-4 py-2">
             {allTimeTop10.map((row) => (
               <FunLeaderboardRow
                 key={`${row.uid}-${row.dayKey}-${row.rank}`}
@@ -4919,22 +5667,22 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
                 metaText={[
                   row.dayKey || null,
                   row.mode === 'allOrNothing' ? 'All or nothing' : '3 goes',
-                  row.energyDrinkUsed ? '⚡ energy drink' : null,
+                  row.energyDrinkUsed ? 'energy drink' : null,
                 ].filter(Boolean).join(' · ')}
               />
             ))}
           </ol>
-        </div>
+        </GameUiPanel>
       ) : null}
 
       {!practice && leaderboard.length ? (
-        <div className="rounded-xl border border-[#1a2540] overflow-hidden">
-          <div className="px-4 py-3 border-b border-[#1a2540]">
-            <h4 className="text-sm font-semibold text-indigo-200">
-              Today’s leaderboard · furthest distance · {leaderboard.length} player{leaderboard.length === 1 ? '' : 's'}
-            </h4>
-          </div>
-          <ol className="divide-y divide-[#1a2540] px-4 py-2 space-y-0">
+        <GameUiPanel
+          title={`Today's board · ${leaderboard.length} player${leaderboard.length === 1 ? '' : 's'}`}
+          header="blue"
+          dark
+          flush
+        >
+          <ol className="toolbox-gui__board divide-y divide-slate-700/80 px-4 py-2 space-y-0">
             {leaderboard.map((row) => (
               <FunLeaderboardRow
                 key={row.uid || row.rank}
@@ -4946,15 +5694,16 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
                   row.investigate ? `investigate · ${row.runCount || 0} runs` : null,
                   row.punished ? 'punished' : null,
                   row.mode === 'allOrNothing' ? 'All or nothing' : '3 goes',
-                  row.energyDrinkUsed ? '⚡ energy drink' : null,
+                  row.energyDrinkUsed ? 'energy drink' : null,
                 ].filter(Boolean).join(' · ')}
               />
             ))}
           </ol>
-        </div>
+        </GameUiPanel>
       ) : !practice && alreadyDone ? (
-        <p className="text-sm text-slate-500 text-center py-4">You’re on the board — waiting for more kicks.</p>
+        <p className="gui-font-narrow text-sm text-slate-500 text-center py-4">You&apos;re on the board — waiting for more kicks.</p>
       ) : null}
+      </div>
     </div>
   );
 }

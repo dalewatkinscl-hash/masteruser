@@ -3,6 +3,8 @@ import { useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import EmployeeProfileCard from '../components/EmployeeProfileCard';
 import EmployeeFunPanel from '../components/EmployeeFunPanel';
+import CoachDepotPanel from '../components/CoachDepotPanel';
+import CoachCapitalistPanel from '../components/CoachCapitalistPanel';
 import FunErrorBoundary from '../components/FunErrorBoundary';
 import SuggestionBoxPanel from '../components/SuggestionBoxPanel';
 import KudosPanel from '../components/KudosPanel';
@@ -67,6 +69,7 @@ const PORTAL_META = {
   training_app: { labelKey: 'portal.training', href: 'https://training.countrylion.co.uk' },
   holidays_app: { labelKey: 'portal.holidays', href: 'https://holidays.countrylion.co.uk' },
   events_app: { labelKey: 'portal.events', href: 'https://events.countrylion.co.uk' },
+  vehicles_app: { labelKey: 'portal.vehicles', href: 'https://vehicles.countrylion.co.uk' },
   cases_app: { labelKey: 'portal.peopleCases', href: null },
   master_admin: { labelKey: 'portal.admin', href: null },
 };
@@ -142,20 +145,30 @@ export default function Profile() {
       <WorkspaceTabs activeProfileTab={activeTab} onProfileTabChange={setActiveTab} />
 
       {activeTab === 'fun' ? (
-        <div className="px-4 sm:px-8 py-6">
-          <div className="flex flex-col xl:flex-row gap-6 items-start">
-            <div className="min-w-0 flex-1 w-full">
-              <FunErrorBoundary>
-                <EmployeeFunPanel currentUserUid={user?.uid} isAdmin={canManagePortalAccess(user)} />
-              </FunErrorBoundary>
-            </div>
-            <aside className="w-full xl:w-[22rem] xl:sticky xl:top-4 flex-shrink-0">
-              <div className="rounded-xl border border-base-300 bg-base-100/40 p-4">
-                <p className="text-[10px] font-mono uppercase tracking-[0.18em] text-primary mb-3">{t('profile.polls')}</p>
-                <PollsPanel compact />
-              </div>
-            </aside>
+        <div className="py-4 sm:py-6 space-y-6 w-full max-w-none">
+          <div className="min-w-0 w-full px-1 sm:px-2">
+            <FunErrorBoundary>
+              <EmployeeFunPanel currentUserUid={user?.uid} isAdmin={canManagePortalAccess(user)} />
+            </FunErrorBoundary>
           </div>
+          <aside className="w-full max-w-xl px-4 sm:px-8">
+            <div className="rounded-xl border border-base-300 bg-base-100/40 p-4">
+              <p className="text-[10px] font-mono uppercase tracking-[0.18em] text-primary mb-3">{t('profile.polls')}</p>
+              <PollsPanel compact />
+            </div>
+          </aside>
+        </div>
+      ) : activeTab === 'coachdepot' ? (
+        <div className="py-4 sm:py-6 w-full max-w-none px-1 sm:px-2">
+          <FunErrorBoundary>
+            <CoachDepotPanel currentUserUid={user?.uid} />
+          </FunErrorBoundary>
+        </div>
+      ) : activeTab === 'coachcapitalist' ? (
+        <div className="py-4 sm:py-6 w-full max-w-5xl mx-auto px-1 sm:px-2">
+          <FunErrorBoundary>
+            <CoachCapitalistPanel isAdmin={canManagePortalAccess(user)} />
+          </FunErrorBoundary>
         </div>
       ) : activeTab === 'cases' ? (
         <div className="px-4 sm:px-8 py-6">
@@ -183,6 +196,7 @@ export default function Profile() {
         <div className="w-full pt-6 px-4 sm:px-8 pb-8">
           <div className="max-w-7xl mx-auto grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_320px] gap-6 items-start">
             <div className="space-y-6 min-w-0">
+              <h1 className="sr-only">{t('profile.heading')}</h1>
               {user?.uid && (
                 <EmployeeProfileCard uid={user.uid} />
               )}

@@ -13,6 +13,7 @@ export default function HrPortalNav() {
   const canDirectory = canAccessHrDirectory(user);
   const canCases = canAccessHrCases(user);
   const canBonus = canAccessBonusAdmin(user);
+  const isAdmin = user?.portalsAccess?.master_admin === 'admin';
 
   const items = [
     canDirectory && {
@@ -63,6 +64,12 @@ export default function HrPortalNav() {
       label: 'Bonus payments',
       to: '/dashboard/hr/bonus-payments',
       active: pathname.includes('/bonus-payments'),
+    },
+    isAdmin && {
+      id: 'case-notifications',
+      label: 'Case notifications',
+      to: '/dashboard/hr/case-notifications',
+      active: pathname.includes('/case-notifications'),
     },
   ].filter(Boolean);
 

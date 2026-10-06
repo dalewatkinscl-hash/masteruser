@@ -1,4 +1,5 @@
 @import './styles/tokens.css';
+@import './styles/gameUi.css';
 
 @tailwind base;
 @tailwind components;
@@ -42,6 +43,22 @@
 
   .cl-btn-primary {
     @apply btn btn-primary;
+  }
+
+  .cl-btn-accent-solid {
+    @apply inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg text-sm font-semibold;
+    background: var(--cl-accent);
+    color: oklch(var(--pc, 100% 0 0));
+  }
+
+  .cl-btn-accent-solid:hover {
+    background: var(--cl-accent-bright);
+  }
+
+  .cl-avatar-initials {
+    @apply w-10 h-10 rounded-lg flex items-center justify-center text-sm font-semibold flex-shrink-0;
+    background: var(--cl-accent);
+    color: oklch(var(--pc, 100% 0 0));
   }
 
   .cl-input {

@@ -60,7 +60,7 @@ export default function CaseProgressRail({
                 type="button"
                 disabled={!reachable}
                 onClick={() => reachable && onViewStageChange?.(stage)}
-                className={`flex items-center gap-2 rounded-lg px-1 py-0.5 transition ${
+                className={`flex items-center gap-2 rounded-lg px-2 py-2 min-h-11 transition ${
                   viewing ? 'ring-1 ring-indigo-400/60 bg-indigo-500/10' : reachable ? 'hover:bg-[#060e1a]' : 'opacity-50 cursor-not-allowed'
                 }`}
               >

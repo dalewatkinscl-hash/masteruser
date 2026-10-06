@@ -197,35 +197,44 @@ export default function EmployeeSelect({
 }
 
 /**
- * Multi-select for managers present at interviews / investigation meetings.
+ * Multi-select for people (employees or managers).
  * value: string[] of uids. onChange(nextUids).
  */
-export function ManagerMultiSelect({
+export function EmployeeMultiSelect({
   value = [],
   onChange,
   employees = [],
   loading = false,
   excludeUids = [],
   disabled = false,
-  minManagers = 0,
-  emptyHint = 'Add managers who were present at this meeting',
+  mode = 'employees',
+  minSelected = 0,
+  emptyHint = 'Add people',
+  searchPlaceholder = 'Type a name to search…',
+  noneMatchLabel = 'No people match',
 }) {
   const [search, setSearch] = useState('');
   const [menuOpen, setMenuOpen] = useState(false);
 
   const selectedUids = Array.isArray(value) ? value.filter(Boolean) : [];
-  const exclude = new Set([...(excludeUids || []), ...selectedUids]);
+  const exclude = new Set([...(excludeUids || []), ...selectedUids].map(String));
 
   const selectedPeople = selectedUids
-    .map((uid) => employees.find((employee) => employee.uid === uid) || { uid, fullName: uid })
+    .map((uid) => {
+      const match = employees.find((employee) => personId(employee) === String(uid));
+      return match || { uid, fullName: uid };
+    })
     .filter(Boolean);
 
   const suggestions = useMemo(() => {
     const query = search.trim().toLowerCase();
     if (!query) return [];
 
-    let list = employees.filter((employee) => employee.isActive !== false && isCasesManagerCandidate(employee));
-    list = list.filter((employee) => !exclude.has(employee.uid));
+    let list = employees.filter((employee) => employee.isActive !== false);
+    if (mode === 'managers') {
+      list = list.filter(isCasesManagerCandidate);
+    }
+    list = list.filter((employee) => !exclude.has(personId(employee)));
     list = list.filter((employee) => {
       const haystack = [
         employee.fullName,
@@ -239,11 +248,12 @@ export function ManagerMultiSelect({
     return list
       .sort((a, b) => (a.fullName || a.email || '').localeCompare(b.fullName || b.email || ''))
       .slice(0, 8);
-  }, [employees, exclude, search]);
+  }, [employees, exclude, mode, search]);
 
   const addUid = (uid) => {
-    if (!uid || selectedUids.includes(uid)) return;
-    onChange?.([...selectedUids, uid]);
+    const next = String(uid || '').trim();
+    if (!next || selectedUids.includes(next)) return;
+    onChange?.([...selectedUids, next]);
     setSearch('');
     setMenuOpen(false);
   };
@@ -252,29 +262,32 @@ export function ManagerMultiSelect({
     onChange?.(selectedUids.filter((item) => item !== uid));
   };
 
-  const managersShort = minManagers > 0 && selectedUids.length < minManagers;
+  const shortOfMinimum = minSelected > 0 && selectedUids.length < minSelected;
 
   return (
     <div className="space-y-2">
       {selectedPeople.length > 0 ? (
         <ul className="flex flex-wrap gap-2">
-          {selectedPeople.map((person) => (
-            <li
-              key={person.uid}
-              className="inline-flex items-center gap-2 rounded-lg border border-[#1a2540] bg-[#060e1a] px-2.5 py-1.5 text-sm text-slate-200"
-            >
-              <span>{person.fullName || person.email || person.uid}</span>
-              <button
-                type="button"
-                className="text-slate-500 hover:text-red-300"
-                disabled={disabled}
-                onClick={() => removeUid(person.uid)}
-                aria-label={`Remove ${person.fullName || person.uid}`}
+          {selectedPeople.map((person) => {
+            const uid = personId(person) || person.uid;
+            return (
+              <li
+                key={uid}
+                className="inline-flex items-center gap-2 rounded-lg border border-[#1a2540] bg-[#060e1a] px-2.5 py-1.5 text-sm text-slate-200"
               >
-                ×
-              </button>
-            </li>
-          ))}
+                <span>{person.fullName || person.email || uid}</span>
+                <button
+                  type="button"
+                  className="text-slate-500 hover:text-red-300"
+                  disabled={disabled}
+                  onClick={() => removeUid(uid)}
+                  aria-label={`Remove ${person.fullName || uid}`}
+                >
+                  ×
+                </button>
+              </li>
+            );
+          })}
         </ul>
       ) : (
         <p className="text-xs text-slate-500">{emptyHint}</p>
@@ -293,20 +306,20 @@ export function ManagerMultiSelect({
             window.setTimeout(() => setMenuOpen(false), 150);
           }}
           className={inputClass}
-          placeholder={loading ? 'Loading managers…' : 'Type a manager name to search…'}
+          placeholder={loading ? 'Loading staff…' : searchPlaceholder}
           disabled={disabled || loading}
           autoComplete="off"
         />
         {menuOpen && search.trim() && !loading && suggestions.length > 0 && (
           <ul className="absolute z-20 mt-1 max-h-48 w-full overflow-auto rounded-lg border border-[#1a2540] bg-[#0b1220] shadow-xl py-1">
             {suggestions.map((employee) => (
-              <li key={employee.uid}>
+              <li key={personId(employee) || employee.email}>
                 <button
                   type="button"
                   className="block w-full px-3 py-2 text-left text-sm text-slate-200 hover:bg-[#060e1a]"
                   onPointerDown={(event) => {
                     event.preventDefault();
-                    addUid(employee.uid);
+                    addUid(personId(employee));
                   }}
                 >
                   {labelFor(employee)}
@@ -317,16 +330,33 @@ export function ManagerMultiSelect({
         )}
         {menuOpen && search.trim() && !loading && suggestions.length === 0 && (
           <p className="absolute z-20 mt-1 w-full rounded-lg border border-[#1a2540] bg-[#0b1220] px-3 py-2 text-xs text-amber-300 shadow-xl">
-            No managers match &ldquo;{search.trim()}&rdquo;.
+            {noneMatchLabel} &ldquo;{search.trim()}&rdquo;.
           </p>
         )}
       </div>
 
-      {managersShort && (
+      {shortOfMinimum && (
         <p className="text-xs text-amber-300">
-          At least {minManagers} managers must be present ({selectedUids.length} selected).
+          Select at least {minSelected} ({selectedUids.length} selected).
         </p>
       )}
     </div>
+  );
+}
+
+/**
+ * Multi-select for managers present at interviews / investigation meetings.
+ * value: string[] of uids. onChange(nextUids).
+ */
+export function ManagerMultiSelect(props) {
+  return (
+    <EmployeeMultiSelect
+      {...props}
+      mode="managers"
+      minSelected={props.minManagers || 0}
+      emptyHint={props.emptyHint || 'Add managers who were present at this meeting'}
+      searchPlaceholder={props.loading ? 'Loading managers…' : 'Type a manager name to search…'}
+      noneMatchLabel="No managers match"
+    />
   );
 }

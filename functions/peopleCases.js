@@ -37,9 +37,8 @@ const GRIEVANCE_STAGES = [
 ];
 
 const ACCIDENT_STAGES = [
+  'recorded',
   'triage',
-  'investigation',
-  'training_decision',
   'closed',
 ];
 
@@ -67,8 +66,11 @@ function normalizeStage(processFamily, stage) {
     return GRIEVANCE_STAGES.includes(raw) ? raw : 'acknowledged';
   }
   if (processFamily === 'vehicle_accident') {
-    if (raw === 'reported' || raw === 'minutes_signoff') return raw === 'minutes_signoff' ? 'investigation' : 'triage';
-    return ACCIDENT_STAGES.includes(raw) ? raw : 'triage';
+    if (raw === 'reported') return 'recorded';
+    if (raw === 'investigation' || raw === 'training_decision' || raw === 'minutes_signoff') {
+      return 'triage';
+    }
+    return ACCIDENT_STAGES.includes(raw) ? raw : 'recorded';
   }
   if (processFamily === 'samsara_coaching') {
     return 'closed';
@@ -105,8 +107,9 @@ function mapStageForFamilyChange(fromFamily, toFamily, currentStage) {
     return 'fact_finding';
   }
   if (to === 'vehicle_accident') {
-    if (stage === 'investigation' || stage === 'fact_finding' || stage === 'open') return 'investigation';
-    return 'triage';
+    if (stage === 'closed') return 'closed';
+    if (stage === 'fact_finding' || stage === 'open' || stage === 'investigation') return 'recorded';
+    return 'recorded';
   }
   return normalizeStage(to, '');
 }
@@ -309,48 +312,51 @@ const STAGE_GUIDES = {
     },
   },
   vehicle_accident: {
-    reported: {
-      title: 'Reported',
-      howTo: ['Driver completes bump card, or manager prompts the driver to complete one.'],
-      doNext: 'Triage the report and begin investigation.',
+    recorded: {
+      title: 'Recorded',
+      howTo: [
+        'Accident has been logged against the vehicle and driver.',
+        'Await the driver’s bump card, or prompt them again from the employee profile.',
+      ],
+      doNext: 'Driver completes the bump card.',
       acasTip: 'If the matter later becomes disciplinary, follow a fair disciplinary process — do not shortcut.',
       checklist: ['bump_card_complete'],
     },
-    triage: {
-      title: 'Triage',
-      howTo: ['Record injuries, third parties, and initial notes without ranking the person.'],
-      doNext: 'Investigate with meetings and evidence.',
+    reported: {
+      title: 'Recorded',
+      howTo: ['Accident logged — awaiting bump card.'],
+      doNext: 'Driver completes the bump card.',
       acasTip: null,
+      checklist: ['bump_card_complete'],
+    },
+    triage: {
+      title: 'Triage — fault decision',
+      howTo: [
+        'Review the bump card summary.',
+        'Decide whether a third party was at fault (close) or the driver was at fault (continue as disciplinary).',
+      ],
+      doNext: 'Record fault decision.',
+      acasTip: 'Driver-at-fault converts this same case into a disciplinary at fact-finding.',
       checklist: ['triage_complete'],
     },
     investigation: {
-      title: 'Investigation',
-      howTo: ['Gather statements, photos, dashcam; hold meetings with minutes sign-off.'],
-      doNext: 'Complete minutes then training-team decision.',
+      title: 'Triage — fault decision',
+      howTo: ['Legacy stage — decide fault from the bump card.'],
+      doNext: 'Record fault decision.',
       acasTip: null,
-      checklist: [],
-    },
-    minutes_signoff: {
-      title: 'Minutes sign-off',
-      howTo: ['Issue investigation meeting minutes for sign-off or disputed path.'],
-      doNext: 'Move to training decision.',
-      acasTip: null,
-      checklist: ['minutes_signed_or_disputed'],
+      checklist: ['triage_complete'],
     },
     training_decision: {
-      title: 'Training / disciplinary decision',
-      howTo: [
-        'Training team reviews the case (no special role — use the queue).',
-        'Choose training required (outline + review), open linked disciplinary, or close with no further action.',
-      ],
-      doNext: 'Record decision and complete any training pack or linked case.',
-      acasTip: 'If initiating disciplinary action, open a linked disciplinary case and follow the full fair process.',
-      checklist: ['training_decision_made'],
+      title: 'Triage — fault decision',
+      howTo: ['Legacy stage — decide fault from the bump card.'],
+      doNext: 'Record fault decision.',
+      acasTip: null,
+      checklist: ['triage_complete'],
     },
     closed: {
       title: 'Closed',
-      howTo: ['Accident case closed. Linked disciplinary continues separately if opened.'],
-      doNext: 'Complete any scheduled reviews.',
+      howTo: ['Accident case closed (typically third party at fault / no further action).'],
+      doNext: 'No further accident steps.',
       acasTip: null,
       checklist: [],
     },
@@ -442,14 +448,41 @@ function guideFor(processFamily, stage) {
   };
 }
 
+function sanitizeUidList(value) {
+  const raw = Array.isArray(value) ? value : [];
+  const seen = new Set();
+  const uids = [];
+  for (const item of raw) {
+    const uid = toTrimmedString(item);
+    if (!uid || seen.has(uid)) continue;
+    seen.add(uid);
+    uids.push(uid);
+  }
+  return uids;
+}
+
 function sanitizeCaseCreateInput(input = {}) {
   const processFamilyRaw = toTrimmedString(input.processFamily).toLowerCase() || 'disciplinary';
   const processFamily = PROCESS_FAMILIES.has(processFamilyRaw) ? processFamilyRaw : 'disciplinary';
   const caseType = toTrimmedString(input.caseType).toLowerCase();
   const stages = stagesForFamily(processFamily);
-  const defaultStage = processFamily === 'samsara_coaching' ? 'closed' : stages[0];
+  const defaultStage = processFamily === 'samsara_coaching'
+    ? 'closed'
+    : processFamily === 'vehicle_accident'
+      ? 'recorded'
+      : stages[0];
   const initialStage = toTrimmedString(input.stage).toLowerCase() || defaultStage;
   const eventDate = toTrimmedString(input.eventDate).slice(0, 10);
+  const grievanceSubjectUids = processFamily === 'grievance'
+    ? sanitizeUidList(input.grievanceSubjectUids)
+    : [];
+  const vehicleReg = toTrimmedString(input.vehicleReg).toUpperCase();
+  const vehicleId = toTrimmedString(input.vehicleId);
+  let incidentAt = toTrimmedString(input.incidentAt);
+  if (incidentAt) {
+    const parsed = new Date(incidentAt);
+    incidentAt = Number.isNaN(parsed.getTime()) ? '' : parsed.toISOString();
+  }
   return {
     employeeUid: toTrimmedString(input.employeeUid),
     processFamily,
@@ -472,6 +505,10 @@ function sanitizeCaseCreateInput(input = {}) {
     offPortalRaiseNotes: toTrimmedString(input.offPortalRaiseNotes),
     sourceIncidentId: toTrimmedString(input.sourceIncidentId),
     eventDate: /^\d{4}-\d{2}-\d{2}$/.test(eventDate) ? eventDate : '',
+    grievanceSubjectUids,
+    incidentAt,
+    vehicleReg,
+    vehicleId,
   };
 }
 
@@ -898,6 +935,7 @@ module.exports = {
   mapStageForFamilyChange,
   guideFor,
   sanitizeCaseCreateInput,
+  sanitizeUidList,
   outcomePresetById,
   buildOutcomePackSteps,
   addWorkingDays,

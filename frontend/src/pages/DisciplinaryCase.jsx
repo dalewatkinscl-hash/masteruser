@@ -4,7 +4,7 @@ import { readJsonResponse } from '../utils/employeeProfile';
 import CaseGuidePanel from '../components/CaseGuidePanel';
 import CaseDocumentationHub from '../components/CaseDocumentationHub';
 import CaseProgressRail from '../components/CaseProgressRail';
-import EmployeeSelect from '../components/EmployeeSelect';
+import EmployeeSelect, { EmployeeMultiSelect } from '../components/EmployeeSelect';
 import { useAuth } from '../context/AuthContext';
 import {
   INFORMAL_RESOLUTION_OPTIONS,
@@ -59,6 +59,18 @@ function isSamsaraCreateForm(form = {}) {
 
 function isRecordCreateForm(form = {}) {
   return form.processFamily === 'record' || form.caseType === 'record';
+}
+
+function isAccidentCreateForm(form = {}) {
+  return form.processFamily === 'vehicle_accident' || form.caseType === 'vehicle_accident';
+}
+
+function toDatetimeLocalValue(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
 function formatHistoryDate(value) {
@@ -213,6 +225,9 @@ export default function DisciplinaryCase() {
   const [caseData, setCaseData] = useState(null);
   const [events, setEvents] = useState([]);
   const [documents, setDocuments] = useState([]);
+  const [bumpCard, setBumpCard] = useState(null);
+  const [fleetVehicles, setFleetVehicles] = useState([]);
+  const [fleetLoading, setFleetLoading] = useState(false);
   const [minutes, setMinutes] = useState([]);
   const [reviews, setReviews] = useState([]);
   const [history, setHistory] = useState([]);
@@ -285,16 +300,45 @@ export default function DisciplinaryCase() {
     informalActionDetails: '',
     offPortalRaiseDate: '',
     offPortalRaiseNotes: '',
+    grievanceSubjectUids: [],
     eventDate: new Date().toISOString().slice(0, 10),
+    incidentAt: toDatetimeLocalValue(new Date().toISOString()),
+    vehicleReg: '',
+    vehicleId: '',
+    vehicleRegOther: '',
   });
   const family = caseData?.processFamily || form.processFamily || 'disciplinary';
   const isSamsaraCreate = isNew && isSamsaraCreateForm(form);
   const isRecordCreate = isNew && isRecordCreateForm(form);
+  const isAccidentCreate = isNew && isAccidentCreateForm(form);
 
   useEffect(() => {
     if (!isNew || !user?.uid) return;
     setForm((prev) => (prev.ownerManagerUid ? prev : { ...prev, ownerManagerUid: user.uid }));
   }, [isNew, user?.uid]);
+
+  useEffect(() => {
+    if (!isNew || !isAccidentCreate) return undefined;
+    let cancelled = false;
+    setFleetLoading(true);
+    (async () => {
+      try {
+        const response = await fetch('/api/getFleetVehicles', { credentials: 'include' });
+        const data = (await readJsonResponse(response)) || {};
+        if (!response.ok) throw new Error(data.error || 'Failed to load fleet vehicles.');
+        if (!cancelled) setFleetVehicles(Array.isArray(data.vehicles) ? data.vehicles : []);
+      } catch (err) {
+        if (!cancelled) {
+          setFleetVehicles([]);
+          setError((prev) => prev || err.message || 'Failed to load fleet vehicles.');
+        }
+      } finally {
+        if (!cancelled) setFleetLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isNew, isAccidentCreate]);
+
   const stages = useMemo(
     () => (isNew ? stagesForFamily(family) : stagesForCaseDisplay(family, caseData || {})),
     [isNew, family, caseData],
@@ -425,17 +469,22 @@ export default function DisciplinaryCase() {
   const composedCaseTitle = useMemo(() => {
     const name = selectedEmployeeName.trim() || 'Employee';
     const issue = String(form.issue || '').trim() || '…';
-    const dateLabel = isSamsaraCreateForm(form) && form.eventDate
-      ? formatHistoryDate(form.eventDate)
-      : new Date().toLocaleDateString('en-GB');
     if (isSamsaraCreateForm(form)) {
-      return `${name} - ${issue} Samsara Coaching ${dateLabel}`;
+      return `${name} - ${issue} Samsara Coaching`;
     }
     if (isRecordCreateForm(form)) {
-      return `${name} - ${issue} - Record - ${dateLabel}`;
+      return `${name} - ${issue} - Record`;
     }
-    return `${name} - ${issue} - ${dateLabel}`;
-  }, [selectedEmployeeName, form.issue, form.processFamily, form.caseType, form.eventDate]);
+    if (isAccidentCreateForm(form)) {
+      const reg = form.vehicleReg === '__other__'
+        ? String(form.vehicleRegOther || '').trim().toUpperCase()
+        : String(form.vehicleReg || '').trim().toUpperCase();
+      return reg
+        ? `${name} — Vehicle accident — ${reg}`
+        : `${name} — Vehicle accident`;
+    }
+    return `${name} - ${issue}`;
+  }, [selectedEmployeeName, form.issue, form.processFamily, form.caseType, form.vehicleReg, form.vehicleRegOther]);
 
   const todayIso = new Date().toISOString().slice(0, 10);
   const hearingAt = hearingForm.hearingScheduledAt
@@ -458,6 +507,7 @@ export default function DisciplinaryCase() {
     setEditingTitle(false);
     setEvents(data.events || []);
     setDocuments(data.documents || []);
+    setBumpCard(data.bumpCard || null);
     setMinutes(data.minutes || []);
     setReviews(data.reviews || []);
     setHistory(data.history || []);
@@ -543,15 +593,36 @@ export default function DisciplinaryCase() {
       const next = { ...prev, [name]: type === 'checkbox' ? checked : value };
       if (name === 'processFamily') {
         next.caseType = defaultCaseTypeForFamily(value);
+        if (value !== 'grievance') {
+          next.grievanceSubjectUids = [];
+        }
         if (value === 'samsara_coaching') {
           next.informalResolutionPath = '';
           if (!next.eventDate) next.eventDate = new Date().toISOString().slice(0, 10);
         } else if (value === 'record') {
           next.informalResolutionPath = '';
           next.eventDate = '';
+        } else if (value === 'vehicle_accident') {
+          next.informalResolutionPath = '';
+          next.issue = next.issue || 'Vehicle accident';
+          if (!next.incidentAt) next.incidentAt = toDatetimeLocalValue(new Date().toISOString());
         } else if (!next.informalResolutionPath) {
           next.informalResolutionPath = 'resolve_informally';
         }
+      }
+      if (name === 'vehicleReg' && value !== '__other__') {
+        const match = fleetVehicles.find((item) => item.registration === value || item.id === value);
+        next.vehicleId = match?.id || '';
+        if (match?.registration) next.vehicleReg = match.registration;
+        next.vehicleRegOther = '';
+        next.issue = match?.registration
+          ? `Vehicle accident — ${match.registration}`
+          : (next.issue || 'Vehicle accident');
+      }
+      if (name === 'vehicleRegOther') {
+        const reg = String(value || '').trim().toUpperCase();
+        next.vehicleId = '';
+        next.issue = reg ? `Vehicle accident — ${reg}` : 'Vehicle accident';
       }
       if (name === 'caseType' && value === 'samsara_coaching') {
         next.processFamily = 'samsara_coaching';
@@ -837,7 +908,18 @@ export default function DisciplinaryCase() {
     }
     const isSamsara = isSamsaraCreateForm(form);
     const isRecord = isRecordCreateForm(form);
-    const issue = String(form.issue || '').trim();
+    const isAccident = isAccidentCreateForm(form);
+    const vehicleReg = isAccident
+      ? (form.vehicleReg === '__other__'
+        ? String(form.vehicleRegOther || '').trim().toUpperCase()
+        : String(form.vehicleReg || '').trim().toUpperCase())
+      : '';
+    const incidentAtIso = isAccident && form.incidentAt
+      ? new Date(form.incidentAt).toISOString()
+      : '';
+    const issue = isAccident
+      ? (vehicleReg ? `Vehicle accident — ${vehicleReg}` : 'Vehicle accident')
+      : String(form.issue || '').trim();
     if (!issue) {
       setError(isSamsara
         ? 'Enter the issue before logging coaching.'
@@ -846,8 +928,22 @@ export default function DisciplinaryCase() {
           : 'Enter the issue before opening the case.');
       return;
     }
-    if (!isSamsara && !isRecord && (form.processFamily === 'disciplinary' || form.processFamily === 'grievance') && !form.informalResolutionPath) {
+    if (isAccident) {
+      if (!vehicleReg) {
+        setError('Select the vehicle registration.');
+        return;
+      }
+      if (!incidentAtIso || Number.isNaN(new Date(incidentAtIso).getTime())) {
+        setError('Enter the accident date and time.');
+        return;
+      }
+    }
+    if (!isSamsara && !isRecord && !isAccident && (form.processFamily === 'disciplinary' || form.processFamily === 'grievance') && !form.informalResolutionPath) {
       setError('Choose how you are starting the case before opening it.');
+      return;
+    }
+    if (form.processFamily === 'grievance' && !(form.grievanceSubjectUids || []).length) {
+      setError('Select at least one person this grievance is about.');
       return;
     }
     setSaving(true);
@@ -863,11 +959,17 @@ export default function DisciplinaryCase() {
         body: JSON.stringify({
           ...form,
           issue,
-          caseType: isSamsara ? 'samsara_coaching' : (isRecord ? 'record' : form.caseType),
+          caseType: isSamsara
+            ? 'samsara_coaching'
+            : (isRecord ? 'record' : (isAccident ? 'vehicle_accident' : form.caseType)),
           title: composedCaseTitle,
           informalTried: form.informalResolutionPath === 'proceed_formal',
-          informalResolutionPath: (isSamsara || isRecord) ? '' : form.informalResolutionPath,
+          informalResolutionPath: (isSamsara || isRecord || isAccident) ? '' : form.informalResolutionPath,
           eventDate,
+          incidentAt: isAccident ? incidentAtIso : '',
+          vehicleReg: isAccident ? vehicleReg : '',
+          vehicleId: isAccident && form.vehicleReg !== '__other__' ? (form.vehicleId || '') : '',
+          stage: isAccident ? 'recorded' : undefined,
         }),
       });
       const data = (await readJsonResponse(response)) || {};
@@ -2681,10 +2783,26 @@ export default function DisciplinaryCase() {
       return (
         <StepCard title="Step 1 — Acknowledge grievance">
           <p className="text-sm text-slate-400">Confirm receipt and plan investigation.</p>
+          <Field label="Grievance is about">
+            <EmployeeMultiSelect
+              value={Array.isArray(caseData?.grievanceSubjectUids) ? caseData.grievanceSubjectUids : []}
+              onChange={(uids) => apiUpdate({ grievanceSubjectUids: uids })}
+              employees={employees}
+              loading={employeesLoading}
+              excludeUids={caseData?.employeeUid ? [caseData.employeeUid] : []}
+              minSelected={1}
+              emptyHint="Add one or more people this grievance is about"
+              searchPlaceholder="Type a name to add…"
+              noneMatchLabel="No employees match"
+            />
+            <span className="block text-xs text-slate-500 mt-1">
+              Subjects cannot open this case in the HR portal.
+            </span>
+          </Field>
           <ChoiceButton
             primary
             title="Acknowledged — start investigation →"
-            disabled={saving}
+            disabled={saving || !(caseData?.grievanceSubjectUids || []).length}
             onClick={() => apiUpdate({ stage: 'investigation' })}
           />
         </StepCard>
@@ -2742,53 +2860,135 @@ export default function DisciplinaryCase() {
     return renderDisciplinaryStep();
   };
 
+  const renderBumpSummary = (card) => {
+    if (!card) {
+      return <p className="text-sm text-slate-500">No bump card on file yet.</p>;
+    }
+    const yesNo = (value) => (value ? 'Yes' : 'No');
+    const rows = [
+      ['When', card.incidentAt ? formatDateTimeUk(card.incidentAt) : '—'],
+      ['Location', card.location || '—'],
+      ['Vehicle', card.vehicleReg || caseData?.vehicleReg || '—'],
+      ['On the road', card.roadDescription || card.description || '—'],
+      ['Weather', card.weather || '—'],
+      ['Visibility', card.visibility || '—'],
+      ['Emergency services', card.emergencyServices
+        ? `Yes${(card.emergencyServicesTypes || []).length ? ` (${(card.emergencyServicesTypes || []).join(', ')})` : ''}`
+        : 'No'],
+      ['Injuries', card.injuries ? `Yes — ${card.injuriesDetails || 'details not given'}` : yesNo(card.injuries)],
+      ['Hospital', card.hospital ? `Yes — ${card.hospitalDetails || 'details not given'}` : yesNo(card.hospital)],
+      ['CL vehicle damage', card.clVehicleDamage ? `Yes — ${card.clVehicleDamageDetails || 'details not given'}` : yesNo(card.clVehicleDamage)],
+      ['Third-party vehicle', card.thirdPartyVehicle
+        ? [card.thirdPartyReg, card.thirdPartyMake, card.thirdPartyModel, card.thirdPartyDriver, card.thirdPartyDamage]
+          .filter(Boolean)
+          .join(' · ') || 'Yes'
+        : 'No'],
+      ['Property damage', card.propertyDamage ? `Yes — ${card.propertyDamageDetails || 'details not given'}` : yesNo(card.propertyDamage)],
+      ['Comments', card.comments || '—'],
+    ];
+    return (
+      <div className="space-y-4">
+        <dl className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
+          {rows.map(([label, value]) => (
+            <div key={label} className={label === 'On the road' || label === 'Comments' ? 'sm:col-span-2' : ''}>
+              <dt className="text-xs uppercase tracking-wide text-slate-500">{label}</dt>
+              <dd className="mt-1 text-slate-200 whitespace-pre-wrap">{value}</dd>
+            </div>
+          ))}
+        </dl>
+        {Array.isArray(card.imageUrls) && card.imageUrls.length > 0 ? (
+          <div>
+            <p className="text-xs uppercase tracking-wide text-slate-500 mb-2">Images</p>
+            <ul className="space-y-1">
+              {card.imageUrls.map((url) => (
+                <li key={url}>
+                  <a href={url} target="_blank" rel="noreferrer" className="text-sm text-indigo-300 hover:text-indigo-200">
+                    {url}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+      </div>
+    );
+  };
+
   const renderAccidentStep = () => {
+    if (currentStage === 'recorded') {
+      return (
+        <StepCard title="Accident recorded — awaiting bump card">
+          <dl className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm mb-4">
+            <div>
+              <dt className="text-xs uppercase tracking-wide text-slate-500">Vehicle</dt>
+              <dd className="mt-1 text-white">{caseData?.vehicleReg || '—'}</dd>
+            </div>
+            <div>
+              <dt className="text-xs uppercase tracking-wide text-slate-500">When</dt>
+              <dd className="mt-1 text-white">{formatDateTimeUk(caseData?.incidentAt)}</dd>
+            </div>
+            <div>
+              <dt className="text-xs uppercase tracking-wide text-slate-500">Driver</dt>
+              <dd className="mt-1 text-white">{caseData?.employeeNameSnapshot || '—'}</dd>
+            </div>
+          </dl>
+          <p className="text-sm text-slate-400">
+            The driver has been prompted to complete a bump card. Fault triage unlocks after they submit it.
+          </p>
+          <div className="mt-4">
+            <ChoiceButton
+              title="Open bump card link for driver"
+              disabled={saving}
+              onClick={() => window.open(`/dashboard/bump-card?caseId=${encodeURIComponent(caseId)}`, '_blank', 'noopener,noreferrer')}
+            />
+          </div>
+        </StepCard>
+      );
+    }
     if (currentStage === 'triage') {
       return (
-        <StepCard title="Step 1 — Triage">
-          <p className="text-sm text-slate-400">Confirm the incident details and who is involved.</p>
-          <ChoiceButton primary title="Start investigation →" disabled={saving} onClick={() => apiUpdate({ stage: 'investigation' })} />
-        </StepCard>
-      );
-    }
-    if (currentStage === 'investigation') {
-      return (
-        <StepCard title="Step 2 — Investigation">
-          <ChoiceButton
-            primary
-            title="Investigation complete — training decision →"
-            disabled={saving || needsPortalInterview}
-            onClick={() => apiUpdate({ stage: 'training_decision' })}
-          />
-          {needsPortalInterview && (
-            <p className="text-xs text-amber-300 mt-2">Record investigation interview notes on the portal before continuing.</p>
-          )}
-        </StepCard>
-      );
-    }
-    if (currentStage === 'training_decision') {
-      return (
-        <StepCard title="Step 3 — Training team decision">
+        <StepCard title="Triage — fault decision">
+          <p className="text-sm text-slate-400 mb-4">
+            Review the bump card, then decide fault. Third party closes this accident case; driver at fault converts this same case into a disciplinary at fact-finding.
+          </p>
+          <div className="rounded-lg border border-[#1a2540] bg-[#060e1a]/50 p-4 mb-4">
+            <p className="text-xs uppercase tracking-wide text-slate-500 mb-3">Bump card summary</p>
+            {renderBumpSummary(bumpCard)}
+          </div>
           <ChoiceRow>
-            <ChoiceButton title="Training required" disabled={saving} onClick={() => apiUpdate({ trainingDecision: 'training_required', stage: 'training_decision' })} />
-            <ChoiceButton title="Open linked disciplinary" disabled={saving} onClick={() => apiUpdate({ openLinkedDisciplinary: true })} />
-            <ChoiceButton title="No further action — close" disabled={saving} onClick={() => apiUpdate({ trainingDecision: 'no_further_action' })} />
+            <ChoiceButton
+              title="Third party at fault — close"
+              disabled={saving}
+              onClick={() => apiUpdate({
+                accidentFault: 'third_party',
+                closeNotes: 'Third party at fault — accident case closed.',
+              })}
+            />
+            <ChoiceButton
+              primary
+              title="Driver at fault — continue as disciplinary"
+              disabled={saving}
+              onClick={() => apiUpdate({ accidentFault: 'driver' })}
+            />
           </ChoiceRow>
-          {caseData?.linkedDisciplinaryCaseId && (
-            <button type="button" className="text-indigo-300 text-sm" onClick={() => navigate(`/dashboard/hr/cases/${caseData.linkedDisciplinaryCaseId}`)}>
-              Open linked disciplinary case
-            </button>
-          )}
-          {caseData?.trainingDecision === 'training_required' && (
-            <button type="button" className={btnPrimary} disabled={saving} onClick={() => apiUpdate({ closeCase: true, forceClose: true })}>
-              Close after training decision
-            </button>
-          )}
         </StepCard>
       );
     }
     if (currentStage === 'closed') {
-      return renderDisciplinaryStep();
+      return (
+        <StepCard title="Accident closed">
+          <p className="text-sm text-slate-300">
+            {caseData?.accidentFault === 'third_party'
+              ? 'Closed — third party at fault.'
+              : (caseData?.closeNotes || 'Accident case closed.')}
+          </p>
+          {bumpCard ? (
+            <div className="mt-4 rounded-lg border border-[#1a2540] bg-[#060e1a]/50 p-4">
+              {renderBumpSummary(bumpCard)}
+            </div>
+          ) : null}
+        </StepCard>
+      );
     }
     return renderDisciplinaryStep();
   };
@@ -3048,16 +3248,16 @@ export default function DisciplinaryCase() {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between px-8 py-5 border-b border-[#1a2540] gap-3 flex-wrap">
+      <div className="flex items-center justify-between px-4 sm:px-8 py-5 border-b border-[#1a2540] gap-3 flex-wrap">
         <div className="min-w-0 flex-1">
           {isNew ? (
-            <h1 className="text-xl font-bold text-white">New people case</h1>
+            <h1 className="text-xl font-bold text-white break-words">New people case</h1>
           ) : editingTitle ? (
             <div className="flex flex-wrap items-center gap-2 max-w-3xl">
               <input
                 value={titleDraft}
                 onChange={(e) => setTitleDraft(e.target.value)}
-                className={`${inputClass} flex-1 min-w-[16rem]`}
+                className={`${inputClass} flex-1 min-w-0 sm:min-w-[16rem]`}
                 aria-label="Case title"
               />
               <button type="button" className={btnPrimary} disabled={saving} onClick={saveTitle}>
@@ -3077,7 +3277,7 @@ export default function DisciplinaryCase() {
             </div>
           ) : (
             <div className="flex flex-wrap items-center gap-3">
-              <h1 className="text-xl font-bold text-white">{caseData?.title || 'Case'}</h1>
+              <h1 className="text-xl font-bold text-white break-words">{caseData?.title || 'Case'}</h1>
               <button
                 type="button"
                 className="text-sm text-indigo-300 hover:text-indigo-200"
@@ -3098,6 +3298,17 @@ export default function DisciplinaryCase() {
                 {family === 'record' ? 'Record' : String(family).replace(/_/g, ' ')}
                 {caseData?.suspensionActive ? ' · Suspension active' : ''}
               </p>
+              {family === 'grievance' && (
+                <p className="text-sm text-slate-400">
+                  About{' '}
+                  <span className="text-slate-200">
+                    {(Array.isArray(caseData?.grievanceSubjectNamesSnapshot)
+                      && caseData.grievanceSubjectNamesSnapshot.length)
+                      ? caseData.grievanceSubjectNamesSnapshot.join(', ')
+                      : '—'}
+                  </span>
+                </p>
+              )}
               <p className="text-sm text-slate-400">
                 {recordedByName && recordedByName !== 'Unknown' ? (
                   <>Opened by <span className="text-slate-200">{recordedByName}</span></>
@@ -3147,7 +3358,7 @@ export default function DisciplinaryCase() {
         </div>
       </div>
 
-      <div className="p-8 space-y-6 overflow-auto">
+      <div className="p-4 sm:p-8 space-y-6 overflow-auto">
         <div ref={caseAlertsRef} className="space-y-3">
           {error && (
             amendmentAlertActive || (error || '').toLowerCase().includes('amendment') ? (
@@ -3187,14 +3398,18 @@ export default function DisciplinaryCase() {
                   ? 'Log Samsara coaching'
                   : isRecordCreate
                     ? 'Open a personnel record'
-                    : 'Step 0 — Open the case'}
+                    : isAccidentCreate
+                      ? 'Record a vehicle accident'
+                      : 'Step 0 — Open the case'}
               </p>
               <p className="text-sm text-slate-400 mt-1">
                 {isSamsaraCreate
                   ? 'Record that coaching was processed on Samsara. No portal interview is required.'
                   : isRecordCreate
                     ? 'Add documents or interviews to someone’s file without starting a disciplinary or grievance process.'
-                    : 'Record the concern and open the case. You can hold interviews, upload notes, and decide later whether it resolves informally or goes formal.'}
+                    : isAccidentCreate
+                      ? 'Log the accident against the vehicle and driver. The driver is prompted to complete a bump card before you decide fault.'
+                      : 'Record the concern and open the case. You can hold interviews, upload notes, and decide later whether it resolves informally or goes formal.'}
               </p>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -3205,7 +3420,7 @@ export default function DisciplinaryCase() {
                   ))}
                 </select>
               </Field>
-              {!isSamsaraCreate && !isRecordCreate && (
+              {!isSamsaraCreate && !isRecordCreate && !isAccidentCreate && (
                 <Field label="Case type">
                   <select name="caseType" value={form.caseType} onChange={handleChange} className={inputClass}>
                     {CASE_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
@@ -3234,20 +3449,64 @@ export default function DisciplinaryCase() {
               </Field>
             </div>
 
-            <Field label={isRecordCreate ? 'Subject' : 'Issue'}>
-              <input
-                name="issue"
-                value={form.issue}
-                onChange={handleChange}
-                className={inputClass}
-                placeholder={isSamsaraCreate
-                  ? 'Short description of the coaching event'
-                  : isRecordCreate
-                    ? 'Short description of what this record covers'
-                    : 'Short description of the issue'}
-                autoComplete="off"
-              />
-            </Field>
+            {isAccidentCreate ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <Field label="Accident date & time">
+                  <input
+                    type="datetime-local"
+                    name="incidentAt"
+                    value={form.incidentAt}
+                    onChange={handleChange}
+                    className={inputClass}
+                  />
+                </Field>
+                <Field label="Vehicle registration">
+                  <select
+                    name="vehicleReg"
+                    value={form.vehicleReg}
+                    onChange={handleChange}
+                    className={inputClass}
+                    disabled={fleetLoading}
+                  >
+                    <option value="">{fleetLoading ? 'Loading fleet…' : 'Select registration'}</option>
+                    {fleetVehicles.map((vehicle) => (
+                      <option key={vehicle.id || vehicle.registration} value={vehicle.registration}>
+                        {vehicle.registration}
+                        {vehicle.fleetNumber ? ` · ${vehicle.fleetNumber}` : ''}
+                      </option>
+                    ))}
+                    <option value="__other__">Other (type registration)</option>
+                  </select>
+                </Field>
+                {form.vehicleReg === '__other__' ? (
+                  <Field label="Other registration">
+                    <input
+                      name="vehicleRegOther"
+                      value={form.vehicleRegOther}
+                      onChange={handleChange}
+                      className={`${inputClass} uppercase`}
+                      placeholder="AB12 CDE"
+                      autoComplete="off"
+                    />
+                  </Field>
+                ) : null}
+              </div>
+            ) : (
+              <Field label={isRecordCreate ? 'Subject' : 'Issue'}>
+                <input
+                  name="issue"
+                  value={form.issue}
+                  onChange={handleChange}
+                  className={inputClass}
+                  placeholder={isSamsaraCreate
+                    ? 'Short description of the coaching event'
+                    : isRecordCreate
+                      ? 'Short description of what this record covers'
+                      : 'Short description of the issue'}
+                  autoComplete="off"
+                />
+              </Field>
+            )}
             <Field label="Title (auto)">
               <input
                 value={composedCaseTitle}
@@ -3260,12 +3519,19 @@ export default function DisciplinaryCase() {
                   ? 'Built as Name — Issue Samsara Coaching Date'
                   : isRecordCreate
                     ? 'Built as Employee name — Subject — Record — Date'
-                    : 'Built as Employee name — Issue — Date'}
+                    : isAccidentCreate
+                      ? 'Built as Employee name — Vehicle accident — Registration'
+                      : 'Built as Employee name — Issue — Date'}
               </span>
             </Field>
-            {!isSamsaraCreate && (
+            {!isSamsaraCreate && !isAccidentCreate && (
               <Field label="Summary">
                 <textarea name="summary" value={form.summary} onChange={handleChange} rows={4} className={inputClass} />
+              </Field>
+            )}
+            {isAccidentCreate && (
+              <Field label="Notes (optional)">
+                <textarea name="summary" value={form.summary} onChange={handleChange} rows={3} className={inputClass} placeholder="Initial notes for managers" />
               </Field>
             )}
 
@@ -3337,7 +3603,7 @@ export default function DisciplinaryCase() {
               </div>
             )}
 
-            {!isSamsaraCreate && !isRecordCreate && (form.processFamily === 'disciplinary' || form.processFamily === 'grievance') && (
+            {!isSamsaraCreate && !isRecordCreate && !isAccidentCreate && (form.processFamily === 'disciplinary' || form.processFamily === 'grievance') && (
               <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-4 space-y-4">
                 <div>
                   <p className="text-sm font-medium text-amber-100">How are you starting?</p>
@@ -3392,13 +3658,31 @@ export default function DisciplinaryCase() {
             )}
 
             {!isSamsaraCreate && !isRecordCreate && form.processFamily === 'grievance' && (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <Field label="Off-portal raise date">
-                  <input type="date" name="offPortalRaiseDate" value={form.offPortalRaiseDate} onChange={handleChange} className={inputClass} />
+              <div className="space-y-4">
+                <Field label="Grievance is about">
+                  <EmployeeMultiSelect
+                    value={form.grievanceSubjectUids || []}
+                    onChange={(uids) => setForm((prev) => ({ ...prev, grievanceSubjectUids: uids }))}
+                    employees={employees}
+                    loading={employeesLoading}
+                    excludeUids={form.employeeUid ? [form.employeeUid] : []}
+                    minSelected={1}
+                    emptyHint="Add one or more people this grievance is about"
+                    searchPlaceholder="Type a name to add…"
+                    noneMatchLabel="No employees match"
+                  />
+                  <span className="block text-xs text-slate-500 mt-1">
+                    Anyone listed here will not be able to open this case in the HR portal.
+                  </span>
                 </Field>
-                <Field label="Off-portal raise notes">
-                  <textarea name="offPortalRaiseNotes" value={form.offPortalRaiseNotes} onChange={handleChange} rows={2} className={inputClass} />
-                </Field>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <Field label="Off-portal raise date">
+                    <input type="date" name="offPortalRaiseDate" value={form.offPortalRaiseDate} onChange={handleChange} className={inputClass} />
+                  </Field>
+                  <Field label="Off-portal raise notes">
+                    <textarea name="offPortalRaiseNotes" value={form.offPortalRaiseNotes} onChange={handleChange} rows={2} className={inputClass} />
+                  </Field>
+                </div>
               </div>
             )}
 
@@ -3408,8 +3692,11 @@ export default function DisciplinaryCase() {
               disabled={
                 saving
                 || !form.employeeUid
-                || !String(form.issue || '').trim()
-                || (!isSamsaraCreate && !isRecordCreate && (form.processFamily === 'disciplinary' || form.processFamily === 'grievance') && !form.informalResolutionPath)
+                || (isAccidentCreate
+                  ? !(form.incidentAt && (form.vehicleReg === '__other__' ? form.vehicleRegOther : form.vehicleReg))
+                  : !String(form.issue || '').trim())
+                || (!isSamsaraCreate && !isRecordCreate && !isAccidentCreate && (form.processFamily === 'disciplinary' || form.processFamily === 'grievance') && !form.informalResolutionPath)
+                || (form.processFamily === 'grievance' && !(form.grievanceSubjectUids || []).length)
               }
               className={btnPrimary}
             >
@@ -3419,20 +3706,27 @@ export default function DisciplinaryCase() {
                   ? 'Log coaching'
                   : isRecordCreate
                     ? 'Open record'
-                    : 'Open case — start fact-finding'}
+                    : isAccidentCreate
+                      ? 'Record accident'
+                      : 'Open case — start fact-finding'}
             </button>
             {!form.employeeUid && (
               <p className="text-xs text-amber-300">
                 Click the employee field and choose who the case is about. The open button stays disabled until an employee is selected.
               </p>
             )}
-            {form.employeeUid && !String(form.issue || '').trim() && (
+            {form.employeeUid && !isAccidentCreate && !String(form.issue || '').trim() && (
               <p className="text-xs text-amber-300">
                 {isSamsaraCreate
                   ? 'Enter the issue — the title is built as Name — Issue Samsara Coaching Date.'
                   : isRecordCreate
                     ? 'Enter a subject — the title is built as Name — Subject — Record — Date.'
                     : 'Enter the issue — the case title is built from the employee name, issue, and today’s date.'}
+              </p>
+            )}
+            {form.employeeUid && isAccidentCreate && !(form.vehicleReg === '__other__' ? form.vehicleRegOther : form.vehicleReg) && (
+              <p className="text-xs text-amber-300">
+                Select the vehicle registration to record the accident.
               </p>
             )}
           </div>

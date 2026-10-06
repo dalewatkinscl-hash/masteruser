@@ -24,5 +24,20 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (!id.includes('node_modules')) return undefined;
+          if (id.includes('firebase')) return 'vendor-firebase';
+          if (id.includes('three')) return 'vendor-three';
+          if (id.includes('leaflet') || id.includes('mapillary')) return 'vendor-maps';
+          if (id.includes('react-dom') || id.includes('react-router') || id.includes('/react/')) {
+            return 'vendor-react';
+          }
+          return undefined;
+        },
+      },
+    },
+    chunkSizeWarningLimit: 900,
   },
 });

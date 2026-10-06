@@ -1,0 +1,533 @@
+/* Kenney UI Pack chrome — Coach Depot + Little Dick's Toolbox */
+
+@font-face {
+  font-family: 'Kenney Future';
+  src: url('/game-ui/Font/Kenney Future.ttf') format('truetype');
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Kenney Future Narrow';
+  src: url('/game-ui/Font/Kenney Future Narrow.ttf') format('truetype');
+  font-weight: 400 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  --gui-font: 'Kenney Future', ui-rounded, system-ui, sans-serif;
+  --gui-font-narrow: 'Kenney Future Narrow', 'Kenney Future', ui-rounded, system-ui, sans-serif;
+  --gui-ink: #0f172a;
+  --gui-ink-soft: #1e293b;
+  --gui-cream: #f8fafc;
+}
+
+.gui-font {
+  font-family: var(--gui-font);
+  letter-spacing: 0.02em;
+}
+
+.gui-font-narrow {
+  font-family: var(--gui-font-narrow);
+  letter-spacing: 0.03em;
+}
+
+/* —— Panel —— */
+.gui-panel {
+  position: relative;
+  border-radius: 14px;
+  background:
+    linear-gradient(180deg, rgba(248, 250, 252, 0.97) 0%, rgba(226, 232, 240, 0.96) 100%);
+  border: 3px solid #334155;
+  box-shadow:
+    0 10px 28px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.75);
+  color: var(--gui-ink);
+  overflow: hidden;
+}
+
+.gui-panel--dark {
+  background:
+    linear-gradient(180deg, rgba(30, 41, 59, 0.96) 0%, rgba(15, 23, 42, 0.98) 100%);
+  border-color: #64748b;
+  color: var(--gui-cream);
+  box-shadow:
+    0 10px 28px rgba(0, 0, 0, 0.55),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.gui-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.55rem 0.75rem;
+  font-family: var(--gui-font);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #fff;
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.35);
+  background-image: var(--gui-header-bg);
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  border-bottom: 2px solid rgba(15, 23, 42, 0.25);
+}
+
+.gui-panel__header--blue { --gui-header-bg: url('/game-ui/PNG/Blue/Default/button_rectangle_depth_gradient.png'); }
+.gui-panel__header--green { --gui-header-bg: url('/game-ui/PNG/Green/Default/button_rectangle_depth_gradient.png'); }
+.gui-panel__header--red { --gui-header-bg: url('/game-ui/PNG/Red/Default/button_rectangle_depth_gradient.png'); }
+.gui-panel__header--yellow { --gui-header-bg: url('/game-ui/PNG/Yellow/Default/button_rectangle_depth_gradient.png'); }
+.gui-panel__header--grey { --gui-header-bg: url('/game-ui/PNG/Grey/Default/button_rectangle_depth_gradient.png'); }
+
+.gui-panel__body {
+  padding: 0.75rem;
+}
+
+.gui-panel__body--flush {
+  padding: 0;
+}
+
+/* —— Button —— */
+.gui-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  border: 0;
+  cursor: pointer;
+  font-family: var(--gui-font-narrow);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #0f172a;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.35);
+  background-color: transparent;
+  background-image: var(--gui-btn-bg);
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  background-position: center;
+  transition: transform 80ms ease-out, filter 120ms ease-out, opacity 120ms ease-out;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.gui-btn:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+
+.gui-btn:active:not(:disabled),
+.gui-btn--pressed:not(:disabled) {
+  transform: translateY(1px) scale(0.98);
+  filter: brightness(0.95);
+}
+
+.gui-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  filter: grayscale(0.25);
+}
+
+.gui-btn--sm {
+  min-height: 2rem;
+  padding: 0.35rem 0.7rem;
+  font-size: 0.65rem;
+}
+
+.gui-btn--md {
+  min-height: 2.4rem;
+  padding: 0.45rem 0.95rem;
+}
+
+.gui-btn--lg {
+  min-height: 2.85rem;
+  padding: 0.55rem 1.15rem;
+  font-size: 0.8rem;
+}
+
+.gui-btn--block {
+  width: 100%;
+}
+
+.gui-btn--square {
+  width: 3rem;
+  height: 3rem;
+  min-height: 0;
+  padding: 0.35rem;
+  flex-direction: column;
+  gap: 0.15rem;
+  font-size: 0.55rem;
+}
+
+.gui-btn--square .gui-btn__icon-slot {
+  width: 1.35rem;
+  height: 1.35rem;
+}
+
+.gui-btn--round {
+  width: 2.75rem;
+  height: 2.75rem;
+  min-height: 0;
+  padding: 0.35rem;
+  border-radius: 999px;
+}
+
+.gui-btn--blue { --gui-btn-bg: url('/game-ui/PNG/Blue/Default/button_rectangle_depth_gradient.png'); color: #0b1220; }
+.gui-btn--green { --gui-btn-bg: url('/game-ui/PNG/Green/Default/button_rectangle_depth_gradient.png'); color: #052e16; }
+.gui-btn--red { --gui-btn-bg: url('/game-ui/PNG/Red/Default/button_rectangle_depth_gradient.png'); color: #450a0a; }
+.gui-btn--yellow { --gui-btn-bg: url('/game-ui/PNG/Yellow/Default/button_rectangle_depth_gradient.png'); color: #422006; }
+.gui-btn--grey { --gui-btn-bg: url('/game-ui/PNG/Grey/Default/button_rectangle_depth_gradient.png'); color: #0f172a; }
+
+.gui-btn--square.gui-btn--blue { --gui-btn-bg: url('/game-ui/PNG/Blue/Default/button_square_depth_gradient.png'); }
+.gui-btn--square.gui-btn--green { --gui-btn-bg: url('/game-ui/PNG/Green/Default/button_square_depth_gradient.png'); }
+.gui-btn--square.gui-btn--red { --gui-btn-bg: url('/game-ui/PNG/Red/Default/button_square_depth_gradient.png'); }
+.gui-btn--square.gui-btn--yellow { --gui-btn-bg: url('/game-ui/PNG/Yellow/Default/button_square_depth_gradient.png'); }
+.gui-btn--square.gui-btn--grey { --gui-btn-bg: url('/game-ui/PNG/Grey/Default/button_square_depth_gradient.png'); }
+
+.gui-btn--round.gui-btn--blue { --gui-btn-bg: url('/game-ui/PNG/Blue/Default/button_round_depth_gradient.png'); }
+.gui-btn--round.gui-btn--green { --gui-btn-bg: url('/game-ui/PNG/Green/Default/button_round_depth_gradient.png'); }
+.gui-btn--round.gui-btn--red { --gui-btn-bg: url('/game-ui/PNG/Red/Default/button_round_depth_gradient.png'); }
+.gui-btn--round.gui-btn--yellow { --gui-btn-bg: url('/game-ui/PNG/Yellow/Default/button_round_depth_gradient.png'); }
+.gui-btn--round.gui-btn--grey { --gui-btn-bg: url('/game-ui/PNG/Grey/Default/button_round_depth_gradient.png'); }
+
+.gui-btn--line {
+  color: #e2e8f0;
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.45);
+}
+.gui-btn--line.gui-btn--blue { --gui-btn-bg: url('/game-ui/PNG/Blue/Default/button_rectangle_line.png'); }
+.gui-btn--line.gui-btn--green { --gui-btn-bg: url('/game-ui/PNG/Green/Default/button_rectangle_line.png'); }
+.gui-btn--line.gui-btn--red { --gui-btn-bg: url('/game-ui/PNG/Red/Default/button_rectangle_line.png'); }
+.gui-btn--line.gui-btn--yellow { --gui-btn-bg: url('/game-ui/PNG/Yellow/Default/button_rectangle_line.png'); }
+.gui-btn--line.gui-btn--grey { --gui-btn-bg: url('/game-ui/PNG/Grey/Default/button_rectangle_line.png'); }
+
+.gui-btn__icon {
+  width: 1rem;
+  height: 1rem;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+.gui-btn__icon-slot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: inherit;
+}
+
+.gui-btn__icon-slot svg {
+  width: 100%;
+  height: 100%;
+}
+
+/* —— Badge —— */
+.gui-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 2.1rem;
+  padding: 0.3rem 0.7rem 0.35rem;
+  font-family: var(--gui-font-narrow);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: #422006;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.3);
+  background-image: url('/game-ui/PNG/Yellow/Default/button_rectangle_depth_gradient.png');
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  border: 0;
+}
+
+.gui-badge--blue {
+  color: #0b1220;
+  background-image: url('/game-ui/PNG/Blue/Default/button_rectangle_depth_gradient.png');
+}
+
+.gui-badge--green {
+  color: #052e16;
+  background-image: url('/game-ui/PNG/Green/Default/button_rectangle_depth_gradient.png');
+}
+
+.gui-badge__star {
+  width: 1.05rem;
+  height: 1.05rem;
+  object-fit: contain;
+}
+
+/* —— Progress —— */
+.gui-progress {
+  position: relative;
+  width: 100%;
+  height: 1rem;
+  background-image: url('/game-ui/PNG/Blue/Default/slide_horizontal_grey.png');
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.gui-progress__fill {
+  height: 100%;
+  background-image: url('/game-ui/PNG/Blue/Default/slide_horizontal_color.png');
+  background-size: cover;
+  background-position: left center;
+  background-repeat: no-repeat;
+  transition: width 200ms ease-out;
+}
+
+.gui-progress--green .gui-progress__fill {
+  background-image: url('/game-ui/PNG/Green/Default/slide_horizontal_color.png');
+}
+
+.gui-progress--yellow .gui-progress__fill {
+  background-image: url('/game-ui/PNG/Yellow/Default/slide_horizontal_color.png');
+}
+
+.gui-progress--red .gui-progress__fill {
+  background-image: url('/game-ui/PNG/Red/Default/slide_horizontal_color.png');
+}
+
+/* —— Modal —— */
+.gui-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  background: rgba(2, 6, 23, 0.55);
+  border: 0;
+  padding: 0;
+  cursor: default;
+}
+
+.gui-modal {
+  position: relative;
+  z-index: 50;
+}
+
+/* —— Card tile (shop / mode) —— */
+.gui-card {
+  border-radius: 12px;
+  background:
+    linear-gradient(180deg, rgba(248, 250, 252, 0.95) 0%, rgba(203, 213, 225, 0.92) 100%);
+  border: 3px solid #475569;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  color: var(--gui-ink);
+  transition: transform 100ms ease-out, filter 120ms ease-out, border-color 120ms ease-out;
+}
+
+.gui-card--dark {
+  background:
+    linear-gradient(180deg, rgba(51, 65, 85, 0.95) 0%, rgba(15, 23, 42, 0.96) 100%);
+  border-color: #64748b;
+  color: #e2e8f0;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.gui-card--selected {
+  border-color: #38bdf8;
+  filter: brightness(1.05);
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.45), 0 4px 14px rgba(0, 0, 0, 0.4);
+}
+
+.gui-card:hover:not(:disabled) {
+  filter: brightness(1.04);
+}
+
+/* Active job status chips (Coach Depot contracts) */
+.gui-job-chip {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.1rem;
+  min-width: 9.5rem;
+  max-width: 16rem;
+  padding: 0.45rem 0.7rem 0.5rem;
+  border-radius: 10px;
+  border: 2px solid rgba(148, 163, 184, 0.55);
+  background:
+    linear-gradient(180deg, rgba(15, 23, 42, 0.96) 0%, rgba(2, 6, 23, 0.94) 100%);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  color: #f8fafc;
+  text-align: left;
+  font-family: var(--gui-font-narrow);
+  cursor: default;
+}
+
+.gui-job-chip--ready {
+  border-color: rgba(74, 222, 128, 0.7);
+  background:
+    linear-gradient(180deg, rgba(6, 78, 59, 0.95) 0%, rgba(2, 44, 34, 0.96) 100%);
+}
+
+.gui-job-chip--interactive {
+  cursor: pointer;
+}
+
+.gui-job-chip--interactive:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.gui-job-chip:disabled {
+  opacity: 1;
+  cursor: default;
+  filter: none;
+}
+
+.gui-job-chip__title {
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #f8fafc;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
+  line-height: 1.2;
+}
+
+.gui-job-chip__meta {
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #fde68a;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.25;
+}
+
+.gui-job-chip__time {
+  display: inline-block;
+  font-size: 1.15rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  font-variant-numeric: tabular-nums;
+  color: #fef08a;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+  line-height: 1.1;
+}
+
+.gui-job-chip--ready .gui-job-chip__meta {
+  color: #bbf7d0;
+}
+
+.gui-job-chip--ready .gui-job-chip__time {
+  color: #bbf7d0;
+}
+
+.gui-job-chip__sub {
+  font-size: 0.62rem;
+  font-weight: 600;
+  color: #cbd5e1;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.5);
+}
+
+.gui-job-chip--inspect {
+  border-color: rgba(56, 189, 248, 0.7);
+  background:
+    linear-gradient(180deg, rgba(12, 74, 110, 0.96) 0%, rgba(8, 47, 73, 0.96) 100%);
+}
+
+.gui-job-chip--inspect .gui-job-chip__meta {
+  color: #bae6fd;
+}
+
+.gui-job-chip--inspect .gui-job-chip__time {
+  color: #e0f2fe;
+}
+
+/* Right-side roster / fleet status strip */
+.gui-status-hud {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 9.5rem;
+  padding: 0.4rem 0.65rem;
+  border-radius: 10px;
+  border: 2px solid rgba(148, 163, 184, 0.45);
+  background:
+    linear-gradient(180deg, rgba(15, 23, 42, 0.96) 0%, rgba(2, 6, 23, 0.94) 100%);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  font-family: var(--gui-font-narrow);
+}
+
+.gui-status-hud__row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.55rem;
+}
+
+.gui-status-hud__label {
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #94a3b8;
+}
+
+.gui-status-hud__value {
+  font-size: 0.68rem;
+  font-weight: 700;
+  color: #f8fafc;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.gui-status-hud__sep {
+  margin: 0 0.25rem;
+  color: #64748b;
+}
+
+/* Hint / toast pills */
+.gui-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.3rem 0.75rem;
+  border-radius: 999px;
+  font-family: var(--gui-font-narrow);
+  font-size: 0.65rem;
+  letter-spacing: 0.04em;
+  color: #f8fafc;
+  background: rgba(2, 6, 23, 0.72);
+  border: 2px solid rgba(148, 163, 184, 0.45);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+}
+
+.gui-toast {
+  font-family: var(--gui-font-narrow);
+  font-size: 0.8rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #fff;
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.35);
+  padding: 0.55rem 1rem;
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  border: 0;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.4);
+}
+
+.gui-toast--ok {
+  background-image: url('/game-ui/PNG/Green/Default/button_rectangle_depth_gradient.png');
+  color: #052e16;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+
+.gui-toast--err {
+  background-image: url('/game-ui/PNG/Red/Default/button_rectangle_depth_gradient.png');
+  color: #450a0a;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.3);
+}
+
+/* Scoped toolbox leaderboard shell (doesn't leak to other Fun games) */
+.toolbox-gui .toolbox-gui__board {
+  margin: 0;
+  list-style: none;
+}
+
+.toolbox-gui .toolbox-gui__board > li,
+.toolbox-gui .toolbox-gui__board > * {
+  font-family: var(--gui-font-narrow);
+}

@@ -128,6 +128,7 @@ function PipesBoard({
       aria-label={`${size} by ${size} pipes board`}
     >
       {safeTiles.map((tile, index) => {
+        const safeTile = tile && typeof tile === 'object' ? tile : {};
         const mask = masks[index];
         const connected = highlightConnected
           ? connectedBitsForCell(size, masks, index)
@@ -138,11 +139,11 @@ function PipesBoard({
             key={index}
             type="button"
             role="gridcell"
-            disabled={disabled || tile.pinned}
-            title={tile.pinned ? 'Pinned · right-click to unpin' : 'Click to rotate · right-click to pin'}
+            disabled={disabled || safeTile.pinned}
+            title={safeTile.pinned ? 'Pinned · right-click to unpin' : 'Click to rotate · right-click to pin'}
             onClick={(e) => {
               e.preventDefault();
-              if (disabled || tile.pinned) return;
+              if (disabled || safeTile.pinned) return;
               onRotate?.(index, e.shiftKey || e.ctrlKey || e.metaKey ? -1 : 1);
             }}
             onContextMenu={(e) => {
@@ -151,14 +152,14 @@ function PipesBoard({
               onPin?.(index);
             }}
             className={`relative rounded-md transition-transform active:scale-[0.97] ${
-              tile.pinned ? 'cursor-default' : 'cursor-pointer hover:brightness-110'
+              safeTile.pinned ? 'cursor-default' : 'cursor-pointer hover:brightness-110'
             } disabled:cursor-not-allowed`}
           >
             <PipeGlyph
               mask={mask}
               connectedBits={connected}
               live={Boolean(live && (mask & 0xf))}
-              pinned={tile.pinned}
+              pinned={safeTile.pinned}
               cellSize={cellSize}
             />
           </button>

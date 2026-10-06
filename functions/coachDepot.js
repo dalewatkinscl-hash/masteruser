@@ -4,6 +4,12 @@
  * Coach Depot — HQ-tier progression (no ages).
  * Portal coins: jobs earn; HQ / land / buildings / staff / fleet spend.
  * No leaderboard.
+ *
+ * Economy targets (casual check-ins, ~6–8 short-job cycles/day):
+ * - Ops / 2nd bay: same day
+ * - HQ Lv2: 2–4 days · first Coach: 4–7 days · 5 Coaches: 10–16 days
+ * - HQ Lv3: 3–5 weeks · HQ Lv4: 2.5–4 months · Electric/VIP: 4–6+ months
+ * Prefer tuning mid-tier vehicle costs over nerfing early school-run rewards.
  */
 
 const STAFF_GRADE_ORDER = [
@@ -43,6 +49,59 @@ const BUILDING_KEYS = [
   'chargers',
   'tourOffice',
 ];
+
+/** Isometric edge / facing for decorations (tile diamond edges). */
+const DECOR_FACINGS = ['NE', 'SE', 'SW', 'NW'];
+
+/** Cosmetic yard props — no gameplay effect. */
+const DECORATIONS = {
+  flowers: {
+    key: 'flowers',
+    label: 'Flower bed',
+    cost: 5,
+    blurb: 'Decoration only — pretty up the yard.',
+    facings: true,
+  },
+  fence: {
+    key: 'fence',
+    label: 'Wooden fence',
+    cost: 8,
+    blurb: 'Decoration only — pick which edge to fence off.',
+    facings: true,
+    /** Sits on a tile edge; does not block the pad for buildings. */
+    edge: true,
+  },
+  light: {
+    key: 'light',
+    label: 'Light pole',
+    cost: 12,
+    blurb: 'Decoration only — lights the yard.',
+    facings: true,
+  },
+  rocks: {
+    key: 'rocks',
+    label: 'Rock feature',
+    cost: 6,
+    blurb: 'Decoration only — landscaping.',
+    facings: true,
+  },
+  box: {
+    key: 'box',
+    label: 'Storage crates',
+    cost: 4,
+    blurb: 'Decoration only — looks busy.',
+    facings: true,
+  },
+};
+const DECORATION_KEYS = Object.keys(DECORATIONS);
+
+function normalizeDecorFacing(facing, fallback = 'SE') {
+  const f = String(facing || '').trim().toUpperCase();
+  return DECOR_FACINGS.includes(f) ? f : fallback;
+}
+
+/** Player-built service road on owned land. */
+const ROAD_BUILD_COST = 10;
 
 /**
  * Per-level requirements to unlock / build that level.
@@ -93,7 +152,7 @@ const BUILDINGS = {
     maxLevel: 4,
     usesPlot: true,
     effect: 'Unlocks workshops, wash, training and tour office tiers.',
-    costForLevel: (n) => [0, 120, 900, 4500, 22000][n] || 120,
+    costForLevel: (n) => [0, 80, 550, 2800, 12000][n] || 80,
     levelLabel: (n) => (n === 0 ? 'Not built' : `Ops Lv ${n}`),
   },
   trainingCentre: {
@@ -102,7 +161,7 @@ const BUILDINGS = {
     maxLevel: 3,
     usesPlot: true,
     effect: 'Recruit better drivers.',
-    costForLevel: (n) => [0, 800, 5000, 18000][n] || 800,
+    costForLevel: (n) => [0, 500, 3200, 12000][n] || 500,
     levelLabel: (n) => (n === 0 ? 'Not built' : `Training Lv ${n}`),
   },
   workshop: {
@@ -111,7 +170,7 @@ const BUILDINGS = {
     maxLevel: 3,
     usesPlot: true,
     effect: 'Unlocks coaches, exec coaches and super exec.',
-    costForLevel: (n) => [0, 600, 3500, 16000][n] || 600,
+    costForLevel: (n) => [0, 400, 2200, 10000][n] || 400,
     levelLabel: (n) => (n === 0 ? 'Not built' : `Workshop Lv ${n}`),
   },
   wash: {
@@ -120,7 +179,7 @@ const BUILDINGS = {
     maxLevel: 2,
     usesPlot: true,
     effect: 'Bonus coins on every job.',
-    costForLevel: (n) => [0, 450, 2800][n] || 450,
+    costForLevel: (n) => [0, 300, 1900][n] || 300,
     levelLabel: (n) => (n === 0 ? 'Not built' : `Wash Lv ${n}`),
   },
   breakRoom: {
@@ -129,7 +188,7 @@ const BUILDINGS = {
     maxLevel: 2,
     usesPlot: true,
     effect: 'Jobs finish faster.',
-    costForLevel: (n) => [0, 700, 4200][n] || 700,
+    costForLevel: (n) => [0, 480, 2900][n] || 480,
     levelLabel: (n) => (n === 0 ? 'Not built' : `Break room Lv ${n}`),
   },
   paintShop: {
@@ -138,7 +197,7 @@ const BUILDINGS = {
     maxLevel: 2,
     usesPlot: true,
     effect: 'Fleet finish — Lv 2 boosts job revenue.',
-    costForLevel: (n) => [0, 2000, 9000][n] || 2000,
+    costForLevel: (n) => [0, 1400, 6500][n] || 1400,
     levelLabel: (n) => (n === 0 ? 'Not built' : `Paint shop Lv ${n}`),
   },
   chargers: {
@@ -148,7 +207,7 @@ const BUILDINGS = {
     usesPlot: false,
     bayUpgrade: true,
     effect: 'Upgrade a parking bay with a charger — unlocks electric coaches (+25% job revenue).',
-    costForLevel: (n) => [0, 12000][n] || 12000,
+    costForLevel: (n) => [0, 9600][n] || 9600,
     levelLabel: (n) => (n === 0 ? 'No chargers' : 'Bay chargers installed'),
   },
   tourOffice: {
@@ -157,14 +216,14 @@ const BUILDINGS = {
     maxLevel: 2,
     usesPlot: true,
     effect: 'Unlocks tours; Lv 2 unlocks continental tours.',
-    costForLevel: (n) => [0, 14000, 45000][n] || 14000,
+    costForLevel: (n) => [0, 11200, 36000][n] || 11200,
     levelLabel: (n) => (n === 0 ? 'Not built' : `Tour office Lv ${n}`),
   },
 };
 
 const OFFICE_LEVELS = {
   maxLevel: 4,
-  costForLevel: (n) => ({ 2: 5000, 3: 28000, 4: 120000 }[n] || 5000),
+  costForLevel: (n) => ({ 2: 1800, 3: 14000, 4: 55000 }[n] || 1800),
   levelLabel: (n) => `HQ Level ${Math.max(1, n)}`,
   effect: 'Big HQ upgrades unlock the next tier of buildings.',
   requiresForLevel: (n) => ({
@@ -188,7 +247,8 @@ const OFFICE_LEVELS = {
   })[n] || [],
 };
 
-const BAY_COST = (nextCount) => Math.floor(80 + (nextCount - 2) * 95);
+/** Bay #2 = 50, then +70 each (flatter early expansion). */
+const BAY_COST = (nextCount) => Math.floor(50 + (nextCount - 2) * 70);
 /** First purchased tile 50, then +50 each (starter tiles are free). */
 function landTileCost(ownedCount, starterCount = 9) {
   const starter = Math.max(0, Math.floor(Number(starterCount) || 9));
@@ -197,6 +257,8 @@ function landTileCost(ownedCount, starterCount = 9) {
   return 50 * (purchased + 1);
 }
 const LAND_TILE_COST = landTileCost;
+/** Relocate a placed HQ / building / bay on owned land. */
+const MOVE_BUILDING_COST = 25;
 
 /** Full yard is 12×12. Defaults used until admin saves a starter map. */
 const GRID_SIZE = 12;
@@ -410,12 +472,19 @@ function normalizeSpriteAnchor(raw = {}) {
   };
 }
 
+function normalizeAnchorMapKey(key) {
+  const raw = String(key || '').split('/').pop();
+  const m = String(raw || '').match(/^(.+\.png)(?:@(NE|SE|SW|NW))?$/i);
+  if (!m) return '';
+  return m[2] ? `${m[1]}@${m[2].toUpperCase()}` : m[1];
+}
+
 function normalizeSpriteAnchors(map = {}) {
   const out = {};
   if (!map || typeof map !== 'object') return out;
   for (const [key, val] of Object.entries(map)) {
-    const file = String(key || '').split('/').pop();
-    if (!file || !file.endsWith('.png')) continue;
+    const file = normalizeAnchorMapKey(key);
+    if (!file) continue;
     out[file] = normalizeSpriteAnchor(val);
   }
   return out;
@@ -447,11 +516,23 @@ async function saveSpriteAnchors(db, raw, { uid = '', fullName = '', FieldValue 
 
 function roadKeySet(depotOrConfig) {
   const roads = depotOrConfig?.roadTiles || DEFAULT_ROAD_TILES;
-  return new Set(roads.map((t) => (typeof t === 'string' ? t : tileKey(t.x, t.y))));
+  const set = new Set(roads.map((t) => (typeof t === 'string' ? t : tileKey(t.x, t.y))));
+  // Player-built roads live as placements (still count as road for access).
+  for (const p of depotOrConfig?.placements || []) {
+    if (p && p.type === 'road') set.add(tileKey(p.x, p.y));
+  }
+  return set;
 }
 
 function isRoadTile(x, y, depotOrConfig = null) {
   return roadKeySet(depotOrConfig).has(tileKey(x, y));
+}
+
+/** Parking bays must sit on a tile that touches a road (edge-adjacent). */
+function bayTouchesRoad(x, y, depotOrConfig = null) {
+  return [[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => (
+    isRoadTile(x + dx, y + dy, depotOrConfig)
+  ));
 }
 
 function isBuildableTile(x, y, depotOrConfig = null) {
@@ -490,39 +571,46 @@ const STAFF_GRADES = {
   casual: {
     grade: 'casual',
     label: 'Casual driver',
-    hireCost: 40,
+    hireCost: 2,
     maxVehicleTier: 1,
+    /** Temp hire — removed after this many completed jobs. */
+    contractJobs: 1,
     requires: {},
   },
   fullTime: {
     grade: 'fullTime',
     label: 'Full-time driver',
-    hireCost: 280,
+    hireCost: 180,
     maxVehicleTier: 2,
     requires: { trainingCentre: 1 },
   },
   privateHire: {
     grade: 'privateHire',
     label: 'Private hire driver',
-    hireCost: 1400,
+    hireCost: 900,
     maxVehicleTier: 3,
     requires: { trainingCentre: 2 },
   },
   tour: {
     grade: 'tour',
     label: 'Tour driver',
-    hireCost: 6500,
+    hireCost: 4500,
     maxVehicleTier: 5,
     requires: { trainingCentre: 3 },
   },
 };
+
+function staffContractJobs(grade) {
+  const n = STAFF_GRADES[grade]?.contractJobs;
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : null;
+}
 
 const VEHICLE_TIERS = {
   1: {
     tier: 1,
     key: 'minibus',
     label: 'Minibus',
-    buyCost: 60,
+    buyCost: 40,
     minStaffGrade: 'casual',
     requires: {},
     color: 0xb45309, // minibus amber-brown
@@ -531,7 +619,7 @@ const VEHICLE_TIERS = {
     tier: 2,
     key: 'coach',
     label: 'Coach',
-    buyCost: 450,
+    buyCost: 320,
     minStaffGrade: 'fullTime',
     requires: { workshop: 1 },
     color: 0xf59e0b, // amber
@@ -540,7 +628,7 @@ const VEHICLE_TIERS = {
     tier: 3,
     key: 'exec_coach',
     label: 'Exec coach',
-    buyCost: 2800,
+    buyCost: 2200,
     minStaffGrade: 'privateHire',
     requires: { workshop: 2 },
     color: 0x38bdf8, // sky blue
@@ -549,7 +637,7 @@ const VEHICLE_TIERS = {
     tier: 4,
     key: 'electric_coach',
     label: 'Electric coach',
-    buyCost: 12000,
+    buyCost: 9000,
     minStaffGrade: 'tour',
     requires: { chargers: 1 },
     color: 0x34d399, // green
@@ -559,7 +647,7 @@ const VEHICLE_TIERS = {
     tier: 5,
     key: 'super_exec',
     label: 'Super exec coach',
-    buyCost: 35000,
+    buyCost: 28000,
     minStaffGrade: 'tour',
     requires: { workshop: 3 },
     color: 0xa78bfa, // purple
@@ -571,8 +659,8 @@ const JOB_TYPES = {
     key: 'council_school',
     label: 'Council school run',
     blurb: 'Morning council school contract.',
-    durationMs: 4 * 60 * 60 * 1000,
-    baseReward: 14,
+    durationMs: 2.5 * 60 * 60 * 1000,
+    baseReward: 28,
     minStaffGrade: 'casual',
     minVehicleTier: 1,
     requires: {},
@@ -581,8 +669,8 @@ const JOB_TYPES = {
     key: 'private_school',
     label: 'Private school run',
     blurb: 'Needs a full-time driver and a coach.',
-    durationMs: 6 * 60 * 60 * 1000,
-    baseReward: 36,
+    durationMs: 4 * 60 * 60 * 1000,
+    baseReward: 70,
     minStaffGrade: 'fullTime',
     minVehicleTier: 2,
     requires: { trainingCentre: 1 },
@@ -591,8 +679,8 @@ const JOB_TYPES = {
     key: 'private_hire',
     label: 'Private hire',
     blurb: 'Needs a PH driver and an exec coach.',
-    durationMs: 12 * 60 * 60 * 1000,
-    baseReward: 110,
+    durationMs: 8 * 60 * 60 * 1000,
+    baseReward: 200,
     minStaffGrade: 'privateHire',
     minVehicleTier: 3,
     requires: { trainingCentre: 2 },
@@ -601,8 +689,8 @@ const JOB_TYPES = {
     key: 'tour',
     label: 'Tour',
     blurb: 'Needs tour office, tour driver and an exec coach.',
-    durationMs: 96 * 60 * 60 * 1000,
-    baseReward: 220,
+    durationMs: 36 * 60 * 60 * 1000,
+    baseReward: 420,
     minStaffGrade: 'tour',
     minVehicleTier: 3,
     requires: { tourOffice: 1 },
@@ -611,8 +699,8 @@ const JOB_TYPES = {
     key: 'continental_tour',
     label: 'Continental tour',
     blurb: 'Needs Tour office Lv 2, tour driver and an exec coach.',
-    durationMs: 5 * 24 * 60 * 60 * 1000,
-    baseReward: 520,
+    durationMs: 3 * 24 * 60 * 60 * 1000,
+    baseReward: 900,
     minStaffGrade: 'tour',
     minVehicleTier: 3,
     requires: { tourOffice: 2 },
@@ -621,8 +709,8 @@ const JOB_TYPES = {
     key: 'vip',
     label: 'VIP',
     blurb: 'Needs a tour driver and a super exec coach.',
-    durationMs: 48 * 60 * 60 * 1000,
-    baseReward: 480,
+    durationMs: 24 * 60 * 60 * 1000,
+    baseReward: 750,
     minStaffGrade: 'tour',
     minVehicleTier: 5,
     requires: { workshop: 3 },
@@ -673,14 +761,14 @@ function vehicleSellValue(tier) {
 
 /**
  * Workshop inspection cadence after claimed jobs.
- * No workshop: every job, 2h. Lv1: every 4 / 1h. Lv2: every 10 / 30m. Lv3: every 25 / 15m.
+ * No workshop: every 2 jobs / 45m. Lv1: every 4 / 1h. Lv2: every 10 / 30m. Lv3: every 25 / 15m.
  */
 function inspectionRules(workshopLevel) {
   const lvl = Math.max(0, Math.floor(Number(workshopLevel) || 0));
   if (lvl >= 3) return { every: 25, durationMs: 15 * 60 * 1000 };
   if (lvl >= 2) return { every: 10, durationMs: 30 * 60 * 1000 };
   if (lvl >= 1) return { every: 4, durationMs: 60 * 60 * 1000 };
-  return { every: 1, durationMs: 2 * 60 * 60 * 1000 };
+  return { every: 2, durationMs: 45 * 60 * 1000 };
 }
 
 function vehicleInspectingUntil(vehicle) {
@@ -709,6 +797,26 @@ function applyInspectionAfterClaim(depot, vehicleId) {
     };
   });
   return { ...depot, fleet };
+}
+
+/**
+ * Temp contracts (casual): decrement jobsRemaining after a claimed job; remove at 0.
+ * Returns { depot, departed } where departed is the removed staff row or null.
+ */
+function applyStaffContractAfterClaim(depot, staffId) {
+  if (!staffId) return { depot, departed: null };
+  let departed = null;
+  const staff = (depot.staff || []).map((s) => {
+    if (s.id !== staffId) return s;
+    if (s.jobsRemaining == null) return s;
+    const left = Math.max(0, Math.floor(Number(s.jobsRemaining) || 0) - 1);
+    if (left <= 0) {
+      departed = { id: s.id, name: s.name, grade: s.grade };
+      return null;
+    }
+    return { ...s, jobsRemaining: left };
+  }).filter(Boolean);
+  return { depot: { ...depot, staff }, departed };
 }
 
 function staffGradeRank(grade) {
@@ -789,9 +897,23 @@ function ownedSet(depot) {
 function occupiedSet(depot) {
   const set = new Set();
   for (const p of depot.placements || []) {
+    // Edge decorations (fences) share a pad with buildings / other edge pieces.
+    if (p.type === 'decoration' && DECORATIONS[p.key]?.edge) continue;
     set.add(tileKey(p.x, p.y));
   }
   return set;
+}
+
+function edgeDecorationTaken(depot, x, y, facing, { exceptId = null } = {}) {
+  const edge = normalizeDecorFacing(facing);
+  return (depot.placements || []).some((p) => (
+    p.type === 'decoration'
+    && DECORATIONS[p.key]?.edge
+    && p.x === x
+    && p.y === y
+    && normalizeDecorFacing(p.facing) === edge
+    && (!exceptId || p.id !== exceptId)
+  ));
 }
 
 function freeOwnedTiles(depot) {
@@ -856,9 +978,11 @@ function plotsUsed(depot) {
 }
 
 function staffCap(depot) {
+  const ops = buildingLevel(depot, 'opsOffice');
   const breakRoom = buildingLevel(depot, 'breakRoom');
   const training = buildingLevel(depot, 'trainingCentre');
-  return 1 + breakRoom * 2 + training * 2;
+  // Ops Lv1 raises cap to 3 so early bays/hires matter before Training unlocks.
+  return 2 + ops + breakRoom * 2 + training * 2;
 }
 
 function emptyDepot(mapConfig = null) {
@@ -877,7 +1001,12 @@ function emptyDepot(mapConfig = null) {
     roadTiles: meta.roadTiles,
     buildableTiles: meta.buildableTiles,
     blockedTiles: meta.blockedTiles,
-    staff: [{ id: staffId, grade: 'casual', name: randomStaffName() }],
+    staff: [{
+      id: staffId,
+      grade: 'casual',
+      name: randomStaffName(),
+      jobsRemaining: staffContractJobs('casual'),
+    }],
     fleet: [{
       id: vehicleId,
       tier: 1,
@@ -1007,11 +1136,43 @@ function normalizePlacements(list, officeLevel = 0, depotOrConfig = null) {
   let hasHq = false;
   let bays = 0;
   let legacyChargers = false;
+  const mapRoads = new Set(
+    (depotOrConfig?.roadTiles || DEFAULT_ROAD_TILES).map((t) => (
+      typeof t === 'string' ? t : tileKey(t.x, t.y)
+    )),
+  );
   for (const raw of list.slice(0, 200)) {
     const x = Math.floor(Number(raw.x));
     const y = Math.floor(Number(raw.y));
-    if (!inGrid(x, y) || isRoadTile(x, y, depotOrConfig)) continue;
+    if (!inGrid(x, y)) continue;
     const type = String(raw.type || '');
+    if (type === 'road') {
+      // Player roads — skip if they duplicate a map road tile.
+      if (mapRoads.has(tileKey(x, y))) continue;
+      out.push({
+        id: String(raw.id || newId('road')),
+        type: 'road',
+        key: 'road',
+        level: 1,
+        x,
+        y,
+      });
+      continue;
+    }
+    if (type === 'decoration' && DECORATIONS[raw.key]) {
+      if (mapRoads.has(tileKey(x, y))) continue;
+      out.push({
+        id: String(raw.id || newId('decor')),
+        type: 'decoration',
+        key: String(raw.key),
+        level: 1,
+        facing: normalizeDecorFacing(raw.facing, 'SE'),
+        x,
+        y,
+      });
+      continue;
+    }
+    if (mapRoads.has(tileKey(x, y))) continue;
     if (type === 'hq') {
       hasHq = true;
       out.push({
@@ -1080,16 +1241,34 @@ function normalizeOwnedTiles(list, depotOrConfig = null) {
 }
 
 function normalizeStaff(list) {
-  if (!Array.isArray(list) || !list.length) {
-    return [{ id: newId('staff'), grade: 'casual', name: randomStaffName() }];
+  // Allow an empty roster (e.g. last casual finished their one job).
+  if (!Array.isArray(list)) {
+    return [{
+      id: newId('staff'),
+      grade: 'casual',
+      name: randomStaffName(),
+      jobsRemaining: staffContractJobs('casual'),
+    }];
   }
   return list.slice(0, 40).map((s) => {
     const migrated = STAFF_GRADE_MIGRATE[s.grade] || s.grade;
     const grade = STAFF_GRADES[migrated] ? migrated : 'casual';
+    const contract = staffContractJobs(grade);
+    let jobsRemaining = null;
+    if (contract != null) {
+      if (s.jobsRemaining != null && Number.isFinite(Number(s.jobsRemaining))) {
+        jobsRemaining = Math.max(0, Math.floor(Number(s.jobsRemaining)));
+      } else if (s.contract === true || s.temp === true) {
+        // Explicit temp flag without a counter — start a fresh contract.
+        jobsRemaining = contract;
+      }
+      // Legacy casuals with no jobsRemaining stay permanent (null).
+    }
     return {
       id: String(s.id || newId('staff')),
       grade,
       name: String(s.name || randomStaffName()).slice(0, 40),
+      jobsRemaining,
     };
   });
 }
@@ -1360,24 +1539,32 @@ function serializeDepot(depot, { jobs = [], walletBalance = 0, sandbox = false }
   const busyFleet = new Set(active.map((j) => j.vehicleId).filter(Boolean));
   const busySlots = new Set(active.map((j) => j.driverSlot).filter((n) => n != null));
 
-  const staff = (depot.staff || []).map((s, index) => {
-    const busy = busyStaff.has(s.id) || busySlots.has(index);
+  // driverSlot is the fleet bay index, NOT the staff roster index — never use it for staff busy.
+  const staff = (depot.staff || []).map((s) => {
+    const busy = busyStaff.has(s.id);
     const nextGrade = nextStaffGrade(s.grade);
     const nextDef = nextGrade ? STAFF_GRADES[nextGrade] : null;
     const trainCost = nextGrade ? trainStaffCost(nextGrade) : null;
     const trainLock = nextGrade
       ? (meetsRequires(depot, nextDef.requires || {}) || null)
       : 'Max grade';
+    const contractJobs = staffContractJobs(s.grade);
+    const jobsRemaining = s.jobsRemaining != null
+      ? Math.max(0, Math.floor(Number(s.jobsRemaining) || 0))
+      : null;
     return {
       ...s,
       busy,
-      jobId: active.find((j) => j.staffId === s.id || j.driverSlot === index)?.id || null,
+      jobId: active.find((j) => j.staffId === s.id)?.id || null,
       gradeLabel: STAFF_GRADES[s.grade]?.label || s.grade,
       nextGrade,
       nextGradeLabel: nextDef?.label || null,
       trainCost,
       canTrain: Boolean(nextGrade && !trainLock && !busy),
       trainLockReason: trainLock,
+      contractJobs,
+      jobsRemaining,
+      tempHire: jobsRemaining != null,
     };
   });
 
@@ -1532,6 +1719,13 @@ function serializeDepot(depot, { jobs = [], walletBalance = 0, sandbox = false }
     const def = STAFF_GRADES[grade];
     const lockReason = staffHireLockedReason(depot, grade);
     const requirements = meetsRequires(depot, def.requires || {});
+    const contractJobs = staffContractJobs(grade);
+    const tierBlurb = `Drives up to tier ${def.maxVehicleTier}`;
+    const contractBlurb = contractJobs === 1
+      ? 'Lasts 1 job only — then leaves'
+      : (contractJobs != null
+        ? `Lasts ${contractJobs} jobs — then leaves`
+        : 'Permanent hire');
     return {
       grade,
       label: def.label,
@@ -1541,6 +1735,8 @@ function serializeDepot(depot, { jobs = [], walletBalance = 0, sandbox = false }
       lockReason: lockReason || null,
       requirements: requirements || null,
       maxVehicleTier: def.maxVehicleTier,
+      contractJobs,
+      blurb: `${contractBlurb} · ${tierBlurb}`,
     };
   });
 
@@ -1558,6 +1754,26 @@ function serializeDepot(depot, { jobs = [], walletBalance = 0, sandbox = false }
       requirements: requirements || null,
       minStaffGrade: def.minStaffGrade,
       color: def.color,
+    };
+  });
+
+  const roadShop = {
+    cost: ROAD_BUILD_COST,
+    label: 'Road',
+    effect: 'Service road — parking bays must touch a road.',
+  };
+
+  const decorationShop = DECORATION_KEYS.map((key) => {
+    const def = DECORATIONS[key];
+    return {
+      key,
+      label: def.label,
+      cost: def.cost,
+      blurb: def.blurb,
+      decoration: true,
+      facings: Boolean(def.facings),
+      edge: Boolean(def.edge),
+      facingOptions: def.facings ? [...DECOR_FACINGS] : null,
     };
   });
 
@@ -1613,10 +1829,22 @@ function serializeDepot(depot, { jobs = [], walletBalance = 0, sandbox = false }
     buildingShop,
     hireShop,
     fleetShop,
+    roadShop,
+    decorationShop,
     grid: {
       size: GRID_SIZE,
       ownedTiles: (depot.ownedTiles || []).map((k) => parseTileKey(k)).filter(Boolean),
-      roadTiles: (depot.roadTiles || DEFAULT_ROAD_TILES).map((t) => ({ ...t })),
+      roadTiles: (() => {
+        const mapRoads = (depot.roadTiles || DEFAULT_ROAD_TILES).map((t) => ({ ...t }));
+        const keys = new Set(mapRoads.map((t) => tileKey(t.x, t.y)));
+        for (const p of depot.placements || []) {
+          if (p.type === 'road' && !keys.has(tileKey(p.x, p.y))) {
+            mapRoads.push({ x: p.x, y: p.y });
+            keys.add(tileKey(p.x, p.y));
+          }
+        }
+        return mapRoads;
+      })(),
       buildableTiles: (depot.buildableTiles || []).map((k) => parseTileKey(k)).filter(Boolean),
       blockedTiles: (depot.blockedTiles || []).map((k) => parseTileKey(k)).filter(Boolean),
       placements: (depot.placements || []).map((p) => ({ ...p })),
@@ -1672,7 +1900,7 @@ function serializeDepot(depot, { jobs = [], walletBalance = 0, sandbox = false }
       every: inspectRules.every,
       durationMs: inspectRules.durationMs,
       blurb: workshopLevel < 1
-        ? 'No workshop — every job needs a 2h inspection.'
+        ? `No workshop — inspection every ${inspectRules.every} jobs (${Math.round(inspectRules.durationMs / 60000)} min).`
         : `Workshop Lv ${workshopLevel} — inspection every ${inspectRules.every} jobs (${Math.round(inspectRules.durationMs / 60000)} min).`,
     },
     buildingsView: {
@@ -1696,11 +1924,9 @@ function serializeDepot(depot, { jobs = [], walletBalance = 0, sandbox = false }
 function pickDispatchAssets(depot, jobType, activeJobs, { staffId = null, vehicleId = null } = {}) {
   const busyStaff = new Set(activeJobs.map((j) => j.staffId).filter(Boolean));
   const busyFleet = new Set(activeJobs.map((j) => j.vehicleId).filter(Boolean));
+  // driverSlot indexes the fleet bay only — apply to vehicles, not staff roster.
   const busySlots = new Set(activeJobs.map((j) => j.driverSlot).filter((n) => n != null));
 
-  depot.staff.forEach((s, i) => {
-    if (busySlots.has(i)) busyStaff.add(s.id);
-  });
   depot.fleet.forEach((v, i) => {
     if (busySlots.has(i)) busyFleet.add(v.id);
   });
@@ -1840,6 +2066,9 @@ function applyPurchase(depot, kind, opts = {}) {
       }
     }
     if (!spot) return { error: 'Need a free owned tile for a bay.' };
+    if (!bayTouchesRoad(spot.x, spot.y, next) && !sandbox) {
+      return { error: 'Parking bays must connect to a road. Build a road next to this tile first.' };
+    }
     const cost = BAY_COST(maxBays(next) + 1);
     const placements = [
       ...next.placements,
@@ -1849,6 +2078,59 @@ function applyPurchase(depot, kind, opts = {}) {
       depot: syncDerived({ ...next, placements }),
       cost,
       label: 'Parking bay',
+    };
+  }
+
+  if (kind === 'road') {
+    if (tx == null || ty == null) return { error: 'Pick a tile for the road.' };
+    if (!ownedSet(next).has(tileKey(tx, ty))) return { error: 'Road must sit on owned land.' };
+    if (occupiedSet(next).has(tileKey(tx, ty))) return { error: 'Tile already occupied.' };
+    if (isRoadTile(tx, ty, next)) return { error: 'Already a road.' };
+    if (!isBuildableTile(tx, ty, next) && !sandbox) return { error: 'That tile is not buildable.' };
+    const placements = [
+      ...next.placements,
+      { id: newId('road'), type: 'road', key: 'road', level: 1, x: tx, y: ty },
+    ];
+    return {
+      depot: syncDerived({ ...next, placements }),
+      cost: ROAD_BUILD_COST,
+      label: 'Road',
+    };
+  }
+
+  if (kind === 'decoration') {
+    const key = String(opts.key || '').trim();
+    const def = DECORATIONS[key];
+    if (!def) return { error: 'Unknown decoration.' };
+    if (tx == null || ty == null) return { error: 'Pick a tile for the decoration.' };
+    if (!ownedSet(next).has(tileKey(tx, ty))) return { error: 'Must place on owned land.' };
+    if (isRoadTile(tx, ty, next)) return { error: 'Cannot decorate a road.' };
+    if (!isBuildableTile(tx, ty, next) && !sandbox) return { error: 'That tile is not buildable.' };
+    const facing = normalizeDecorFacing(opts.facing, 'SE');
+    if (def.edge) {
+      if (edgeDecorationTaken(next, tx, ty, facing)) {
+        return { error: `That ${facing} edge already has a fence.` };
+      }
+    } else if (occupiedSet(next).has(tileKey(tx, ty))) {
+      return { error: 'Tile already occupied.' };
+    }
+    const placements = [
+      ...next.placements,
+      {
+        id: newId('decor'),
+        type: 'decoration',
+        key,
+        level: 1,
+        facing,
+        x: tx,
+        y: ty,
+      },
+    ];
+    const edgeLabel = def.edge ? ` · ${facing} edge` : (def.facings ? ` · ${facing}` : '');
+    return {
+      depot: syncDerived({ ...next, placements }),
+      cost: def.cost,
+      label: `${def.label}${edgeLabel} (decoration)`,
     };
   }
 
@@ -1944,6 +2226,61 @@ function applyPurchase(depot, kind, opts = {}) {
     };
   }
 
+  if (kind === 'moveBuilding' || kind === 'move') {
+    if (tx == null || ty == null) return { error: 'Pick a free pad to move to.' };
+    if (!ownedSet(next).has(tileKey(tx, ty)) && !sandbox) {
+      return { error: 'Must move onto owned land.' };
+    }
+    if (isRoadTile(tx, ty, next)) return { error: 'Cannot move onto the road.' };
+    if (!isBuildableTile(tx, ty, next) && !sandbox) {
+      return { error: 'That tile is not buildable.' };
+    }
+
+    const key = String(opts.key || '').trim();
+    const bayId = opts.bayId ? String(opts.bayId) : null;
+    let target = null;
+    if (bayId) {
+      target = next.placements.find((p) => p.type === 'bay' && p.id === bayId) || null;
+    } else if (key === 'office' || key === 'hq') {
+      target = next.placements.find((p) => p.type === 'hq') || null;
+    } else if (key) {
+      target = next.placements.find((p) => p.type === 'building' && p.key === key) || null;
+    }
+    if (!target) return { error: 'Building not found.' };
+    if (target.x === tx && target.y === ty) {
+      return { error: 'Pick a different pad.' };
+    }
+
+    const occ = occupiedSet(next);
+    occ.delete(tileKey(target.x, target.y));
+    if (occ.has(tileKey(tx, ty))) return { error: 'Tile already occupied.' };
+
+    if (target.type === 'bay' && !bayTouchesRoad(tx, ty, next) && !sandbox) {
+      return { error: 'Parking bays must connect to a road.' };
+    }
+
+    if (!ownedSet(next).has(tileKey(tx, ty))) {
+      next = syncDerived({
+        ...next,
+        ownedTiles: [...next.ownedTiles, tileKey(tx, ty)],
+      });
+    }
+
+    const placements = next.placements.map((p) => (
+      p.id === target.id ? { ...p, x: tx, y: ty } : p
+    ));
+    const label = target.type === 'hq'
+      ? 'HQ'
+      : (target.type === 'bay'
+        ? 'Parking bay'
+        : (BUILDINGS[target.key]?.label || target.key || 'Building'));
+    return {
+      depot: syncDerived({ ...next, placements }),
+      cost: MOVE_BUILDING_COST,
+      label: `Move ${label}`,
+    };
+  }
+
   if (kind === 'charger' || kind === 'bayCharger') {
     const bayId = opts.bayId ? String(opts.bayId) : null;
     const lock = chargerBayLockedReason(next, bayId, tx, ty);
@@ -1985,14 +2322,22 @@ function applyPurchase(depot, kind, opts = {}) {
       const lock = staffHireLockedReason(next, grade);
       if (lock) return { error: lock };
     }
+    const contract = staffContractJobs(grade);
     const staff = [
       ...next.staff,
-      { id: newId('staff'), grade, name: randomStaffName() },
+      {
+        id: newId('staff'),
+        grade,
+        name: randomStaffName(),
+        jobsRemaining: contract,
+      },
     ];
     return {
       depot: { ...next, staff },
       cost: def.hireCost,
-      label: def.label,
+      label: contract === 1
+        ? `${def.label} (1 job)`
+        : def.label,
     };
   }
 
@@ -2054,8 +2399,11 @@ function applyPurchase(depot, kind, opts = {}) {
     const lock = meetsRequires(next, def.requires || {});
     if (lock) return { error: lock };
     const cost = trainStaffCost(toGrade);
+    const nextContract = staffContractJobs(toGrade);
     const staff = next.staff.map((s) => (
-      s.id === staffId ? { ...s, grade: toGrade } : s
+      s.id === staffId
+        ? { ...s, grade: toGrade, jobsRemaining: nextContract }
+        : s
     ));
     return {
       depot: { ...next, staff },
@@ -2085,6 +2433,85 @@ function applyPurchase(depot, kind, opts = {}) {
     };
   }
 
+  if (kind === 'rotateDecoration') {
+    const placementId = String(opts.placementId || opts.id || '').trim();
+    const target = next.placements.find((p) => p.type === 'decoration' && p.id === placementId);
+    if (!target) return { error: 'Decoration not found.' };
+    const def = DECORATIONS[target.key];
+    if (!def?.facings) return { error: 'That decoration cannot be rotated.' };
+    const current = normalizeDecorFacing(target.facing, 'SE');
+    const start = DECOR_FACINGS.indexOf(current);
+    let nextFacing = current;
+    for (let step = 1; step <= DECOR_FACINGS.length; step += 1) {
+      const candidate = DECOR_FACINGS[(start + step) % DECOR_FACINGS.length];
+      if (def.edge && edgeDecorationTaken(next, target.x, target.y, candidate, { exceptId: target.id })) {
+        continue;
+      }
+      nextFacing = candidate;
+      break;
+    }
+    if (nextFacing === current) {
+      return { error: 'No free edge to rotate onto.' };
+    }
+    const placements = next.placements.map((p) => (
+      p.id === target.id ? { ...p, facing: nextFacing } : p
+    ));
+    return {
+      depot: syncDerived({ ...next, placements }),
+      cost: 0,
+      label: `Rotated ${def.label} → ${nextFacing}`,
+    };
+  }
+
+  if (kind === 'setDecorationFacing') {
+    const placementId = String(opts.placementId || opts.id || '').trim();
+    const target = next.placements.find((p) => p.type === 'decoration' && p.id === placementId);
+    if (!target) return { error: 'Decoration not found.' };
+    const def = DECORATIONS[target.key];
+    if (!def?.facings) return { error: 'That decoration cannot be rotated.' };
+    const facing = normalizeDecorFacing(opts.facing, target.facing || 'SE');
+    if (def.edge && edgeDecorationTaken(next, target.x, target.y, facing, { exceptId: target.id })) {
+      return { error: `That ${facing} edge already has a fence.` };
+    }
+    const placements = next.placements.map((p) => (
+      p.id === target.id ? { ...p, facing } : p
+    ));
+    return {
+      depot: syncDerived({ ...next, placements }),
+      cost: 0,
+      label: `${def.label} → ${facing}`,
+    };
+  }
+
+  if (kind === 'sellPlacement' || kind === 'sellDecoration' || kind === 'sellRoad') {
+    const placementId = String(opts.placementId || opts.id || '').trim();
+    const target = next.placements.find((p) => p.id === placementId);
+    if (!target) return { error: 'Item not found.' };
+    if (target.type === 'decoration') {
+      const def = DECORATIONS[target.key];
+      if (!def) return { error: 'Unknown decoration.' };
+      const refund = Math.max(1, Math.floor(def.cost * 0.5));
+      const placements = next.placements.filter((p) => p.id !== target.id);
+      return {
+        depot: syncDerived({ ...next, placements }),
+        cost: -refund,
+        refund,
+        label: `Sold ${def.label}`,
+      };
+    }
+    if (target.type === 'road') {
+      const refund = Math.max(1, Math.floor(ROAD_BUILD_COST * 0.5));
+      const placements = next.placements.filter((p) => p.id !== target.id);
+      return {
+        depot: syncDerived({ ...next, placements }),
+        cost: -refund,
+        refund,
+        label: 'Sold road',
+      };
+    }
+    return { error: 'That item cannot be sold here.' };
+  }
+
   if (kind === 'skipInspection') {
     if (!sandbox) return { error: 'Admin sandbox only.' };
     const vehicleId = String(opts.vehicleId || opts.id || '').trim();
@@ -2109,6 +2536,10 @@ module.exports = {
   AGES,
   BUILDINGS,
   BUILDING_KEYS,
+  DECORATIONS,
+  DECORATION_KEYS,
+  DECOR_FACINGS,
+  ROAD_BUILD_COST,
   STAFF_GRADES,
   STAFF_GRADE_ORDER,
   VEHICLE_TIERS,
@@ -2140,8 +2571,12 @@ module.exports = {
   jobDispatchReadyReason,
   pickDispatchAssets,
   applyPurchase,
+  MOVE_BUILDING_COST,
   applyInspectionAfterClaim,
+  applyStaffContractAfterClaim,
   staffGradeRank,
+  staffContractJobs,
+  bayTouchesRoad,
   randomUkReg,
   inspectionRules,
   upgradeLockedReason: () => null,

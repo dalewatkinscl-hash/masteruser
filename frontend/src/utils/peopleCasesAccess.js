@@ -118,9 +118,8 @@ export const GRIEVANCE_STAGES = [
 ];
 
 export const ACCIDENT_STAGES = [
+  'recorded',
   'triage',
-  'investigation',
-  'training_decision',
   'closed',
 ];
 
@@ -196,9 +195,11 @@ export function normalizeStage(processFamily, stage) {
     return GRIEVANCE_STAGES.includes(raw) ? raw : 'acknowledged';
   }
   if (processFamily === 'vehicle_accident') {
-    if (raw === 'reported') return 'triage';
-    if (raw === 'minutes_signoff') return 'investigation';
-    return ACCIDENT_STAGES.includes(raw) ? raw : 'triage';
+    if (raw === 'reported') return 'recorded';
+    if (raw === 'investigation' || raw === 'training_decision' || raw === 'minutes_signoff') {
+      return 'triage';
+    }
+    return ACCIDENT_STAGES.includes(raw) ? raw : 'recorded';
   }
   if (processFamily === 'samsara_coaching') {
     return 'closed';
@@ -224,7 +225,9 @@ export function stageAllowsDocumentation(processFamily, stage) {
   if (processFamily === 'samsara_coaching') return false;
   if (processFamily === 'record') return normalized === 'open' || normalized === 'closed';
   if (processFamily === 'grievance') return normalized !== 'acknowledged';
-  if (processFamily === 'vehicle_accident') return normalized !== 'triage';
+  if (processFamily === 'vehicle_accident') {
+    return normalized === 'triage' || normalized === 'closed';
+  }
   return true;
 }
 
@@ -237,8 +240,8 @@ export function documentationEmptyMessage(processFamily, stage, listFilter = 'st
     if (processFamily === 'grievance' && normalized === 'acknowledged') {
       return 'This stage is for acknowledging the grievance only. Documentation and interviews are added from investigation onwards — see the progress panel above for acknowledgement details.';
     }
-    if (processFamily === 'vehicle_accident' && normalized === 'triage') {
-      return 'This stage is for triage only. Documentation and interviews are added from investigation onwards.';
+    if (processFamily === 'vehicle_accident' && normalized === 'recorded') {
+      return 'Awaiting the driver’s bump card. Documentation appears after the bump card is submitted.';
     }
     return 'Nothing is recorded at this stage.';
   }
@@ -363,18 +366,27 @@ export function getCaseProgressStatus(caseItem = {}) {
   }
 
   if (family === 'vehicle_accident') {
+    if (stage === 'recorded') {
+      return {
+        label: `${prefix} — awaiting bump card`,
+        hint: caseItem.vehicleReg
+          ? `Driver to complete bump card for ${caseItem.vehicleReg}`
+          : 'Driver to complete bump card',
+        tone: 'amber',
+        stage,
+      };
+    }
     if (stage === 'triage') {
-      return { label: `${prefix} — awaiting triage`, hint: 'Confirm incident details', tone, stage };
-    }
-    if (stage === 'investigation') {
-      return { label: `${prefix} — awaiting investigation`, hint: 'Interview and evidence', tone, stage };
-    }
-    if (stage === 'training_decision') {
-      return { label: `${prefix} — awaiting training decision`, hint: 'Training / disciplinary / NFA', tone: 'amber', stage };
+      return {
+        label: `${prefix} — awaiting fault decision`,
+        hint: 'Third party at fault closes; driver at fault continues as disciplinary',
+        tone,
+        stage,
+      };
     }
     if (stage === 'closed') {
-      const decision = caseItem.trainingDecision || caseItem.outcomePreset || 'recorded';
-      return { label: `${prefix} — ${stageLabel(decision)}`, hint: 'Case closed', tone: 'slate', stage };
+      const decision = caseItem.accidentFault || caseItem.trainingDecision || caseItem.outcomePreset || 'closed';
+      return { label: `${prefix} — ${stageLabel(decision)}`, hint: 'Accident case closed', tone: 'slate', stage };
     }
   }
 

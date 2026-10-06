@@ -164,6 +164,15 @@ const KNOWN_PORTALS = [
       { value: 'admin', label: 'Admin' },
     ],
   },
+  {
+    key: 'vehicles_app',
+    label: 'Vehicles',
+    roles: [
+      { value: 'viewer', label: 'Viewer' },
+      { value: 'manager', label: 'Manager' },
+      { value: 'admin', label: 'Admin' },
+    ],
+  },
 ];
 
 function buildPortalsAccess(existing = {}) {

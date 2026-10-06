@@ -162,6 +162,8 @@ export default function WorkspaceTabs({ activeProfileTab = null, onProfileTabCha
     { id: 'profile', label: t('tabs.profile'), kind: 'profile', profileTab: 'profile' },
     { id: 'cases-inbox', label: t('tabs.myCases'), kind: 'profile', profileTab: 'cases', showDot: caseActionCount > 0 },
     { id: 'fun', label: t('tabs.fun'), kind: 'profile', profileTab: 'fun' },
+    { id: 'coachdepot', label: t('tabs.coachDepot'), kind: 'profile', profileTab: 'coachdepot' },
+    { id: 'coachcapitalist', label: t('tabs.coachCapitalist'), kind: 'profile', profileTab: 'coachcapitalist' },
     { id: 'polls', label: t('tabs.polls'), kind: 'profile', profileTab: 'polls' },
     {
       id: 'suggestions',

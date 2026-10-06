@@ -12,6 +12,8 @@ import { LetterboxSandbox } from '../components/LetterboxPanel';
 import { PipesSandbox } from '../components/PipesPanel';
 import { StackWalkSandbox } from '../components/StackWalkPanel';
 import { CoachDepotSandbox } from '../components/CoachDepotPanel';
+import { CoachCapitalistSandbox } from '../components/CoachCapitalistPanel';
+import CoachDepotArtPreview from '../components/CoachDepotArtPreview';
 import { CasefileSandbox } from '../components/CasefilePanel';
 import { ToolboxKickSandbox } from '../components/ToolboxKickPanel';
 import { WantedSandbox } from '../components/WantedPanel';
@@ -373,6 +375,8 @@ const TABS = [
   { id: 'pipes', label: 'Dev · Pipes' },
   { id: 'stackwalk', label: "Dev · O Dell's Amazon Run" },
   { id: 'coachdepot', label: 'Dev · Coach Depot' },
+  { id: 'coachdepot-art', label: 'Dev · Depot art preview' },
+  { id: 'coachcapitalist', label: 'Dev · Coach Capitalist' },
   { id: 'casefile', label: 'Dev · Casefile' },
   { id: 'toolboxkick', label: 'Dev · Little Dicks Toolbox' },
   { id: 'geoguessr', label: 'GeoGuessr' },
@@ -817,6 +821,11 @@ function CoinWalletsPanel() {
   const [ledgerByUid, setLedgerByUid] = useState({});
   const [ledgerLoadingUid, setLedgerLoadingUid] = useState('');
   const [ledgerError, setLedgerError] = useState('');
+  const [grantAmount, setGrantAmount] = useState('');
+  const [grantMessage, setGrantMessage] = useState('');
+  const [grantBusy, setGrantBusy] = useState(false);
+  const [grantError, setGrantError] = useState('');
+  const [grantOk, setGrantOk] = useState('');
 
   const load = async () => {
     try {
@@ -846,18 +855,11 @@ function CoinWalletsPanel() {
     ));
   }, [wallets, query]);
 
-  const toggleRow = async (uid) => {
-    if (expandedUid === uid) {
-      setExpandedUid('');
-      setLedgerError('');
-      return;
-    }
-    setExpandedUid(uid);
-    setLedgerError('');
-    if (ledgerByUid[uid]) return;
-
+  const loadLedger = async (uid, { force = false } = {}) => {
+    if (!force && ledgerByUid[uid]) return;
     try {
       setLedgerLoadingUid(uid);
+      setLedgerError('');
       const response = await fetch(`/api/adminGetCoinWalletLedger?uid=${encodeURIComponent(uid)}`, {
         credentials: 'include',
       });
@@ -871,6 +873,84 @@ function CoinWalletsPanel() {
       setLedgerError(err.message || 'Failed to load transactions.');
     } finally {
       setLedgerLoadingUid('');
+    }
+  };
+
+  const toggleRow = async (uid) => {
+    if (expandedUid === uid) {
+      setExpandedUid('');
+      setLedgerError('');
+      setGrantError('');
+      setGrantOk('');
+      return;
+    }
+    setExpandedUid(uid);
+    setLedgerError('');
+    setGrantError('');
+    setGrantOk('');
+    setGrantAmount('');
+    setGrantMessage('');
+    await loadLedger(uid);
+  };
+
+  const sendCoins = async (uid, fullName) => {
+    const amount = Math.floor(Number(grantAmount));
+    const message = grantMessage.trim();
+    if (!Number.isFinite(amount) || amount < 1) {
+      setGrantError('Enter an amount of at least 1.');
+      return;
+    }
+    if (amount > 50000) {
+      setGrantError('Amount cannot exceed 50,000.');
+      return;
+    }
+    if (!message) {
+      setGrantError('Add a short message for the grant.');
+      return;
+    }
+
+    try {
+      setGrantBusy(true);
+      setGrantError('');
+      setGrantOk('');
+      const response = await fetch('/api/adminGrantCoins', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ uid, amount, message }),
+      });
+      const payload = (await readJsonResponse(response)) || {};
+      if (!response.ok) throw new Error(payload.error || 'Failed to send coins.');
+
+      setWallets((prev) => {
+        const next = prev.map((row) => (
+          row.uid === uid
+            ? {
+                ...row,
+                balance: Number(payload.balance) || row.balance,
+                lifetimeEarned: Number(payload.lifetimeEarned) || row.lifetimeEarned,
+              }
+            : row
+        ));
+        const exists = next.some((row) => row.uid === uid);
+        if (!exists) {
+          next.push({
+            uid,
+            fullName: fullName || payload.fullName || 'Employee',
+            balance: Number(payload.balance) || amount,
+            lifetimeEarned: Number(payload.lifetimeEarned) || amount,
+          });
+        }
+        return next.sort((a, b) => (Number(b.balance) || 0) - (Number(a.balance) || 0));
+      });
+      setGrantAmount('');
+      setGrantMessage('');
+      setGrantOk(`Sent ${amount} coins to ${fullName || 'employee'}.`);
+      await loadLedger(uid, { force: true });
+    } catch (err) {
+      setGrantError(err.message || 'Failed to send coins.');
+    } finally {
+      setGrantBusy(false);
     }
   };
 
@@ -890,6 +970,7 @@ function CoinWalletsPanel() {
       suggestion: 'Suggestion',
       daily_login: 'Daily login',
       training_assessment: 'Training assessment',
+      admin_grant: 'Admin grant',
     };
     return labels[reason] || String(reason || 'Reward').replace(/_/g, ' ');
   };
@@ -898,7 +979,7 @@ function CoinWalletsPanel() {
     <div className="space-y-4">
       <div className="rounded-xl border border-[#1a2540] p-4 space-y-2">
         <p className="text-sm text-slate-300">
-          Employee coin wallets. Click a row to expand recent transactions.
+          Employee coin wallets. Click a row to expand transactions and send coins with a message.
         </p>
         <p className="text-xs text-slate-500">
           Sorted by balance. Only people who have earned coins appear here.
@@ -973,7 +1054,48 @@ function CoinWalletsPanel() {
                   </button>
 
                   {open ? (
-                    <div className="px-4 pb-4 bg-[#060e1a]/60">
+                    <div className="px-4 pb-4 space-y-3 bg-[#060e1a]/60">
+                      <form
+                        className="rounded-lg border border-amber-500/25 bg-amber-500/5 p-3 space-y-2"
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          sendCoins(row.uid, row.fullName);
+                        }}
+                      >
+                        <p className="text-xs font-semibold text-amber-200">
+                          Send coins to {row.fullName}
+                        </p>
+                        <div className="flex flex-wrap gap-2">
+                          <input
+                            type="number"
+                            min={1}
+                            max={50000}
+                            step={1}
+                            value={grantAmount}
+                            onChange={(e) => setGrantAmount(e.target.value)}
+                            placeholder="Amount"
+                            className="w-28 bg-[#060e1a] border border-[#1a2540] rounded-lg px-3 py-2 text-sm text-slate-100 tabular-nums"
+                          />
+                          <input
+                            type="text"
+                            value={grantMessage}
+                            onChange={(e) => setGrantMessage(e.target.value)}
+                            placeholder="Message (required)"
+                            maxLength={280}
+                            className="min-w-[14rem] flex-1 bg-[#060e1a] border border-[#1a2540] rounded-lg px-3 py-2 text-sm text-slate-100"
+                          />
+                          <button
+                            type="submit"
+                            disabled={grantBusy}
+                            className="px-3 py-2 rounded-lg text-sm border border-amber-500/40 text-amber-100 hover:bg-amber-500/10 disabled:opacity-50"
+                          >
+                            {grantBusy ? 'Sending…' : 'Send'}
+                          </button>
+                        </div>
+                        {grantError ? <p className="text-xs text-rose-300">{grantError}</p> : null}
+                        {grantOk ? <p className="text-xs text-emerald-300">{grantOk}</p> : null}
+                      </form>
+
                       {ledgerBusy ? (
                         <p className="text-xs text-slate-500 py-2">Loading transactions…</p>
                       ) : ledgerError && !ledger ? (
@@ -990,15 +1112,24 @@ function CoinWalletsPanel() {
                               <span className="min-w-0">
                                 <span className="block text-slate-200 truncate">
                                   {reasonLabel(tx.reason)}
+                                  {tx.message ? ` — ${tx.message}` : ''}
                                 </span>
                                 <span className="block text-[10px] text-slate-500 truncate">
-                                  {[tx.dayKey, tx.gameKey, tx.createdAt ? new Date(tx.createdAt).toLocaleString() : null]
+                                  {[
+                                    tx.grantedByName ? `by ${tx.grantedByName}` : null,
+                                    tx.dayKey,
+                                    tx.gameKey,
+                                    tx.createdAt ? new Date(tx.createdAt).toLocaleString() : null,
+                                  ]
                                     .filter(Boolean)
                                     .join(' · ')}
                                 </span>
                               </span>
-                              <span className="flex-shrink-0 tabular-nums text-amber-200 font-semibold">
-                                +{tx.amount || 0}
+                              <span className={`flex-shrink-0 tabular-nums font-semibold ${
+                                Number(tx.amount) < 0 ? 'text-rose-300' : 'text-amber-200'
+                              }`}
+                              >
+                                {Number(tx.amount) < 0 ? '' : '+'}{tx.amount || 0}
                               </span>
                             </li>
                           ))}
@@ -1365,7 +1496,7 @@ export default function FunAdmin() {
   return (
     <div className="min-h-screen bg-cl-bg text-cl-fg">
       <WorkspaceTabs />
-      <div className={`${tab === 'geoguessr' || tab === 'nonograms' || tab === 'casefile' || tab === 'wanted' ? 'max-w-6xl' : tab === 'coachdepot' ? 'max-w-7xl' : 'max-w-4xl'} mx-auto px-4 sm:px-8 py-6 space-y-5`}>
+      <div className={`${tab === 'geoguessr' || tab === 'nonograms' || tab === 'casefile' || tab === 'wanted' ? 'max-w-6xl' : tab === 'coachdepot' || tab === 'coachdepot-art' || tab === 'coachcapitalist' || tab === 'toolboxkick' ? 'max-w-7xl' : 'max-w-4xl'} mx-auto px-4 sm:px-8 py-6 space-y-5`}>
         <div>
           <button
             type="button"
@@ -1495,6 +1626,8 @@ export default function FunAdmin() {
         {tab === 'pipes' && <PipesSandbox />}
         {tab === 'stackwalk' && <StackWalkSandbox />}
         {tab === 'coachdepot' && <CoachDepotSandbox />}
+        {tab === 'coachdepot-art' && <CoachDepotArtPreview />}
+        {tab === 'coachcapitalist' && <CoachCapitalistSandbox />}
         {tab === 'casefile' && <CasefileSandbox />}
         {tab === 'toolboxkick' && <ToolboxKickSandbox />}
         {tab === 'geoguessr' && <GeoGuessrSandbox />}

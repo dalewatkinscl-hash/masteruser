@@ -152,7 +152,28 @@ const PORTAL_REDIRECT_MAP = {
   training_app: 'https://training.countrylion.co.uk',
   holidays_app: 'https://holidays.countrylion.co.uk',
   events_app: 'https://events.countrylion.co.uk',
+  vehicles_app: 'https://vehicles.countrylion.co.uk',
 };
+
+function resolvePortalRedirect(appKey, returnUrl) {
+  // SSO cookie is only sent to *.countrylion.co.uk — never send users to .web.app hosts.
+  if (appKey === 'vehicles_app') {
+    return PORTAL_REDIRECT_MAP.vehicles_app;
+  }
+
+  if (typeof returnUrl === 'string' && returnUrl.trim()) {
+    try {
+      const target = new URL(returnUrl.trim());
+      const host = target.hostname.toLowerCase();
+      if (target.protocol === 'https:' && host.endsWith('.countrylion.co.uk')) {
+        return target.toString();
+      }
+    } catch {
+      // Fall through to the portal map.
+    }
+  }
+  return PORTAL_REDIRECT_MAP[appKey] || null;
+}
 
 export default function Login() {
   const [email, setEmail] = useState('');
@@ -166,14 +187,16 @@ export default function Login() {
   const { t } = useLanguage();
 
   // Read the optional ?app=<portalKey> query param so we know where to send the user.
-  const appParam = new URLSearchParams(window.location.search).get('app');
+  const searchParams = new URLSearchParams(window.location.search);
+  const appParam = searchParams.get('app');
+  const returnUrl = searchParams.get('returnUrl');
 
   // Redirect if already authenticated as an admin.
   useEffect(() => {
     if (!loading && user) {
       const portalsAccess = user?.portalsAccess ?? {};
       if (appParam && portalsAccess[appParam]) {
-        const target = PORTAL_REDIRECT_MAP[appParam];
+        const target = resolvePortalRedirect(appParam, returnUrl);
         if (target) {
           window.location.href = target;
           return;
@@ -181,7 +204,7 @@ export default function Login() {
       }
       navigate('/dashboard', { replace: true });
     }
-  }, [user, loading, navigate, appParam]);
+  }, [user, loading, navigate, appParam, returnUrl]);
 async function readJsonResponse(res) {
   const contentType = res.headers.get('content-type') || '';
   if (!contentType.includes('application/json')) {
@@ -227,7 +250,7 @@ async function readJsonResponse(res) {
 
       // If a specific app was requested via ?app=, try to redirect there.
       if (appParam && portalsAccess[appParam]) {
-        const target = PORTAL_REDIRECT_MAP[appParam];
+        const target = resolvePortalRedirect(appParam, returnUrl);
         if (target) {
           window.location.href = target;
           return;
@@ -356,7 +379,7 @@ async function readJsonResponse(res) {
                   <button
                     type="button"
                     onClick={() => setShowPassword((v) => !v)}
-                    className="absolute right-3.5 top-1/2 -translate-y-1/2 text-cl-muted hover:text-cl-fg transition-colors p-0.5 rounded"
+                    className="absolute right-1.5 top-1/2 -translate-y-1/2 min-h-11 min-w-11 inline-flex items-center justify-center text-cl-muted hover:text-cl-fg transition-colors rounded"
                     aria-label={showPassword ? t('login.hidePassword') : t('login.showPassword')}
                   >
                     {showPassword ? (

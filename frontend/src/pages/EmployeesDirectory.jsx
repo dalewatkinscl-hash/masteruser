@@ -145,7 +145,7 @@ function ColumnFilterDropdown({
   const filteredOptions = useMemo(() => {
     const needle = query.trim().toLowerCase();
     if (!needle) return options;
-    return options.filter((option) => option.toLowerCase().includes(needle));
+    return options.filter((option) => String(option).toLowerCase().includes(needle));
   }, [options, query]);
 
   const toggleOption = (option) => {
@@ -270,7 +270,7 @@ function EmployeeCell({ employee, columnId }) {
   if (columnId === 'name') {
     return (
       <div className="flex items-center gap-3 min-w-[12rem]">
-        <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center text-white text-sm font-semibold flex-shrink-0">
+        <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center text-primary-content text-sm font-semibold flex-shrink-0">
           {(employee.fullName || employee.email || '?')[0].toUpperCase()}
         </div>
         <div>
@@ -307,6 +307,48 @@ function EmployeeCell({ employee, columnId }) {
   );
 }
 
+function EmployeeMobileCard({ employee, selected, onToggleSelect, onManage }) {
+  return (
+    <div className={`rounded-xl border border-[#1a2540] p-4 space-y-3 ${selected ? 'bg-indigo-500/5 border-indigo-500/30' : 'bg-[#0b1220]'}`}>
+      <div className="flex items-start gap-3">
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={() => onToggleSelect(employee.uid)}
+          aria-label={`Select ${employee.fullName || 'employee'}`}
+          className="mt-1 w-5 h-5 rounded border-[#1a2540] bg-[#060e1a] text-indigo-500"
+        />
+        <div className="w-10 h-10 rounded-lg bg-primary flex items-center justify-center text-primary-content text-sm font-semibold flex-shrink-0">
+          {(employee.fullName || employee.email || '?')[0].toUpperCase()}
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-medium text-white break-words">{employee.fullName || '—'}</p>
+          <p className="text-xs text-slate-500 break-all mt-0.5">{employee.email || 'No work email'}</p>
+          <div className="mt-2">
+            <StatusBadge employee={employee} />
+          </div>
+        </div>
+      </div>
+      <div className="flex items-center justify-between gap-3 pt-1">
+        <p className="text-xs text-slate-400 truncate">
+          {[
+            employee.employeeProfile?.jobRole,
+            employee.employeeProfile?.department,
+          ].filter(Boolean).join(' · ') || '—'}
+        </p>
+        <button
+          type="button"
+          onClick={() => onManage(employee.uid)}
+          className="inline-flex items-center justify-center gap-1 min-h-11 px-3 rounded-lg text-indigo-300 hover:text-indigo-200 text-sm font-medium"
+        >
+          Manage
+          <ChevronRightIcon className="w-4 h-4" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function EmployeeRow({
   employee,
   selected,
@@ -334,7 +376,7 @@ function EmployeeRow({
         <button
           type="button"
           onClick={() => onManage(employee.uid)}
-          className="inline-flex items-center gap-1 text-indigo-400 hover:text-indigo-300 text-sm font-medium transition-colors"
+          className="inline-flex items-center gap-1 min-h-11 text-indigo-400 hover:text-indigo-300 text-sm font-medium transition-colors"
         >
           Manage
           <ChevronRightIcon className="w-4 h-4" />
@@ -564,12 +606,12 @@ export default function EmployeesDirectory() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search employees…"
-            className="w-full sm:w-64 bg-[#060e1a] border border-[#1a2540] text-slate-100 text-sm rounded-lg px-4 py-2.5 focus:outline-none focus:border-indigo-500/60"
+            className="w-full sm:w-64 min-h-11 bg-[#060e1a] border border-[#1a2540] text-slate-100 text-sm rounded-lg px-4 py-2.5 focus:outline-none focus:border-indigo-500/60"
           />
           <button
             type="button"
             onClick={() => navigate('/dashboard/hr/employees/milestones')}
-            className="px-4 py-2.5 rounded-lg border border-[#1a2540] text-slate-200 text-sm font-medium hover:bg-[#0b1220] transition-colors"
+            className="min-h-11 px-4 py-2.5 rounded-lg border border-[#1a2540] text-slate-200 text-sm font-medium hover:bg-[#0b1220] transition-colors"
           >
             Birthdays and anniversaries
           </button>
@@ -617,7 +659,7 @@ export default function EmployeesDirectory() {
               <button
                 type="button"
                 onClick={() => navigate('/dashboard/hr/employees/new')}
-                className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-gradient-to-r from-indigo-500 to-violet-600 text-white text-sm font-semibold hover:from-indigo-600 hover:to-violet-700 transition-all shadow-lg shadow-indigo-500/20"
+                className="btn btn-primary gap-2"
               >
                 <PlusIcon className="w-5 h-5" />
                 New employee
@@ -642,11 +684,11 @@ export default function EmployeesDirectory() {
             </select>
           </label>
 
-          <div className="relative">
+          <div className="relative hidden md:block">
             <button
               type="button"
               onClick={() => setShowColumnPicker((open) => !open)}
-              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-[#1a2540] text-slate-200 text-sm font-medium hover:bg-[#0b1220] transition-colors"
+              className="inline-flex items-center gap-2 min-h-11 px-3 py-2 rounded-lg border border-[#1a2540] text-slate-200 text-sm font-medium hover:bg-[#0b1220] transition-colors"
             >
               <ColumnsIcon className="w-4 h-4" />
               Columns
@@ -742,44 +784,78 @@ export default function EmployeesDirectory() {
             </div>
           </div>
         ) : (
-          <div className="p-8">
-            <div className="overflow-x-auto rounded-lg border border-[#1a2540]">
-              <table className="w-full min-w-max">
-                {tableHeader}
-                <tbody className="divide-y divide-[#1a2540]">
-                  {processedEmployees.length === 0 ? (
-                    <tr>
-                      <td colSpan={colSpan} className="px-6 py-8 text-sm text-slate-500 text-center">
-                        No employees match your search and filters.
-                      </td>
-                    </tr>
-                  ) : groupBy ? (
+          <div className="p-4 sm:p-8">
+            {processedEmployees.length === 0 ? (
+              <p className="px-2 py-8 text-sm text-slate-500 text-center">
+                No employees match your search and filters.
+              </p>
+            ) : (
+              <>
+                <div className="md:hidden space-y-3">
+                  {groupBy ? (
                     groupedEmployees.map((group) => (
-                      <GroupSection
-                        key={group.key || 'ungrouped'}
-                        group={group}
-                        selectedUids={selectedUids}
-                        onToggleSelect={toggleSelect}
-                        onManage={(uid) => navigate(`/dashboard/hr/employees/${uid}`)}
-                        visibleColumns={visibleColumns}
-                        colSpan={colSpan}
-                      />
+                      <div key={group.key || 'ungrouped'} className="space-y-3">
+                        <p className="text-sm font-semibold text-indigo-200 px-1">
+                          {group.label}
+                          <span className="ml-2 text-slate-500 font-normal">({group.employees.length})</span>
+                        </p>
+                        {group.employees.map((employee) => (
+                          <EmployeeMobileCard
+                            key={employee.uid}
+                            employee={employee}
+                            selected={selectedUids.has(employee.uid)}
+                            onToggleSelect={toggleSelect}
+                            onManage={(uid) => navigate(`/dashboard/hr/employees/${uid}`)}
+                          />
+                        ))}
+                      </div>
                     ))
                   ) : (
                     processedEmployees.map((employee) => (
-                      <EmployeeRow
+                      <EmployeeMobileCard
                         key={employee.uid}
                         employee={employee}
                         selected={selectedUids.has(employee.uid)}
                         onToggleSelect={toggleSelect}
                         onManage={(uid) => navigate(`/dashboard/hr/employees/${uid}`)}
-                        visibleColumns={visibleColumns}
                       />
                     ))
                   )}
-                </tbody>
-              </table>
-            </div>
+                </div>
+
+                <div className="hidden md:block overflow-x-auto rounded-lg border border-[#1a2540]">
+                  <table className="w-full min-w-max">
+                    {tableHeader}
+                    <tbody className="divide-y divide-[#1a2540]">
+                      {groupBy ? (
+                        groupedEmployees.map((group) => (
+                          <GroupSection
+                            key={group.key || 'ungrouped'}
+                            group={group}
+                            selectedUids={selectedUids}
+                            onToggleSelect={toggleSelect}
+                            onManage={(uid) => navigate(`/dashboard/hr/employees/${uid}`)}
+                            visibleColumns={visibleColumns}
+                            colSpan={colSpan}
+                          />
+                        ))
+                      ) : (
+                        processedEmployees.map((employee) => (
+                          <EmployeeRow
+                            key={employee.uid}
+                            employee={employee}
+                            selected={selectedUids.has(employee.uid)}
+                            onToggleSelect={toggleSelect}
+                            onManage={(uid) => navigate(`/dashboard/hr/employees/${uid}`)}
+                            visibleColumns={visibleColumns}
+                          />
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
           </div>
         )}
       </div>

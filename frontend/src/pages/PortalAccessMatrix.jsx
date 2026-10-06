@@ -358,7 +358,7 @@ export default function PortalAccessMatrix() {
   return (
     <div className="flex flex-col h-full">
       <WorkspaceTabs />
-      <div className="px-8 py-6 border-b border-[#1a2540]">
+      <div className="px-4 sm:px-8 py-6 border-b border-[#1a2540]">
         <h1 className="text-2xl font-bold text-white">Portal Access</h1>
         <p className="text-sm text-slate-400 mt-1">
           Bulk assign portal roles, feature access, and Weekend Availability initials.
@@ -753,7 +753,7 @@ export default function PortalAccessMatrix() {
         )}
       </div>
 
-      <div className="sticky bottom-0 px-8 py-4 border-t border-[#1a2540] bg-[#060e1a] flex flex-wrap items-center gap-3">
+      <div className="sticky bottom-0 px-4 sm:px-8 py-4 border-t border-[#1a2540] bg-[#060e1a] flex flex-wrap items-center gap-3">
         <p className="text-sm text-slate-400">
           {dirtyUids.length === 0
             ? 'No unsaved changes'
@@ -772,7 +772,7 @@ export default function PortalAccessMatrix() {
             type="button"
             onClick={handleSave}
             disabled={dirtyUids.length === 0 || saving}
-            className="px-4 py-2 rounded-lg bg-gradient-to-r from-indigo-500 to-violet-600 text-white text-sm font-semibold disabled:opacity-50"
+            className="btn btn-primary btn-sm"
           >
             {saving ? 'Saving…' : 'Save changes'}
           </button>
