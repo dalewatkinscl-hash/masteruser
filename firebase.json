@@ -20,6 +20,15 @@
         ]
       },
       {
+        "source": "/version.json",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache, no-store, must-revalidate"
+          }
+        ]
+      },
+      {
         "source": "/toolbox-kick/assets/**",
         "headers": [
           {
@@ -676,8 +685,28 @@
         "region": "europe-west2"
       },
       {
+        "source": "/api/getCoachCapitalistLeaderboard",
+        "function": "getCoachCapitalistLeaderboard",
+        "region": "europe-west2"
+      },
+      {
         "source": "/api/adminCoachCapitalistLeaderboard",
-        "function": "adminCoachCapitalistLeaderboard",
+        "function": "getCoachCapitalistLeaderboard",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getCoachCapitalistSave",
+        "function": "getCoachCapitalistSave",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/saveCoachCapitalistSave",
+        "function": "saveCoachCapitalistSave",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/adminSetCoachCapitalistLifetime",
+        "function": "adminSetCoachCapitalistLifetime",
         "region": "europe-west2"
       },
       {

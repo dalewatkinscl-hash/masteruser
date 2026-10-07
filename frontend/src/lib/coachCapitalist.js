@@ -278,21 +278,23 @@ export const DEPOTS = [
     name: 'Local Depot',
     blurb: 'Yard out the back of a pub — start with a used Transit.',
     unlockCost: 0,
+    /** Weighted contribution to account lifetime / shared backers (Local = baseline). */
+    lifetimeWeight: 1,
     angelDivisor: 1e15,
-    angelScale: 150,
+    angelScale: 180, // 150 × 1.2 backer accrual
     startingCash: 0,
     freeFirstBusiness: true,
     businesses: [
-      { id: 'used-transit', name: 'Used Ford Transit Minibus', baseCost: 3.738, coefficient: 1.07, baseTime: 0.6, baseRevenue: 1, colour: '#f59e0b' },
-      { id: 'new-minibus', name: 'Brand New Minibus', baseCost: 60, coefficient: 1.15, baseTime: 3, baseRevenue: 60, colour: '#38bdf8', newspaper: true },
-      { id: 'seat16', name: '16-Seat Coach', baseCost: 720, coefficient: 1.14, baseTime: 6, baseRevenue: 540, colour: '#34d399' },
-      { id: 'midi', name: 'Midicoach', baseCost: 8640, coefficient: 1.13, baseTime: 12, baseRevenue: 4320, colour: '#a78bfa' },
-      { id: 'fullsize', name: 'Full-Size Single-Decker', baseCost: 103680, coefficient: 1.12, baseTime: 24, baseRevenue: 51840, colour: '#fb7185' },
-      { id: 'double', name: 'Double-Decker Fleet', baseCost: 1244160, coefficient: 1.11, baseTime: 96, baseRevenue: 622080, colour: '#f472b6' },
-      { id: 'executive', name: 'Executive / VIP Coaches', baseCost: 14929920, coefficient: 1.10, baseTime: 384, baseRevenue: 7464960, colour: '#eab308' },
-      { id: 'school', name: 'School & Contract Fleet', baseCost: 179159040, coefficient: 1.09, baseTime: 1536, baseRevenue: 89579520, colour: '#22d3ee' },
-      { id: 'national', name: 'National Express Routes', baseCost: 2149908480, coefficient: 1.08, baseTime: 6144, baseRevenue: 1074954240, colour: '#818cf8' },
-      { id: 'mega', name: 'Mega Coach Empire', baseCost: 25798901760, coefficient: 1.07, baseTime: 36864, baseRevenue: 29668737024, colour: '#f97316' },
+      { id: 'used-transit', name: 'Used Ford Transit Minibus', art: '/coach-capitalist/used-transit.jpg', baseCost: 3.738, coefficient: 1.07, baseTime: 0.6, baseRevenue: 1, colour: '#f59e0b' },
+      { id: 'new-minibus', name: 'Brand New Minibus', art: '/coach-capitalist/new-transit.jpg', baseCost: 60, coefficient: 1.15, baseTime: 3, baseRevenue: 60, colour: '#38bdf8', newspaper: true },
+      { id: 'seat16', name: '16-Seat Coach', art: '/coach-capitalist/old-cheetah.jpg', baseCost: 720, coefficient: 1.14, baseTime: 6, baseRevenue: 540, colour: '#34d399' },
+      { id: 'midi', name: 'Midicoach', art: '/coach-capitalist/new-cheetah.jpg', baseCost: 8640, coefficient: 1.13, baseTime: 12, baseRevenue: 4320, colour: '#a78bfa' },
+      { id: 'fullsize', name: 'Full-Size Single-Decker', art: '/coach-capitalist/old-coach.jpg', baseCost: 103680, coefficient: 1.12, baseTime: 24, baseRevenue: 51840, colour: '#fb7185' },
+      { id: 'double', name: 'Double-Decker Fleet', art: '/coach-capitalist/old-decker.jpg', baseCost: 1244160, coefficient: 1.11, baseTime: 96, baseRevenue: 622080, colour: '#f472b6' },
+      { id: 'executive', name: 'Executive / VIP Coaches', art: '/coach-capitalist/new-team-coach.jpg', baseCost: 14929920, coefficient: 1.10, baseTime: 384, baseRevenue: 7464960, colour: '#eab308' },
+      { id: 'school', name: 'School & Contract Fleet', art: '/coach-capitalist/used-team-coach.jpg', baseCost: 179159040, coefficient: 1.09, baseTime: 1536, baseRevenue: 89579520, colour: '#22d3ee' },
+      { id: 'national', name: 'National Express Routes', art: '/coach-capitalist/new-coach.jpg', baseCost: 2149908480, coefficient: 1.08, baseTime: 6144, baseRevenue: 1074954240, colour: '#818cf8' },
+      { id: 'mega', name: 'Mega Coach Empire', art: '/coach-capitalist/new-decker.jpg', baseCost: 25798901760, coefficient: 1.07, baseTime: 36864, baseRevenue: 29668737024, colour: '#f97316' },
     ],
     managers: [
       { name: 'Terry Transit', cost: 1000 },
@@ -315,21 +317,22 @@ export const DEPOTS = [
     blurb: 'A proper depot with a workshop and night parking.',
     unlockCost: 1e12, // unlock when local lifetime hits £1 trillion (soft gate via angels/progress)
     unlockHint: 'Earn £1 trillion lifetime at Local Depot',
+    lifetimeWeight: 2.5, // Regional £ counts 2.5× toward score + shared backers
     angelDivisor: 1e15,
-    angelScale: 165,
+    angelScale: 198, // 165 × 1.2 (legacy per-depot curve)
     startingCash: 0,
     freeFirstBusiness: true,
     businesses: [
-      { id: 'airport', name: 'Airport Shuttle', baseCost: 5, coefficient: 1.05, baseTime: 2, baseRevenue: 1, colour: '#94a3b8' },
-      { id: 'parkride', name: 'Park & Ride Service', baseCost: 105, coefficient: 1.21, baseTime: 7, baseRevenue: 21, colour: '#38bdf8', newspaper: true },
-      { id: 'wedding', name: 'Wedding & Events Fleet', baseCost: 2929, coefficient: 1.07, baseTime: 28, baseRevenue: 2001, colour: '#f9a8d4' },
-      { id: 'touring', name: 'Touring Coach', baseCost: 42525, coefficient: 1.19, baseTime: 2, baseRevenue: 376, colour: '#4ade80' },
-      { id: 'sleeper', name: 'Sleeper Coach', baseCost: 493025, coefficient: 1.09, baseTime: 45, baseRevenue: 98820, colour: '#c084fc' },
-      { id: 'artic', name: 'Articulated Bus', baseCost: 18753525, coefficient: 1.15, baseTime: 180, baseRevenue: 1976400, colour: '#fb923c' },
-      { id: 'suite', name: 'Luxury Touring Suite', baseCost: 393824025, coefficient: 1.13, baseTime: 600, baseRevenue: 32940000, colour: '#facc15' },
-      { id: 'franchise', name: 'Multi-Depot Franchise', baseCost: 8270304525, coefficient: 1.17, baseTime: 3000, baseRevenue: 1152900000, colour: '#2dd4bf' },
-      { id: 'crossborder', name: 'Cross-Border Express', baseCost: 173676395025, coefficient: 1.11, baseTime: 14400, baseRevenue: 11067840000, colour: '#60a5fa' },
-      { id: 'continental', name: 'Continental Network', baseCost: 1e12, coefficient: 1.50, baseTime: 86400, baseRevenue: 332035200000, colour: '#f87171' },
+      { id: 'airport', name: 'Airport Shuttle', art: '/coach-capitalist/used-transit.jpg', baseCost: 5, coefficient: 1.05, baseTime: 2, baseRevenue: 1, colour: '#94a3b8' },
+      { id: 'parkride', name: 'Park & Ride Service', art: '/coach-capitalist/new-transit.jpg', baseCost: 105, coefficient: 1.21, baseTime: 7, baseRevenue: 21, colour: '#38bdf8', newspaper: true },
+      { id: 'wedding', name: 'Wedding & Events Fleet', art: '/coach-capitalist/new-cheetah.jpg', baseCost: 2929, coefficient: 1.07, baseTime: 28, baseRevenue: 2001, colour: '#f9a8d4' },
+      { id: 'touring', name: 'Touring Coach', art: '/coach-capitalist/old-coach.jpg', baseCost: 42525, coefficient: 1.19, baseTime: 2, baseRevenue: 376, colour: '#4ade80' },
+      { id: 'sleeper', name: 'Sleeper Coach', art: '/coach-capitalist/new-coach.jpg', baseCost: 493025, coefficient: 1.09, baseTime: 45, baseRevenue: 98820, colour: '#c084fc' },
+      { id: 'artic', name: 'Articulated Bus', art: '/coach-capitalist/used-team-coach.jpg', baseCost: 18753525, coefficient: 1.15, baseTime: 180, baseRevenue: 1976400, colour: '#fb923c' },
+      { id: 'suite', name: 'Luxury Touring Suite', art: '/coach-capitalist/new-team-coach.jpg', baseCost: 393824025, coefficient: 1.13, baseTime: 600, baseRevenue: 32940000, colour: '#facc15' },
+      { id: 'franchise', name: 'Multi-Depot Franchise', art: '/coach-capitalist/old-decker.jpg', baseCost: 8270304525, coefficient: 1.17, baseTime: 3000, baseRevenue: 1152900000, colour: '#2dd4bf' },
+      { id: 'crossborder', name: 'Cross-Border Express', art: '/coach-capitalist/new-decker.jpg', baseCost: 173676395025, coefficient: 1.11, baseTime: 14400, baseRevenue: 11067840000, colour: '#60a5fa' },
+      { id: 'continental', name: 'Continental Network', art: '/coach-capitalist/new-team-coach.jpg', baseCost: 1e12, coefficient: 1.50, baseTime: 86400, baseRevenue: 332035200000, colour: '#f87171' },
     ],
     managers: [
       { name: 'Ava Arrivals', cost: 750 },
@@ -358,20 +361,21 @@ export const DEPOTS = [
     blurb: 'Boardrooms, terminals, and a logo on every motorway.',
     unlockCost: 1e18,
     unlockHint: 'Earn £1 quintillion lifetime at Regional Hub',
+    lifetimeWeight: 5, // National £ counts 5× toward score + shared backers
     angelDivisor: 1e14, // Mars uses 100B equivalent scale (wiki: 100 billion vs 400 billion)
-    angelScale: 150,
+    angelScale: 180, // 150 × 1.2 (legacy per-depot curve)
     startingCash: 0.05,
     freeFirstBusiness: false,
     businesses: [
-      { id: 'tickets', name: 'Ticket Booth', baseCost: 0.05, coefficient: 1.01, baseTime: 0.5, baseRevenue: 0.011, colour: '#a3e635' },
-      { id: 'app', name: 'App Bookings', baseCost: 1, coefficient: 1.03, baseTime: 3, baseRevenue: 1, colour: '#38bdf8', newspaper: true },
-      { id: 'drivers', name: 'Driver Agency', baseCost: 1234, coefficient: 1.05, baseTime: 9, baseRevenue: 4321, colour: '#fbbf24' },
-      { id: 'workshop', name: 'Fleet Workshop', baseCost: 23000000, coefficient: 1.07, baseTime: 32, baseRevenue: 4007310, colour: '#fb7185' },
-      { id: 'fuel', name: 'Fuel Depot', baseCost: 49000000000, coefficient: 1.11, baseTime: 64, baseRevenue: 518783295, colour: '#f97316' },
-      { id: 'charter', name: 'Charter Contracts', baseCost: 77e12, coefficient: 1.04, baseTime: 4, baseRevenue: 500634321, colour: '#a78bfa' },
-      { id: 'gov', name: 'Government Routes', baseCost: 5e15, coefficient: 1.07, baseTime: 18, baseRevenue: 7543177325, colour: '#2dd4bf' },
-      { id: 'terminal', name: 'International Terminal', baseCost: 1e18, coefficient: 1.09, baseTime: 42, baseRevenue: 69263532485, colour: '#818cf8' },
-      { id: 'global', name: 'Global Coach Conglomerate', baseCost: 13e24, coefficient: 1.25, baseTime: 43200, baseRevenue: 99e12, colour: '#f43f5e' },
+      { id: 'tickets', name: 'Ticket Booth', art: '/coach-capitalist/used-transit.jpg', baseCost: 0.05, coefficient: 1.01, baseTime: 0.5, baseRevenue: 0.011, colour: '#a3e635' },
+      { id: 'app', name: 'App Bookings', art: '/coach-capitalist/new-transit.jpg', baseCost: 1, coefficient: 1.03, baseTime: 3, baseRevenue: 1, colour: '#38bdf8', newspaper: true },
+      { id: 'drivers', name: 'Driver Agency', art: '/coach-capitalist/old-cheetah.jpg', baseCost: 1234, coefficient: 1.05, baseTime: 9, baseRevenue: 4321, colour: '#fbbf24' },
+      { id: 'workshop', name: 'Fleet Workshop', art: '/coach-capitalist/new-cheetah.jpg', baseCost: 23000000, coefficient: 1.07, baseTime: 32, baseRevenue: 4007310, colour: '#fb7185' },
+      { id: 'fuel', name: 'Fuel Depot', art: '/coach-capitalist/old-coach.jpg', baseCost: 49000000000, coefficient: 1.11, baseTime: 64, baseRevenue: 518783295, colour: '#f97316' },
+      { id: 'charter', name: 'Charter Contracts', art: '/coach-capitalist/new-coach.jpg', baseCost: 77e12, coefficient: 1.04, baseTime: 4, baseRevenue: 500634321, colour: '#a78bfa' },
+      { id: 'gov', name: 'Government Routes', art: '/coach-capitalist/used-team-coach.jpg', baseCost: 5e15, coefficient: 1.07, baseTime: 18, baseRevenue: 7543177325, colour: '#2dd4bf' },
+      { id: 'terminal', name: 'International Terminal', art: '/coach-capitalist/new-team-coach.jpg', baseCost: 1e18, coefficient: 1.09, baseTime: 42, baseRevenue: 69263532485, colour: '#818cf8' },
+      { id: 'global', name: 'Global Coach Conglomerate', art: '/coach-capitalist/new-decker.jpg', baseCost: 13e24, coefficient: 1.25, baseTime: 43200, baseRevenue: 99e12, colour: '#f43f5e' },
     ],
     managers: [
       { name: 'Tina Tickets', cost: 100 },
@@ -395,7 +399,32 @@ export const DEPOTS = [
   },
 ];
 
-export const STORAGE_KEY = 'coach-capitalist-v1';
+export const STORAGE_KEY = 'coach-capitalist-v2';
+const FORCE_RESET_ACK_KEY = 'coach-capitalist-force-reset';
+
+/** Drop local cache when cloud issues a new force-reset token (admin wipe / claim sync). */
+export function acknowledgeForceReset(token) {
+  const t = String(token || '').trim();
+  if (!t) return false;
+  try {
+    if (localStorage.getItem(FORCE_RESET_ACK_KEY) === t) return false;
+    localStorage.removeItem(STORAGE_KEY);
+    // Also clear legacy key from before the v2 bump.
+    localStorage.removeItem('coach-capitalist-v1');
+    localStorage.setItem(FORCE_RESET_ACK_KEY, t);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function currentForceResetAck() {
+  try {
+    return localStorage.getItem(FORCE_RESET_ACK_KEY) || '';
+  } catch {
+    return '';
+  }
+}
 
 function emptyDepotState(depot) {
   const n = depot.businesses.length;
@@ -424,8 +453,18 @@ export function createInitialState() {
     version: 1,
     activeDepot: 'local',
     buyMode: 1, // 1 | 10 | 100 | 'max'
+    /** Shared company wallet — all depots earn into / spend from this. */
+    cash: 0,
+    /** Shared backers pool — fed by weighted lifetime across all depots. */
+    angels: 0,
+    angelsSpent: 0,
     depots,
   };
+}
+
+/** Purchase price multiplier for a depot (matches lifetime weight). */
+export function depotPriceMult(depotId) {
+  return depotLifetimeWeight(depotId);
 }
 
 export function loadState() {
@@ -433,30 +472,7 @@ export function loadState() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return createInitialState();
     const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed !== 'object') return createInitialState();
-    const base = createInitialState();
-    const merged = {
-      ...base,
-      ...parsed,
-      depots: { ...base.depots },
-    };
-    for (const d of DEPOTS) {
-      const saved = parsed.depots?.[d.id];
-      merged.depots[d.id] = saved
-        ? {
-            ...emptyDepotState(d),
-            ...saved,
-            owned: padArray(saved.owned, d.businesses.length, 0),
-            managers: padArray(saved.managers, d.businesses.length, false),
-            progress: padArray(saved.progress, d.businesses.length, 0),
-            running: padArray(saved.running, d.businesses.length, false),
-            upgrades: Array.isArray(saved.upgrades) ? saved.upgrades : [],
-            angelUpgrades: Array.isArray(saved.angelUpgrades) ? saved.angelUpgrades : [],
-          }
-        : emptyDepotState(d);
-      if (d.id === 'local') merged.depots[d.id].unlocked = true;
-    }
-    return merged;
+    return normalizeGameState(parsed);
   } catch {
     return createInitialState();
   }
@@ -544,7 +560,8 @@ export function normalizeNameConfig(raw) {
   return out;
 }
 
-export function totalLifetimeEarnings(state) {
+/** Unweighted sum of depot cash-lifetime (for away banners / raw stats). */
+export function rawLifetimeEarnings(state) {
   if (!state?.depots) return 0;
   let sum = 0;
   for (const d of DEPOTS) {
@@ -552,6 +569,272 @@ export function totalLifetimeEarnings(state) {
   }
   return sum;
 }
+
+/**
+ * Account lifetime for leaderboard + shared backers.
+ * Regional/National count more so same-vehicle worlds feed one progression.
+ */
+export function totalLifetimeEarnings(state) {
+  if (!state?.depots) return 0;
+  let sum = 0;
+  for (const d of DEPOTS) {
+    const life = Number(state.depots[d.id]?.lifetimeEarnings) || 0;
+    const weight = Number(d.lifetimeWeight) > 0 ? Number(d.lifetimeWeight) : 1;
+    sum += life * weight;
+  }
+  return sum;
+}
+
+export function depotLifetimeWeight(depotId) {
+  const d = DEPOTS.find((x) => x.id === depotId);
+  return Number(d?.lifetimeWeight) > 0 ? Number(d.lifetimeWeight) : 1;
+}
+
+/** Stable log10 sort key for huge earnings (Firestore number ordering). */
+export function lifetimeSortKey(lifetimeEarnings) {
+  const n = Number(lifetimeEarnings);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.log10(n);
+}
+
+export function normalizeGameState(raw) {
+  if (!raw || typeof raw !== 'object') return createInitialState();
+  const base = createInitialState();
+  const merged = {
+    ...base,
+    ...raw,
+    version: 1,
+    depots: { ...base.depots },
+  };
+  if (raw.buyMode === 10 || raw.buyMode === 100 || raw.buyMode === 'max' || raw.buyMode === 1) {
+    merged.buyMode = raw.buyMode;
+  }
+  if (typeof raw.activeDepot === 'string' && DEPOTS.some((d) => d.id === raw.activeDepot)) {
+    merged.activeDepot = raw.activeDepot;
+  }
+  for (const d of DEPOTS) {
+    const saved = raw.depots?.[d.id];
+    merged.depots[d.id] = saved
+      ? {
+          ...emptyDepotState(d),
+          ...saved,
+          owned: padArray(saved.owned, d.businesses.length, 0),
+          managers: padArray(saved.managers, d.businesses.length, false),
+          progress: padArray(saved.progress, d.businesses.length, 0),
+          running: padArray(saved.running, d.businesses.length, false),
+          upgrades: Array.isArray(saved.upgrades) ? saved.upgrades : [],
+          angelUpgrades: Array.isArray(saved.angelUpgrades) ? saved.angelUpgrades : [],
+          cash: Math.max(0, Number(saved.cash) || 0),
+          lifetimeEarnings: Math.max(0, Number(saved.lifetimeEarnings) || 0),
+          sessionEarnings: Math.max(0, Number(saved.sessionEarnings) || 0),
+          // Per-depot angels kept for migration only; gameplay uses account pool.
+          angels: Math.max(0, Number(saved.angels) || 0),
+          angelsSpent: Math.max(0, Number(saved.angelsSpent) || 0),
+          lastTick: Number(saved.lastTick) || Date.now(),
+          unlocked: d.id === 'local' ? true : Boolean(saved.unlocked),
+        }
+      : emptyDepotState(d);
+    if (d.id === 'local') merged.depots[d.id].unlocked = true;
+  }
+  // Shared wallet: prefer account cash; else migrate sum of old per-depot piles.
+  if (raw.cash != null) {
+    merged.cash = Math.max(0, Number(raw.cash) || 0);
+  } else {
+    let cash = 0;
+    for (const d of DEPOTS) {
+      cash += Number(merged.depots[d.id]?.cash) || 0;
+    }
+    merged.cash = cash;
+  }
+  // Shared backers: prefer account fields; else migrate sum of old per-depot pools.
+  const hasAccountAngels = raw.angels != null || raw.angelsSpent != null;
+  if (hasAccountAngels) {
+    merged.angels = Math.max(0, Number(raw.angels) || 0);
+    merged.angelsSpent = Math.max(0, Number(raw.angelsSpent) || 0);
+  } else {
+    let angels = 0;
+    let spent = 0;
+    for (const d of DEPOTS) {
+      angels += Number(merged.depots[d.id]?.angels) || 0;
+      spent += Number(merged.depots[d.id]?.angelsSpent) || 0;
+    }
+    merged.angels = angels;
+    merged.angelsSpent = spent;
+  }
+  return syncDepotUnlocks(merged);
+}
+
+/** Sum of per-depot session earnings — drops on claim/prestige. */
+export function totalSessionEarnings(state) {
+  let sum = 0;
+  for (const d of DEPOTS) {
+    sum += Number(state?.depots?.[d.id]?.sessionEarnings) || 0;
+  }
+  return sum;
+}
+
+/**
+ * Prefer the save with higher lifetime earnings.
+ * On a tie, prefer the lower session total (post-claim) so a stale tab cannot
+ * undo a prestige while lifetime is unchanged.
+ */
+export function pickRicherState(localState, cloudState, cloudUpdatedAt = null) {
+  const local = normalizeGameState(localState);
+  if (!cloudState) return { state: local, source: 'local' };
+  const cloud = normalizeGameState(cloudState);
+  const localLife = totalLifetimeEarnings(local);
+  const cloudLife = totalLifetimeEarnings(cloud);
+  if (cloudLife > localLife) return { state: cloud, source: 'cloud' };
+  if (localLife > cloudLife) return { state: local, source: 'local' };
+  const localSession = totalSessionEarnings(local);
+  const cloudSession = totalSessionEarnings(cloud);
+  if (cloudSession < localSession) return { state: cloud, source: 'cloud' };
+  if (localSession < cloudSession) return { state: local, source: 'local' };
+  const localCash = Math.max(0, Number(local.cash) || 0);
+  const cloudCash = Math.max(0, Number(cloud.cash) || 0);
+  if (cloudCash < localCash) return { state: cloud, source: 'cloud' };
+  if (localCash < cloudCash) return { state: local, source: 'local' };
+  const cloudAt = cloudUpdatedAt ? Date.parse(cloudUpdatedAt) : 0;
+  if (Number.isFinite(cloudAt) && cloudAt > Date.now() - 5_000) {
+    return { state: cloud, source: 'cloud' };
+  }
+  return { state: local, source: 'local' };
+}
+
+/** Offline pay is a small fraction of live manager £/s (not full AdCap offline). */
+export const AWAY_EARNINGS_RATE = 0.1;
+/** Only the first N hours away (wall clock) are considered. */
+export const AWAY_EARNINGS_MAX_MS = 8 * 60 * 60 * 1000;
+/** No earnings 22:00–05:00 Europe/London (live or away). */
+export const QUIET_HOURS_TZ = 'Europe/London';
+export const QUIET_HOUR_START = 22; // inclusive
+export const QUIET_HOUR_END = 5; // exclusive
+
+function londonHour(ms) {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: QUIET_HOURS_TZ,
+    hour: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date(ms));
+  return Number(parts.find((p) => p.type === 'hour')?.value || 0);
+}
+
+/** True during 10pm–5am Europe/London. */
+export function isCoachCapQuietHours(ms = Date.now()) {
+  const hour = londonHour(ms);
+  return hour >= QUIET_HOUR_START || hour < QUIET_HOUR_END;
+}
+
+/**
+ * Milliseconds between start and end that fall outside quiet hours.
+ * Steps in 1-minute chunks (fine for live ticks and ≤8h away windows).
+ */
+export function earnableMsBetween(startMs, endMs) {
+  const start = Math.floor(Number(startMs) || 0);
+  const end = Math.floor(Number(endMs) || 0);
+  if (!(end > start)) return 0;
+  const STEP = 60_000;
+  let total = 0;
+  let t = start;
+  while (t < end) {
+    const next = Math.min(end, t + STEP);
+    const mid = t + (next - t) / 2;
+    if (!isCoachCapQuietHours(mid)) total += next - t;
+    t = next;
+  }
+  return total;
+}
+
+/**
+ * Credit managed fleets for time away at AWAY_EARNINGS_RATE (default 10% of live).
+ * Quiet hours (10pm–5am London) never earn. Unmanaged in-progress jobs finish at most once.
+ */
+export function applyAwayEarnings(state, now = Date.now()) {
+  let awayMs = 0;
+  let earnableMs = 0;
+  let cashEarned = 0;
+  const depots = { ...state.depots };
+  for (const d of DEPOTS) {
+    const ds = depots[d.id];
+    if (!ds?.unlocked) continue;
+    const last = Number(ds.lastTick) || now;
+    const windowEnd = Math.min(now, last + AWAY_EARNINGS_MAX_MS);
+    const wallMs = Math.max(0, windowEnd - last);
+    if (wallMs < 1500) {
+      depots[d.id] = { ...ds, lastTick: now };
+      continue;
+    }
+    const paidMs = earnableMsBetween(last, windowEnd);
+    awayMs = Math.max(awayMs, wallMs);
+    earnableMs = Math.max(earnableMs, paidMs);
+    const awayTick = tickDepotAway(d, ds, now, paidMs / 1000, state.angels);
+    depots[d.id] = awayTick.depotState;
+    cashEarned += awayTick.earned;
+  }
+  return {
+    state: syncDepotUnlocks({
+      ...state,
+      cash: Math.max(0, Number(state.cash) || 0) + cashEarned,
+      depots,
+    }),
+    awayMs,
+    earnableMs,
+    earned: Math.max(0, cashEarned),
+    quietNow: isCoachCapQuietHours(now),
+  };
+}
+
+function tickDepotAway(depot, depotState, now, elapsedSec, accountAngels = 0) {
+  const state = {
+    ...depotState,
+    owned: [...depotState.owned],
+    managers: [...depotState.managers],
+    progress: [...depotState.progress],
+    running: [...depotState.running],
+  };
+  state.lastTick = now;
+  if (!(elapsedSec > 0)) return { depotState: state, earned: 0 };
+
+  const mult = computeMultipliers(depot, state, accountAngels);
+  const rate = AWAY_EARNINGS_RATE;
+  let earned = 0;
+  for (let i = 0; i < depot.businesses.length; i += 1) {
+    const o = state.owned[i] || 0;
+    if (o <= 0) continue;
+    const { time, cycleRevenue } = mult.perBusiness[i];
+    if (cycleRevenue <= 0 || time <= 0) continue;
+    if (state.managers[i]) {
+      // Continuous while away at reduced rate — avoids multi-hour cycle loops.
+      earned += (cycleRevenue / time) * elapsedSec * rate;
+      state.progress[i] = 0;
+      state.running[i] = true;
+    } else if (state.running[i]) {
+      const prog = state.progress[i] || 0;
+      const need = (1 - prog) * time;
+      if (elapsedSec >= need) {
+        earned += cycleRevenue * rate;
+        state.progress[i] = 0;
+        state.running[i] = false;
+      } else {
+        state.progress[i] = prog + elapsedSec / time;
+      }
+    }
+  }
+  if (earned > 0) {
+    state.lifetimeEarnings += earned;
+    state.sessionEarnings = (Number(state.sessionEarnings) || 0) + earned;
+  }
+  return { depotState: state, earned };
+}
+
+/** Portal-coin milestones keyed by total lifetime earnings thresholds. */
+export const COACH_CAP_MILESTONES = [
+  { id: 'life_1m', at: 1e6, coins: 5, label: '£1 million lifetime' },
+  { id: 'life_1b', at: 1e9, coins: 10, label: '£1 billion lifetime' },
+  { id: 'life_1t', at: 1e12, coins: 25, label: '£1 trillion lifetime' },
+  { id: 'life_1qa', at: 1e15, coins: 50, label: '£1 quadrillion lifetime' },
+  { id: 'life_1qi', at: 1e18, coins: 75, label: '£1 quintillion lifetime' },
+];
 
 export function applyNameOverrides(depot, nameConfig) {
   if (!depot) return depot;
@@ -633,7 +916,7 @@ function globalBonuses(ownedArr) {
   return { speedHalves: Math.floor(speedHalves), profit };
 }
 
-export function computeMultipliers(depot, depotState) {
+export function computeMultipliers(depot, depotState, accountAngels = null) {
   const n = depot.businesses.length;
   const owned = depotState.owned;
   const upgradeProfit = Array.from({ length: n }, () => 1);
@@ -662,7 +945,10 @@ export function computeMultipliers(depot, depotState) {
   const global = globalBonuses(owned);
 
   const angelRate = 0.02 + angelBonusExtra;
-  const angelMult = 1 + (Number(depotState.angels) || 0) * angelRate;
+  const angels = accountAngels != null
+    ? Number(accountAngels) || 0
+    : Number(depotState.angels) || 0;
+  const angelMult = 1 + angels * angelRate;
 
   const perBusiness = depot.businesses.map((biz, i) => {
     const o = owned[i] || 0;
@@ -691,20 +977,33 @@ export function computeMultipliers(depot, depotState) {
   return { perBusiness, angelRate, angelMult, allProfit };
 }
 
+/** Shared backer curve scale (AdCap Earth 150 × 1.2 accrual buff). */
+export const ANGEL_SCALE = 180;
+const ANGEL_DIVISOR = 1e15;
+
+/** Shared backer curve — Earth-scale formula on weighted account lifetime. */
+export function angelsFromWeightedLifetime(weightedLifetime) {
+  const life = Number(weightedLifetime) || 0;
+  if (life <= 0) return 0;
+  return Math.floor(ANGEL_SCALE * Math.sqrt(life / ANGEL_DIVISOR));
+}
+
+/** @deprecated Prefer angelsFromWeightedLifetime — kept for call sites that pass a depot. */
 export function angelsFromLifetime(depot, lifetimeEarnings) {
-  const scale = depot.angelScale || 150;
-  const div = depot.angelDivisor || 1e15;
+  const scale = depot?.angelScale || ANGEL_SCALE;
+  const div = depot?.angelDivisor || ANGEL_DIVISOR;
   if (lifetimeEarnings <= 0) return 0;
   return Math.floor(scale * Math.sqrt(lifetimeEarnings / div));
 }
 
-export function pendingAngels(depot, depotState) {
-  const total = angelsFromLifetime(depot, depotState.lifetimeEarnings);
-  const already = (Number(depotState.angels) || 0) + (Number(depotState.angelsSpent) || 0);
+/** Pending shared backers from weighted lifetime across all depots. */
+export function pendingAngels(state) {
+  const total = angelsFromWeightedLifetime(totalLifetimeEarnings(state));
+  const already = (Number(state.angels) || 0) + (Number(state.angelsSpent) || 0);
   return Math.max(0, total - already);
 }
 
-export function tickDepot(depot, depotState, now = Date.now()) {
+export function tickDepot(depot, depotState, now = Date.now(), accountAngels = 0) {
   const state = {
     ...depotState,
     owned: [...depotState.owned],
@@ -712,11 +1011,13 @@ export function tickDepot(depot, depotState, now = Date.now()) {
     progress: [...depotState.progress],
     running: [...depotState.running],
   };
-  const elapsed = Math.max(0, (now - (state.lastTick || now)) / 1000);
+  const last = Number(state.lastTick) || now;
+  // Only seconds outside 10pm–5am London count toward production.
+  const elapsed = earnableMsBetween(last, now) / 1000;
   state.lastTick = now;
-  if (elapsed <= 0) return state;
+  if (elapsed <= 0) return { depotState: state, earned: 0 };
 
-  const mult = computeMultipliers(depot, state);
+  const mult = computeMultipliers(depot, state, accountAngels);
   let earned = 0;
 
   for (let i = 0; i < depot.businesses.length; i += 1) {
@@ -768,11 +1069,10 @@ export function tickDepot(depot, depotState, now = Date.now()) {
   }
 
   if (earned > 0) {
-    state.cash += earned;
     state.lifetimeEarnings += earned;
     state.sessionEarnings += earned;
   }
-  return state;
+  return { depotState: state, earned };
 }
 
 export function startCycle(depot, depotState, index) {
@@ -784,87 +1084,162 @@ export function startCycle(depot, depotState, index) {
   return state;
 }
 
-export function buyBusinesses(depot, depotState, index, mode) {
-  const state = {
-    ...depotState,
-    owned: [...depotState.owned],
-  };
+/** Scaled list price for a depot (Regional ×2.5, National ×5). */
+export function scaledCost(base, depotId) {
+  return (Number(base) || 0) * depotPriceMult(depotId);
+}
+
+export function buyBusinesses(state, depotId, index, mode) {
+  const depot = getDepot(depotId);
+  const depotState = state.depots[depotId];
+  if (!depotState) return state;
   const biz = depot.businesses[index];
   if (!biz) return state;
-  const owned = state.owned[index] || 0;
+  const priceMult = depotPriceMult(depotId);
+  const cash = Math.max(0, Number(state.cash) || 0);
+  const owned = depotState.owned[index] || 0;
+  const affordCash = priceMult > 0 ? cash / priceMult : cash;
   let qty;
   if (mode === 'max') {
-    qty = maxAffordable(biz.baseCost, biz.coefficient, owned, state.cash);
+    qty = maxAffordable(biz.baseCost, biz.coefficient, owned, affordCash);
   } else {
     qty = Math.max(1, Math.floor(Number(mode) || 1));
   }
   if (qty <= 0) return state;
-  // If not max, shrink to what we can afford
-  while (qty > 0 && buyCost(biz.baseCost, biz.coefficient, owned, qty) > state.cash) {
+  while (qty > 0 && buyCost(biz.baseCost, biz.coefficient, owned, qty) > affordCash) {
     qty -= 1;
   }
   if (qty <= 0) return state;
-  const cost = buyCost(biz.baseCost, biz.coefficient, owned, qty);
-  state.cash -= cost;
-  state.owned[index] = owned + qty;
-  return state;
-}
-
-export function buyManager(depot, depotState, index) {
-  const state = {
-    ...depotState,
-    managers: [...depotState.managers],
-    running: [...depotState.running],
-  };
-  if (state.managers[index]) return state;
-  const mgr = depot.managers[index];
-  if (!mgr || state.cash < mgr.cost) return state;
-  if ((state.owned[index] || 0) <= 0) return state;
-  state.cash -= mgr.cost;
-  state.managers[index] = true;
-  state.running[index] = true;
-  return state;
-}
-
-export function buyCashUpgrade(depot, depotState, upgradeId) {
-  const up = depot.cashUpgrades.find((u) => u.id === upgradeId);
-  if (!up) return depotState;
-  if ((depotState.upgrades || []).includes(upgradeId)) return depotState;
-  if (depotState.cash < up.cost) return depotState;
+  const cost = buyCost(biz.baseCost, biz.coefficient, owned, qty) * priceMult;
+  const nextOwned = [...depotState.owned];
+  nextOwned[index] = owned + qty;
   return {
-    ...depotState,
-    cash: depotState.cash - up.cost,
-    upgrades: [...(depotState.upgrades || []), upgradeId],
+    ...state,
+    cash: cash - cost,
+    depots: {
+      ...state.depots,
+      [depotId]: { ...depotState, owned: nextOwned },
+    },
   };
 }
 
-export function buyAngelUpgrade(depot, depotState, upgradeId) {
+export function buyManager(state, depotId, index) {
+  const depot = getDepot(depotId);
+  const depotState = state.depots[depotId];
+  if (!depotState) return state;
+  if (depotState.managers[index]) return state;
+  const mgr = depot.managers[index];
+  const priceMult = depotPriceMult(depotId);
+  const cost = (mgr?.cost || 0) * priceMult;
+  const cash = Math.max(0, Number(state.cash) || 0);
+  if (!mgr || cash < cost) return state;
+  if ((depotState.owned[index] || 0) <= 0) return state;
+  const managers = [...depotState.managers];
+  const running = [...depotState.running];
+  managers[index] = true;
+  running[index] = true;
+  return {
+    ...state,
+    cash: cash - cost,
+    depots: {
+      ...state.depots,
+      [depotId]: { ...depotState, managers, running },
+    },
+  };
+}
+
+export function buyCashUpgrade(state, depotId, upgradeId) {
+  const depot = getDepot(depotId);
+  const depotState = state.depots[depotId];
+  if (!depotState) return state;
+  const up = depot.cashUpgrades.find((u) => u.id === upgradeId);
+  if (!up) return state;
+  if ((depotState.upgrades || []).includes(upgradeId)) return state;
+  const priceMult = depotPriceMult(depotId);
+  const cost = up.cost * priceMult;
+  const cash = Math.max(0, Number(state.cash) || 0);
+  if (cash < cost) return state;
+  return {
+    ...state,
+    cash: cash - cost,
+    depots: {
+      ...state.depots,
+      [depotId]: {
+        ...depotState,
+        upgrades: [...(depotState.upgrades || []), upgradeId],
+      },
+    },
+  };
+}
+
+/** Spend shared backers on the active depot's angel shop. Returns full game state. */
+export function buyAngelUpgrade(state, depotId, upgradeId) {
+  const depot = getDepot(depotId);
+  const depotState = state.depots[depotId];
+  if (!depotState) return state;
   const up = depot.angelUpgrades.find((u) => u.id === upgradeId);
-  if (!up) return depotState;
-  if ((depotState.angelUpgrades || []).includes(upgradeId)) return depotState;
-  if ((depotState.angels || 0) < up.cost) return depotState;
-  const next = {
+  if (!up) return state;
+  if ((depotState.angelUpgrades || []).includes(upgradeId)) return state;
+  if ((Number(state.angels) || 0) < up.cost) return state;
+  const nextDepot = {
     ...depotState,
-    angels: depotState.angels - up.cost,
-    angelsSpent: (depotState.angelsSpent || 0) + up.cost,
     angelUpgrades: [...(depotState.angelUpgrades || []), upgradeId],
     owned: [...depotState.owned],
   };
   if (up.flatOwned != null && typeof up.business === 'number') {
-    next.owned[up.business] = (next.owned[up.business] || 0) + up.flatOwned;
+    nextDepot.owned[up.business] = (nextDepot.owned[up.business] || 0) + up.flatOwned;
   }
-  return next;
+  return {
+    ...state,
+    angels: (Number(state.angels) || 0) - up.cost,
+    angelsSpent: (Number(state.angelsSpent) || 0) + up.cost,
+    depots: {
+      ...state.depots,
+      [depotId]: nextDepot,
+    },
+  };
 }
 
+/**
+ * Prestige: bank pending shared backers and reset ALL depot boards + shared wallet.
+ * Lifetime on each depot is kept (account score / future backers). Backer upgrades stay.
+ */
+export function claimBackers(state, depotId) {
+  const focus = getDepot(depotId);
+  if (!state.depots?.[depotId]) return state;
+  const pending = pendingAngels(state);
+  const depots = { ...state.depots };
+  for (const d of DEPOTS) {
+    const prev = depots[d.id];
+    if (!prev) continue;
+    const wasUnlocked = d.id === 'local' || Boolean(prev.unlocked);
+    const next = emptyDepotState(d);
+    next.lifetimeEarnings = Number(prev.lifetimeEarnings) || 0;
+    next.angelUpgrades = [...(prev.angelUpgrades || [])];
+    next.unlocked = wasUnlocked;
+    for (const id of next.angelUpgrades) {
+      const up = d.angelUpgrades.find((u) => u.id === id);
+      if (up?.flatOwned != null && typeof up.business === 'number') {
+        next.owned[up.business] = (next.owned[up.business] || 0) + up.flatOwned;
+      }
+    }
+    depots[d.id] = next;
+  }
+  return {
+    ...state,
+    cash: Number(focus.startingCash) || 0,
+    activeDepot: 'local',
+    angels: (Number(state.angels) || 0) + pending,
+    depots,
+  };
+}
+
+/** @deprecated Use claimBackers(state, depotId) — kept name for older imports. */
 export function resetDepot(depot, depotState) {
-  const pending = pendingAngels(depot, depotState);
   const next = emptyDepotState(depot);
-  next.angels = (depotState.angels || 0) + pending;
-  next.angelsSpent = depotState.angelsSpent || 0;
   next.lifetimeEarnings = depotState.lifetimeEarnings || 0;
   next.angelUpgrades = [...(depotState.angelUpgrades || [])];
   next.unlocked = true;
-  // Angel upgrades that grant flat owned apply after reset
   for (const id of next.angelUpgrades) {
     const up = depot.angelUpgrades.find((u) => u.id === id);
     if (up?.flatOwned != null && typeof up.business === 'number') {
@@ -887,8 +1262,8 @@ export function syncDepotUnlocks(state) {
   return next;
 }
 
-export function totalRevenuePerSecond(depot, depotState) {
-  const mult = computeMultipliers(depot, depotState);
+export function totalRevenuePerSecond(depot, depotState, accountAngels = null) {
+  const mult = computeMultipliers(depot, depotState, accountAngels);
   let sum = 0;
   for (let i = 0; i < depot.businesses.length; i += 1) {
     if (depotState.managers[i] && (depotState.owned[i] || 0) > 0) {
@@ -901,4 +1276,19 @@ export function totalRevenuePerSecond(depot, depotState) {
 export function nextUnlockAt(owned) {
   const milestones = [...SPEED_OWNED, ...STANDARD_PROFIT.map(([at]) => at)];
   return milestones.find((m) => owned < m) || null;
+}
+
+/** Next unlock milestone for a business (newspaper uses denser early steps). */
+export function nextUnlockAtForBusiness(biz, owned) {
+  const o = Math.max(0, Math.floor(Number(owned) || 0));
+  if (biz?.newspaper) {
+    const marks = [
+      ...NEWSPAPER_UNLOCKS.map((u) => u.at),
+      ...SPEED_OWNED,
+      ...STANDARD_PROFIT.map(([at]) => at),
+    ];
+    const unique = [...new Set(marks)].sort((a, b) => a - b);
+    return unique.find((m) => o < m) || null;
+  }
+  return nextUnlockAt(o);
 }

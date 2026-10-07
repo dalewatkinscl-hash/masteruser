@@ -1,23 +1,31 @@
 import { useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import {
   DEPOTS,
+  applyAwayEarnings,
   applyNameOverrides,
+  isCoachCapQuietHours,
   buyAngelUpgrade,
   buyBusinesses,
   buyCashUpgrade,
   buyCost,
   buyManager,
+  claimBackers,
   computeMultipliers,
+  depotLifetimeWeight,
+  depotPriceMult,
   draftNameConfig,
   formatDuration,
   formatMoney,
+  acknowledgeForceReset,
+  currentForceResetAck,
   getDepot,
   loadState,
   maxAffordable,
-  nextUnlockAt,
+  nextUnlockAtForBusiness,
+  normalizeGameState,
   normalizeNameConfig,
   pendingAngels,
-  resetDepot,
+  pickRicherState,
   saveState,
   startCycle,
   syncDepotUnlocks,
@@ -25,10 +33,11 @@ import {
   totalLifetimeEarnings,
   totalRevenuePerSecond,
 } from '../lib/coachCapitalist';
-import { GameUiBadge, GameUiButton, GameUiModal, GameUiPanel, GameUiProgress } from './gameUi';
+import { GameUiBadge, GameUiButton, GameUiModal, GameUiPanel } from './gameUi';
 
 const BUY_MODES = [1, 10, 100, 'max'];
 const EMPTY_NAMES = { depots: {} };
+const CLOUD_SAVE_DEBOUNCE_MS = 4000;
 
 async function readJsonResponse(res) {
   const contentType = res.headers.get('content-type') || '';
@@ -80,112 +89,191 @@ function BusIcon({ colour = '#38bdf8', className = 'w-10 h-10' }) {
   );
 }
 
+/** AdCap switches to marching stripes when a cycle is under ~1s (bar would just flicker). */
+const STRIPE_TIME_SEC = 1;
+
 function BusinessRow({
   biz,
   index,
   owned,
   managed,
   cash,
+  priceMult = 1,
   buyMode,
   stats,
   progress,
   running,
+  lastTick = 0,
   onRun,
   onBuy,
   adminMode = false,
   onRename,
 }) {
+  const fillRef = useRef(null);
+  const timerRef = useRef(null);
+  const animRef = useRef({ progress, lastTick, time: stats.time, active: false, stripe: false });
+
+  const mult = priceMult > 0 ? priceMult : 1;
+  const affordCash = cash / mult;
   const costQty = buyMode === 'max'
-    ? maxAffordable(biz.baseCost, biz.coefficient, owned, cash)
+    ? maxAffordable(biz.baseCost, biz.coefficient, owned, affordCash)
     : Math.max(1, Number(buyMode) || 1);
-  const cost = buyCost(biz.baseCost, biz.coefficient, owned, Math.max(1, costQty || 1));
+  const rawCost = buyCost(biz.baseCost, biz.coefficient, owned, Math.max(1, costQty || 1));
+  const unlockRaw = buyCost(biz.baseCost, biz.coefficient, 0, 1);
+  const cost = rawCost * mult;
+  const unlockCost = unlockRaw * mult;
   const canBuy = owned > 0
     ? (buyMode === 'max' ? costQty > 0 : cash >= cost)
-    : cash >= buyCost(biz.baseCost, biz.coefficient, 0, 1);
-  const unlockAt = nextUnlockAt(owned);
-  const locked = owned <= 0 && cash < biz.baseCost && index > 0;
+    : cash >= unlockCost;
+  const unlockAt = nextUnlockAtForBusiness(biz, owned);
+  const locked = owned <= 0 && cash < unlockCost && index > 0;
   const showCost = owned <= 0
-    ? buyCost(biz.baseCost, biz.coefficient, 0, 1)
-    : (buyMode === 'max' && costQty > 0 ? cost : buyCost(biz.baseCost, biz.coefficient, owned, Math.max(1, Number(buyMode) || 1)));
+    ? unlockCost
+    : (buyMode === 'max' && costQty > 0
+      ? cost
+      : buyCost(biz.baseCost, biz.coefficient, owned, Math.max(1, Number(buyMode) || 1)) * mult);
+  const buyLabel = owned <= 0
+    ? 'Buy'
+    : `Buy x${buyMode === 'max' ? (costQty || 0) : buyMode}`;
+
+  const active = owned > 0 && (running || managed);
+  // Fast businesses: full striped bar (AdCap cash/sec look). Slow: normal fill.
+  const stripe = active && stats.time > 0 && stats.time < STRIPE_TIME_SEC;
+  animRef.current = {
+    progress,
+    lastTick,
+    time: stats.time,
+    active,
+    stripe,
+  };
+
+  // Imperative rAF: glide the fill / timer between economy ticks (no React 60fps)
+  useEffect(() => {
+    const fillEl = fillRef.current;
+    const timerEl = timerRef.current;
+    if (!fillEl) return undefined;
+
+    if (!active) {
+      fillEl.classList.remove('ccap-arrow__fill--stripe');
+      fillEl.style.width = '0%';
+      if (timerEl) timerEl.textContent = formatDuration(stats.time);
+      return undefined;
+    }
+
+    if (stripe) {
+      fillEl.classList.add('ccap-arrow__fill--stripe');
+      fillEl.style.width = '100%';
+      if (timerEl) timerEl.textContent = formatDuration(stats.time);
+      return undefined;
+    }
+
+    fillEl.classList.remove('ccap-arrow__fill--stripe');
+    let raf = 0;
+    const loop = () => {
+      const a = animRef.current;
+      let p = a.progress;
+      if (a.time > 0 && a.lastTick > 0) {
+        p = Math.max(0, Math.min(0.999, a.progress + ((Date.now() - a.lastTick) / 1000) / a.time));
+      }
+      fillEl.style.width = `${p * 100}%`;
+      if (timerEl) timerEl.textContent = formatDuration(Math.max(0, a.time * (1 - p)));
+      raf = window.requestAnimationFrame(loop);
+    };
+    raf = window.requestAnimationFrame(loop);
+    return () => window.cancelAnimationFrame(raf);
+  }, [active, stripe, stats.time]);
+
+  // AdCap shows $/s on the bar once it's in stripe mode; otherwise cycle payout.
+  const revenueLabel = owned <= 0
+    ? formatMoney(biz.baseCost)
+    : stripe
+      ? `${formatMoney(stats.revenuePerSecond)}/s`
+      : formatMoney(stats.cycleRevenue);
+
+  // AdCap owned badge: "428/500" + green fill = owned / next milestone
+  const unlockFill = unlockAt && unlockAt > 0
+    ? Math.max(0, Math.min(1, owned / unlockAt))
+    : owned > 0 ? 1 : 0;
+  const ownedLabel = unlockAt != null ? `${owned}/${unlockAt}` : String(owned);
+
+  const runTitle = managed
+    ? `${biz.name} · manager running`
+    : running
+      ? `${biz.name} · on a job…`
+      : owned > 0
+        ? `${biz.name} · send on a job`
+        : biz.name;
 
   return (
-    <div
-      className={`rounded-xl border-2 overflow-hidden transition-opacity ${
-        locked ? 'opacity-45 border-slate-600/60 bg-slate-900/40' : 'border-slate-700/80 bg-slate-900/70'
-      }`}
-    >
-      <div className="flex items-stretch gap-0">
+    <div className={`ccap-row${locked ? ' ccap-row--locked' : ''}`}>
+      <button
+        type="button"
+        className="ccap-side"
+        disabled={owned <= 0 || running || managed}
+        onClick={onRun}
+        title={runTitle}
+      >
+        <span className="ccap-art">
+          {biz.art ? (
+            <img src={biz.art} alt="" className="ccap-art__img" draggable={false} />
+          ) : (
+            <BusIcon colour={biz.colour || '#38bdf8'} className="w-[80%] h-[80%]" />
+          )}
+        </span>
+        <span className="ccap-owned-wrap" title={unlockAt != null ? `Next unlock at ${unlockAt}` : 'Owned'}>
+          <span className="ccap-owned-wrap__fill" style={{ width: `${unlockFill * 100}%` }} />
+          <span className={`ccap-owned-wrap__n tabular-nums${ownedLabel.length > 7 ? ' ccap-owned-wrap__n--tight' : ''}`}>
+            {ownedLabel}
+          </span>
+        </span>
+      </button>
+
+      <div className="ccap-main">
+        {adminMode ? (
+          <input
+            type="text"
+            value={biz.name}
+            maxLength={80}
+            onChange={(e) => onRename?.(biz.id, e.target.value)}
+            onClick={(e) => e.stopPropagation()}
+            className="ccap-cat"
+            title="Rename vehicle (admin)"
+          />
+        ) : (
+          <p className="ccap-cat">{biz.name}</p>
+        )}
         <button
           type="button"
+          className="ccap-arrow"
           disabled={owned <= 0 || running || managed}
           onClick={onRun}
-          className="relative w-[5.5rem] sm:w-28 shrink-0 flex flex-col items-center justify-center gap-1 p-2 border-r-2 border-slate-700/80 hover:bg-white/5 disabled:cursor-default disabled:hover:bg-transparent"
-          title={managed ? 'Manager running' : running ? 'On a job…' : 'Send on a job'}
+          title={runTitle}
         >
-          <BusIcon colour={biz.colour} className="w-12 h-12 sm:w-14 sm:h-14" />
-          <span className="gui-font-narrow text-[10px] sm:text-xs text-slate-200 tabular-nums">{owned}</span>
+          <span className="ccap-arrow__outline" aria-hidden />
+          <span className="ccap-arrow__inner" aria-hidden>
+            <span ref={fillRef} className="ccap-arrow__fill" />
+          </span>
+          <span className={`ccap-arrow__label tabular-nums${owned <= 0 ? ' ccap-arrow__label--muted' : ''}`}>
+            {revenueLabel}
+          </span>
         </button>
 
-        <div className="flex-1 min-w-0 p-2.5 sm:p-3 space-y-2">
-          <div className="flex items-start justify-between gap-2">
-            <div className="min-w-0 flex-1">
-              {adminMode ? (
-                <input
-                  type="text"
-                  value={biz.name}
-                  maxLength={80}
-                  onChange={(e) => onRename?.(biz.id, e.target.value)}
-                  className="gui-font w-full text-[11px] sm:text-sm text-white bg-slate-950/80 border border-amber-400/40 rounded-md px-2 py-1"
-                  title="Rename vehicle (admin)"
-                />
-              ) : (
-                <p className="gui-font text-[11px] sm:text-sm text-white truncate">{biz.name}</p>
-              )}
-              <p className="text-[10px] sm:text-xs text-slate-400 mt-0.5">
-                {owned > 0
-                  ? `${formatMoney(stats.cycleRevenue)} / ${formatDuration(stats.time)}`
-                  : `Unlock ${formatMoney(biz.baseCost)}`}
-              </p>
-              {owned > 0 ? (
-                <p className="gui-font-narrow text-sm sm:text-base text-amber-300 tabular-nums mt-0.5">
-                  {formatMoney(stats.revenuePerSecond)}/s
-                </p>
-              ) : null}
-            </div>
-            {managed ? (
-              <GameUiBadge tone="green" className="shrink-0 text-[10px]">Auto</GameUiBadge>
-            ) : null}
-          </div>
-
-          <div className="relative">
-            <GameUiProgress
-              value={owned > 0 && (running || managed) ? progress : 0}
-              max={1}
-              colour={managed ? 'green' : 'blue'}
-              className="h-5 sm:h-6"
-            />
-          </div>
-
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-[10px] text-slate-500">
-              {unlockAt ? `Next unlock @ ${unlockAt}` : 'Max early unlocks'}
-            </p>
-            <GameUiButton
-              size="md"
-              variant={canBuy ? 'success' : 'neutral'}
-              disabled={!canBuy && owned > 0}
-              onClick={onBuy}
-              className="!min-w-[8.5rem] !px-3 !py-2"
-            >
-              <span className="flex flex-col items-center leading-tight">
-                <span className="text-[10px] uppercase tracking-wide opacity-80">
-                  {owned <= 0 ? 'Buy' : `x${buyMode === 'max' ? (costQty || 0) : buyMode}`}
-                </span>
-                <span className="gui-font text-base sm:text-lg tabular-nums">
-                  {formatMoney(showCost)}
-                </span>
-              </span>
-            </GameUiButton>
+        <div className="ccap-controls">
+          <button
+            type="button"
+            className={`ccap-buy ${canBuy ? 'ccap-buy--go' : 'ccap-buy--wait'}`}
+            disabled={!canBuy && owned > 0}
+            onClick={onBuy}
+          >
+            <span className="ccap-buy__top">{buyLabel}</span>
+            <span className="ccap-buy__cost tabular-nums">{formatMoney(showCost)}</span>
+          </button>
+          <div
+            ref={timerRef}
+            className="ccap-timer tabular-nums"
+            title={formatDuration(stats.time)}
+          >
+            {formatDuration(stats.time)}
           </div>
         </div>
       </div>
@@ -195,18 +283,25 @@ function BusinessRow({
 
 export default function CoachCapitalistPanel({ sandbox = false, isAdmin = false }) {
   const [state, dispatch] = useReducer(reducer, null, loadState);
-  const [tab, setTab] = useState('fleet'); // fleet | managers | upgrades | angels
+  const [tab, setTab] = useState('fleet'); // fleet | managers | upgrades | angels | leaderboard
   const [resetOpen, setResetOpen] = useState(false);
   const [toast, setToast] = useState('');
+  const [awayBanner, setAwayBanner] = useState('');
+  const [quietHours, setQuietHours] = useState(() => isCoachCapQuietHours());
+  const [cloudReady, setCloudReady] = useState(sandbox);
   const [adminMode, setAdminMode] = useState(false);
   const [nameConfig, setNameConfig] = useState(EMPTY_NAMES);
   const [namesDirty, setNamesDirty] = useState(false);
   const [namesSaving, setNamesSaving] = useState(false);
   const [namesError, setNamesError] = useState('');
   const [leaderboard, setLeaderboard] = useState([]);
+  const [leaderboardMe, setLeaderboardMe] = useState(null);
   const [leaderboardLoading, setLeaderboardLoading] = useState(false);
   const [leaderboardError, setLeaderboardError] = useState('');
   const lastSyncedEarnings = useRef(0);
+  const cloudTimerRef = useRef(null);
+  const savingCloudRef = useRef(false);
+  const forceResetTokenRef = useRef(currentForceResetAck());
   const stateRef = useRef(state);
   stateRef.current = state;
 
@@ -216,10 +311,85 @@ export default function CoachCapitalistPanel({ sandbox = false, isAdmin = false 
     [baseDepot, nameConfig],
   );
   const depotState = state.depots[state.activeDepot];
-  const mult = computeMultipliers(depot, depotState);
-  const rps = totalRevenuePerSecond(depot, depotState);
-  const pending = pendingAngels(depot, depotState);
+  const accountCash = Math.max(0, Number(state.cash) || 0);
+  const accountAngels = Number(state.angels) || 0;
+  const priceMult = depotPriceMult(state.activeDepot);
+  const mult = computeMultipliers(depot, depotState, accountAngels);
+  const rps = totalRevenuePerSecond(depot, depotState, accountAngels);
+  const pending = pendingAngels(state);
+  const lifetimeTotal = totalLifetimeEarnings(state);
+  const activeWeight = depotLifetimeWeight(state.activeDepot);
+  const purchasedUpgrades = (depot.cashUpgrades || []).filter(
+    (u) => (depotState.upgrades || []).includes(u.id),
+  );
 
+  const showMilestoneToast = (milestones) => {
+    if (!Array.isArray(milestones) || !milestones.length) return;
+    const first = milestones[0];
+    setToast(`+${first.coins} coins · ${first.label}${milestones.length > 1 ? ` (+${milestones.length - 1} more)` : ''}`);
+    try {
+      window.dispatchEvent(new CustomEvent('cl-coins-awarded', { detail: { milestones } }));
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const pushCloudSave = async ({ force = false } = {}) => {
+    if (sandbox) return null;
+    const cur = stateRef.current;
+    const total = totalLifetimeEarnings(cur);
+    if (!force && total <= 0 && total <= lastSyncedEarnings.current) return null;
+    if (savingCloudRef.current) return null;
+    savingCloudRef.current = true;
+    try {
+      const response = await fetch('/api/saveCoachCapitalistSave', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          state: cur,
+          forceResetToken: forceResetTokenRef.current || undefined,
+        }),
+      });
+      const payload = (await readJsonResponse(response)) || {};
+      if (!response.ok) throw new Error(payload.error || 'Failed to cloud-save.');
+      if (payload.forceResetToken) {
+        forceResetTokenRef.current = String(payload.forceResetToken);
+        acknowledgeForceReset(payload.forceResetToken);
+      }
+      const nextLife = Math.max(
+        lastSyncedEarnings.current,
+        Number(payload.lifetimeEarnings) || total,
+      );
+      lastSyncedEarnings.current = nextLife;
+      if (payload.keptCloud && payload.state) {
+        dispatch({ type: 'replace', state: normalizeGameState(payload.state) });
+        stateRef.current = normalizeGameState(payload.state);
+      }
+      if (payload.me?.rank != null || payload.rank != null) {
+        setLeaderboardMe((prev) => ({
+          ...(prev || {}),
+          uid: prev?.uid,
+          lifetimeEarnings: nextLife,
+          rank: payload.rank ?? payload.me?.rank ?? prev?.rank ?? null,
+        }));
+      }
+      showMilestoneToast(payload.milestones);
+      return payload;
+    } finally {
+      savingCloudRef.current = false;
+    }
+  };
+
+  const scheduleCloudSave = () => {
+    if (sandbox || !cloudReady) return;
+    if (cloudTimerRef.current) window.clearTimeout(cloudTimerRef.current);
+    cloudTimerRef.current = window.setTimeout(() => {
+      pushCloudSave().catch(() => {});
+    }, CLOUD_SAVE_DEBOUNCE_MS);
+  };
+
+  // Boot: names + cloud save merge + away earnings (skipped in sandbox).
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -234,108 +404,204 @@ export default function CoachCapitalistPanel({ sandbox = false, isAdmin = false 
       } catch {
         // Keep defaults if config unavailable.
       }
+
+      if (sandbox) {
+        if (!cancelled) {
+          const away = applyAwayEarnings(stateRef.current);
+          if (away.awayMs >= 1500 && away.earned > 0) {
+            dispatch({ type: 'replace', state: away.state });
+            setAwayBanner(
+              `While you were away · ${formatMoney(away.earned)} over ${formatDuration(away.awayMs / 1000)}`,
+            );
+          }
+          setCloudReady(true);
+        }
+        return;
+      }
+
+      try {
+        const response = await fetch('/api/getCoachCapitalistSave', { credentials: 'include' });
+        const payload = (await readJsonResponse(response)) || {};
+        if (cancelled) return;
+        if (response.ok) {
+          const forceToken = payload.forceResetToken ? String(payload.forceResetToken) : '';
+          const newlyForced = forceToken ? acknowledgeForceReset(forceToken) : false;
+          if (forceToken) forceResetTokenRef.current = forceToken;
+          // New admin/claim wipe token: take cloud and drop localStorage. Later loads merge normally.
+          const picked = newlyForced
+            ? { state: normalizeGameState(payload.state), source: 'cloud' }
+            : pickRicherState(
+              stateRef.current,
+              payload.state,
+              payload.updatedAt || null,
+            );
+          const away = applyAwayEarnings(picked.state);
+          dispatch({ type: 'replace', state: away.state });
+          stateRef.current = away.state;
+          lastSyncedEarnings.current = Math.max(
+            totalLifetimeEarnings(away.state),
+            Number(payload.lifetimeEarnings) || 0,
+          );
+          if (away.awayMs >= 1500 && away.earned > 0) {
+            setAwayBanner(
+              `While you were away · ${formatMoney(away.earned)} over ${formatDuration(away.awayMs / 1000)}`,
+            );
+          } else if (newlyForced) {
+            setToast('Save reset from server — Local & Regional wiped');
+          } else if (picked.source === 'cloud') {
+            setToast('Progress restored from your account');
+          }
+        } else {
+          const away = applyAwayEarnings(stateRef.current);
+          if (away.awayMs >= 1500 && away.earned > 0) {
+            dispatch({ type: 'replace', state: away.state });
+            setAwayBanner(
+              `While you were away · ${formatMoney(away.earned)} over ${formatDuration(away.awayMs / 1000)}`,
+            );
+          }
+        }
+      } catch {
+        const away = applyAwayEarnings(stateRef.current);
+        if (!cancelled && away.awayMs >= 1500 && away.earned > 0) {
+          dispatch({ type: 'replace', state: away.state });
+          setAwayBanner(
+            `While you were away · ${formatMoney(away.earned)} over ${formatDuration(away.awayMs / 1000)}`,
+          );
+        }
+      } finally {
+        if (!cancelled) setCloudReady(true);
+      }
     })();
     return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sandbox]);
+
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      setQuietHours(isCoachCapQuietHours());
+    }, 15_000);
+    return () => window.clearInterval(id);
   }, []);
 
-  // Tick loop + persistence
+  // Economy tick — cash / cycle completion. Bar fills animate imperatively in BusinessRow.
   useEffect(() => {
+    if (!cloudReady) return undefined;
     const id = window.setInterval(() => {
       const cur = stateRef.current;
       const d = applyNameOverrides(getDepot(cur.activeDepot), nameConfig);
-      const nextDepot = tickDepot(d, cur.depots[cur.activeDepot]);
-      dispatch({ type: 'patchDepot', depotId: cur.activeDepot, depotState: nextDepot });
-    }, 100);
+      const tick = tickDepot(
+        d,
+        cur.depots[cur.activeDepot],
+        Date.now(),
+        cur.angels,
+      );
+      dispatch({
+        type: 'replace',
+        state: syncDepotUnlocks({
+          ...cur,
+          cash: Math.max(0, Number(cur.cash) || 0) + tick.earned,
+          depots: {
+            ...cur.depots,
+            [cur.activeDepot]: tick.depotState,
+          },
+        }),
+      });
+    }, 80);
     return () => window.clearInterval(id);
-  }, [nameConfig]);
+  }, [nameConfig, cloudReady]);
 
   useEffect(() => {
-    // Also tick inactive depots slowly for offline managers when switching
+    if (!cloudReady) return undefined;
     const id = window.setInterval(() => {
       const cur = stateRef.current;
       let changed = false;
+      let cashEarned = 0;
       const depots = { ...cur.depots };
       for (const d of DEPOTS) {
         if (d.id === cur.activeDepot) continue;
         if (!depots[d.id]?.unlocked) continue;
         if (!depots[d.id].managers?.some(Boolean)) continue;
-        depots[d.id] = tickDepot(applyNameOverrides(d, nameConfig), depots[d.id]);
+        const tick = tickDepot(
+          applyNameOverrides(d, nameConfig),
+          depots[d.id],
+          Date.now(),
+          cur.angels,
+        );
+        depots[d.id] = tick.depotState;
+        cashEarned += tick.earned;
         changed = true;
       }
       if (changed) {
-        dispatch({ type: 'replace', state: syncDepotUnlocks({ ...cur, depots }) });
+        dispatch({
+          type: 'replace',
+          state: syncDepotUnlocks({
+            ...cur,
+            cash: Math.max(0, Number(cur.cash) || 0) + cashEarned,
+            depots,
+          }),
+        });
       }
     }, 2000);
     return () => window.clearInterval(id);
-  }, [nameConfig]);
+  }, [nameConfig, cloudReady]);
 
   useEffect(() => {
     saveState(state);
-  }, [state]);
+    if (cloudReady) scheduleCloudSave();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state, cloudReady]);
 
-  const syncScore = async () => {
-    const total = totalLifetimeEarnings(stateRef.current);
-    if (!(total > 0) || total <= lastSyncedEarnings.current) {
-      return { ok: true, lifetimeEarnings: lastSyncedEarnings.current, skipped: true };
-    }
-    const response = await fetch('/api/syncCoachCapitalistScore', {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ lifetimeEarnings: total }),
-    });
-    const payload = (await readJsonResponse(response)) || {};
-    if (!response.ok) {
-      throw new Error(payload.error || 'Failed to sync score.');
-    }
-    const next = Math.max(
-      lastSyncedEarnings.current,
-      Number(payload.lifetimeEarnings) || total,
-    );
-    lastSyncedEarnings.current = next;
-    return { ok: true, lifetimeEarnings: next, skipped: false };
-  };
-
-  // Periodic sync — independent of the 100ms tick so the timer is not constantly reset.
+  // Flush cloud save when leaving the tab / page.
   useEffect(() => {
-    let cancelled = false;
-    const run = async () => {
-      try {
-        if (!cancelled) await syncScore();
-      } catch {
-        /* ignore background sync failures */
+    if (sandbox) return undefined;
+    const flush = () => {
+      if (cloudTimerRef.current) {
+        window.clearTimeout(cloudTimerRef.current);
+        cloudTimerRef.current = null;
       }
+      pushCloudSave({ force: true }).catch(() => {});
     };
-    run();
-    const id = window.setInterval(run, 15000);
+    const onVis = () => {
+      if (document.visibilityState === 'hidden') flush();
+    };
+    window.addEventListener('pagehide', flush);
+    document.addEventListener('visibilitychange', onVis);
     return () => {
-      cancelled = true;
-      window.clearInterval(id);
+      window.removeEventListener('pagehide', flush);
+      document.removeEventListener('visibilitychange', onVis);
+      flush();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [sandbox]);
 
   useEffect(() => {
     if (!toast) return undefined;
-    const t = window.setTimeout(() => setToast(''), 2200);
+    const t = window.setTimeout(() => setToast(''), 2800);
     return () => window.clearTimeout(t);
   }, [toast]);
 
+  useEffect(() => {
+    if (!awayBanner) return undefined;
+    const t = window.setTimeout(() => setAwayBanner(''), 8000);
+    return () => window.clearTimeout(t);
+  }, [awayBanner]);
+
   const loadLeaderboard = async () => {
-    if (!isAdmin) return;
     try {
       setLeaderboardLoading(true);
       setLeaderboardError('');
-      // Push this browser's score first so the board isn't empty for the current admin.
       try {
-        await syncScore();
+        await pushCloudSave({ force: true });
       } catch (syncErr) {
         setLeaderboardError(syncErr.message || 'Score sync failed.');
       }
-      const response = await fetch('/api/adminCoachCapitalistLeaderboard', { credentials: 'include' });
+      const response = await fetch('/api/getCoachCapitalistLeaderboard?limit=50', {
+        credentials: 'include',
+      });
       const payload = (await readJsonResponse(response)) || {};
       if (!response.ok) throw new Error(payload.error || 'Failed to load leaderboard.');
       setLeaderboard(Array.isArray(payload.leaderboard) ? payload.leaderboard : []);
+      setLeaderboardMe(payload.me || null);
     } catch (err) {
       setLeaderboardError(err.message || 'Failed to load leaderboard.');
     } finally {
@@ -344,11 +610,32 @@ export default function CoachCapitalistPanel({ sandbox = false, isAdmin = false 
   };
 
   useEffect(() => {
-    if (isAdmin && tab === 'leaderboard') {
-      loadLeaderboard();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- reload when opening the tab
-  }, [isAdmin, tab]);
+    if (tab === 'leaderboard') loadLeaderboard();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab]);
+
+  // Lightweight rank chip for the header
+  useEffect(() => {
+    if (sandbox || !cloudReady) return undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await fetch('/api/getCoachCapitalistLeaderboard?limit=5', {
+          credentials: 'include',
+        });
+        const payload = (await readJsonResponse(response)) || {};
+        if (!cancelled && response.ok) {
+          setLeaderboardMe(payload.me || null);
+          if (Array.isArray(payload.leaderboard) && payload.leaderboard.length) {
+            setLeaderboard((prev) => (prev.length ? prev : payload.leaderboard));
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [sandbox, cloudReady]);
 
   const patch = (nextDepotState) => {
     dispatch({ type: 'patchDepot', depotId: state.activeDepot, depotState: nextDepotState });
@@ -414,27 +701,62 @@ export default function CoachCapitalistPanel({ sandbox = false, isAdmin = false 
   };
 
   const affordables = depot.cashUpgrades.filter(
-    (u) => !(depotState.upgrades || []).includes(u.id) && depotState.cash >= u.cost * 0.01,
+    (u) => !(depotState.upgrades || []).includes(u.id)
+      && accountCash >= u.cost * priceMult * 0.01,
   ).slice(0, 40);
 
   const angelAfford = depot.angelUpgrades.filter(
     (u) => !(depotState.angelUpgrades || []).includes(u.id),
   );
 
+  const replaceState = (next) => {
+    dispatch({ type: 'replace', state: syncDepotUnlocks(next) });
+  };
+
   return (
     <div className={`w-full space-y-3 ${sandbox ? 'max-w-5xl mx-auto' : ''}`}>
       <GameUiPanel title="Coach Capitalist" header="blue" dark className="overflow-visible relative">
         <div className="space-y-3">
+          {awayBanner ? (
+            <div className="rounded-xl border-2 border-emerald-400/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-100">
+              {awayBanner}
+            </div>
+          ) : null}
+          {quietHours ? (
+            <div className="rounded-xl border-2 border-slate-500/40 bg-slate-800/60 px-3 py-2 text-sm text-slate-300">
+              Night stop · no earnings 10pm–5am (Europe/London). Fleet resumes at 5am.
+            </div>
+          ) : null}
+
           <div className="flex flex-wrap items-end justify-between gap-3">
             <div>
               <p className="gui-font text-2xl sm:text-3xl text-amber-300 tabular-nums tracking-wide">
-                {formatMoney(depotState.cash)}
+                {formatMoney(accountCash)}
               </p>
               <p className="text-xs text-slate-400 mt-1">
                 {rps > 0 ? `${formatMoney(rps)}/s with managers` : 'Click a vehicle to send it on a job'}
                 {' · '}
-                Lifetime {formatMoney(depotState.lifetimeEarnings)}
+                Shared wallet
+                {priceMult !== 1 ? ` · prices ×${priceMult}` : ''}
+                {' · '}
+                Depot {formatMoney(depotState.lifetimeEarnings)}
+                {activeWeight !== 1 ? ` (×${activeWeight} score)` : ''}
+                {' · '}
+                Account {formatMoney(lifetimeTotal)}
               </p>
+              {!sandbox && leaderboardMe?.rank ? (
+                <button
+                  type="button"
+                  onClick={() => setTab('leaderboard')}
+                  className="mt-1 text-[11px] text-sky-300 hover:text-sky-200"
+                >
+                  Rank #{leaderboardMe.rank}
+                  {leaderboard.length ? ` · top ${Math.min(5, leaderboard.length)} on Profile too` : ''}
+                </button>
+              ) : null}
+              {!sandbox && !cloudReady ? (
+                <p className="text-[10px] text-slate-500 mt-1">Syncing account progress…</p>
+              ) : null}
             </div>
             <div className="flex flex-wrap gap-1.5">
               {isAdmin ? (
@@ -537,7 +859,7 @@ export default function CoachCapitalistPanel({ sandbox = false, isAdmin = false 
               ['managers', 'Managers'],
               ['upgrades', 'Upgrades'],
               ['angels', 'Backers'],
-              ...(isAdmin ? [['leaderboard', 'Leaderboard']] : []),
+              ['leaderboard', 'Leaderboard'],
             ].map(([id, label]) => (
               <GameUiButton
                 key={id}
@@ -556,7 +878,7 @@ export default function CoachCapitalistPanel({ sandbox = false, isAdmin = false 
           </div>
 
           {tab === 'fleet' ? (
-            <div className="space-y-2 max-h-[min(70vh,720px)] overflow-y-auto pr-1">
+            <div className="ccap-fleet space-y-5 max-h-[min(70vh,720px)] overflow-y-auto pr-1 rounded-lg border-[3px] border-[#0b1218] bg-[#152231] px-2.5 py-3 sm:px-3.5 sm:py-3.5">
               {depot.businesses.map((biz, i) => (
                 <BusinessRow
                   key={biz.id}
@@ -564,20 +886,23 @@ export default function CoachCapitalistPanel({ sandbox = false, isAdmin = false 
                   index={i}
                   owned={depotState.owned[i] || 0}
                   managed={depotState.managers[i]}
-                  cash={depotState.cash}
+                  cash={accountCash}
+                  priceMult={priceMult}
                   buyMode={state.buyMode}
                   stats={mult.perBusiness[i]}
                   progress={depotState.progress[i] || 0}
                   running={depotState.running[i]}
+                  lastTick={depotState.lastTick || 0}
                   adminMode={adminMode && isAdmin}
                   onRename={renameBusiness}
                   onRun={() => patch(startCycle(depot, depotState, i))}
                   onBuy={() => {
-                    const next = buyBusinesses(depot, depotState, i, state.buyMode);
-                    if (next.owned[i] !== depotState.owned[i]) {
+                    const prevOwned = depotState.owned[i] || 0;
+                    const next = buyBusinesses(state, state.activeDepot, i, state.buyMode);
+                    if ((next.depots[state.activeDepot]?.owned[i] || 0) !== prevOwned) {
                       setToast(`Bought ${biz.name}`);
                     }
-                    patch(next);
+                    replaceState(next);
                   }}
                 />
               ))}
@@ -589,13 +914,23 @@ export default function CoachCapitalistPanel({ sandbox = false, isAdmin = false 
               {depot.managers.map((mgr, i) => {
                 const owned = depotState.owned[i] || 0;
                 const have = depotState.managers[i];
-                const can = !have && owned > 0 && depotState.cash >= mgr.cost;
+                const mgrCost = (mgr.cost || 0) * priceMult;
+                const can = !have && owned > 0 && accountCash >= mgrCost;
                 return (
                   <div
                     key={mgr.name}
                     className="rounded-xl border-2 border-slate-700 bg-slate-900/60 p-3 flex items-center gap-3"
                   >
-                    <BusIcon colour={depot.businesses[i]?.colour} className="w-10 h-10 shrink-0" />
+                    {depot.businesses[i]?.art ? (
+                      <img
+                        src={depot.businesses[i].art}
+                        alt=""
+                        className="w-12 h-12 shrink-0 rounded-md object-contain bg-slate-100 border border-slate-600"
+                        draggable={false}
+                      />
+                    ) : (
+                      <BusIcon colour={depot.businesses[i]?.colour} className="w-10 h-10 shrink-0" />
+                    )}
                     <div className="min-w-0 flex-1">
                       <p className="gui-font text-sm text-white truncate">{mgr.name}</p>
                       <p className="text-[11px] text-slate-400 truncate">
@@ -610,12 +945,12 @@ export default function CoachCapitalistPanel({ sandbox = false, isAdmin = false 
                         variant={can ? 'success' : 'neutral'}
                         disabled={!can}
                         onClick={() => {
-                          patch(buyManager(depot, depotState, i));
+                          replaceState(buyManager(state, state.activeDepot, i));
                           setToast(`Hired ${mgr.name}`);
                         }}
                         className="!px-3"
                       >
-                        <span className="gui-font text-base tabular-nums">{formatMoney(mgr.cost)}</span>
+                        <span className="gui-font text-base tabular-nums">{formatMoney(mgrCost)}</span>
                       </GameUiButton>
                     )}
                   </div>
@@ -625,15 +960,16 @@ export default function CoachCapitalistPanel({ sandbox = false, isAdmin = false 
           ) : null}
 
           {tab === 'upgrades' ? (
-            <div className="space-y-2 max-h-[min(70vh,720px)] overflow-y-auto">
+            <div className="space-y-3 max-h-[min(70vh,720px)] overflow-y-auto">
               <p className="text-xs text-slate-400">
-                Cash upgrades (Adventure Capitalist pricing). Showing near-affordable and owned tiers.
+                Cash upgrades (Adventure Capitalist pricing). Near-affordable buys first; purchased stay listed below.
               </p>
               {affordables.length === 0 ? (
-                <p className="text-sm text-slate-500 py-6 text-center">Keep earning — upgrades unlock as you grow.</p>
+                <p className="text-sm text-slate-500 py-4 text-center">Keep earning — upgrades unlock as you grow.</p>
               ) : null}
               {affordables.map((up) => {
-                const can = depotState.cash >= up.cost;
+                const upCost = up.cost * priceMult;
+                const can = accountCash >= upCost;
                 const target = up.business === 'all'
                   ? 'All fleet'
                   : up.business === 'angel'
@@ -667,34 +1003,67 @@ export default function CoachCapitalistPanel({ sandbox = false, isAdmin = false 
                       variant={can ? 'accent' : 'neutral'}
                       disabled={!can}
                       onClick={() => {
-                        patch(buyCashUpgrade(depot, depotState, up.id));
+                        replaceState(buyCashUpgrade(state, state.activeDepot, up.id));
                         setToast(up.name);
                       }}
                       className="!px-3"
                     >
-                      <span className="gui-font text-base tabular-nums">{formatMoney(up.cost)}</span>
+                      <span className="gui-font text-base tabular-nums">{formatMoney(upCost)}</span>
                     </GameUiButton>
                   </div>
                 );
               })}
+              {purchasedUpgrades.length ? (
+                <div className="space-y-2 pt-2 border-t border-slate-700">
+                  <p className="text-xs font-semibold text-slate-300">
+                    Purchased ({purchasedUpgrades.length})
+                  </p>
+                  {purchasedUpgrades.map((up) => {
+                    const target = up.business === 'all'
+                      ? 'All fleet'
+                      : up.business === 'angel'
+                        ? 'Backer power'
+                        : depot.businesses[up.business]?.name;
+                    return (
+                      <div
+                        key={`owned-${up.id}`}
+                        className="rounded-xl border-2 border-emerald-500/25 bg-emerald-500/5 px-3 py-2 flex items-center justify-between gap-3"
+                      >
+                        <div className="min-w-0">
+                          <p className="gui-font text-sm text-emerald-100 truncate">{up.name}</p>
+                          <p className="text-[11px] text-slate-400">
+                            {target}
+                            {up.multiplier ? ` · ×${up.multiplier}` : ''}
+                            {up.angelBonus ? ` · +${(up.angelBonus * 100).toFixed(0)}% backer strength` : ''}
+                          </p>
+                        </div>
+                        <GameUiBadge tone="green">Owned</GameUiBadge>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : null}
             </div>
           ) : null}
 
           {tab === 'angels' ? (
             <div className="space-y-3 max-h-[min(70vh,720px)] overflow-y-auto">
               <div className="rounded-xl border-2 border-amber-500/40 bg-amber-500/10 p-4">
-                <p className="gui-font text-amber-200 text-sm">Silent partners (backers)</p>
+                <p className="gui-font text-amber-200 text-sm">Silent partners (shared)</p>
                 <p className="text-2xl gui-font text-amber-300 mt-1 tabular-nums">
-                  {formatMoney(depotState.angels, { symbol: '' })}
+                  {formatMoney(accountAngels, { symbol: '' })}
                 </p>
                 <p className="text-xs text-amber-100/80 mt-2">
-                  Each backer boosts all profits by {(mult.angelRate * 100).toFixed(0)}%.
-                  Pending on reset: {formatMoney(pending, { symbol: '' })}.
-                  Spent: {formatMoney(depotState.angelsSpent || 0, { symbol: '' })}.
+                  Shared across all depots. Each backer boosts profits by {(mult.angelRate * 100).toFixed(0)}%.
+                  Pending claim: {formatMoney(pending, { symbol: '' })}.
+                  Spent: {formatMoney(state.angelsSpent || 0, { symbol: '' })}.
+                </p>
+                <p className="text-[11px] text-amber-100/70 mt-1.5">
+                  Score weights · Local ×1 · Regional ×2.5 · National ×5
                 </p>
               </div>
               {angelAfford.map((up) => {
-                const can = depotState.angels >= up.cost;
+                const can = accountAngels >= up.cost;
                 return (
                   <div
                     key={up.id}
@@ -713,7 +1082,7 @@ export default function CoachCapitalistPanel({ sandbox = false, isAdmin = false 
                       variant={can ? 'warning' : 'neutral'}
                       disabled={!can}
                       onClick={() => {
-                        patch(buyAngelUpgrade(depot, depotState, up.id));
+                        replaceState(buyAngelUpgrade(state, state.activeDepot, up.id));
                         setToast(up.name);
                       }}
                     >
@@ -725,47 +1094,64 @@ export default function CoachCapitalistPanel({ sandbox = false, isAdmin = false 
             </div>
           ) : null}
 
-          {tab === 'leaderboard' && isAdmin ? (
+          {tab === 'leaderboard' ? (
             <div className="space-y-3 max-h-[min(70vh,720px)] overflow-y-auto">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-xs text-slate-400">
-                  All-time lifetime earnings across depots. Admin only. Opens sync your score, then loads the board.
-                  Other players sync automatically every 15s while the game is open.
+                  Shared all-time earnings board (same for everyone). Progress saves to your account so phones
+                  and PCs stay in sync.
                 </p>
                 <GameUiButton size="sm" variant="neutral" disabled={leaderboardLoading} onClick={loadLeaderboard}>
                   {leaderboardLoading ? 'Loading…' : 'Refresh'}
                 </GameUiButton>
               </div>
+              {leaderboardMe?.rank ? (
+                <div className="rounded-xl border-2 border-sky-400/40 bg-sky-500/10 px-3 py-2 text-sm text-sky-100">
+                  You are rank #{leaderboardMe.rank}
+                  {' · '}
+                  {formatMoney(leaderboardMe.lifetimeEarnings || lifetimeTotal)}
+                </div>
+              ) : null}
               {leaderboardError ? <p className="text-xs text-rose-300">{leaderboardError}</p> : null}
               {leaderboardLoading && !leaderboard.length ? (
                 <p className="text-sm text-slate-500 py-6 text-center">Loading leaderboard…</p>
               ) : !leaderboard.length ? (
-                <p className="text-sm text-slate-500 py-6 text-center">No scores yet — play and wait a few seconds for sync.</p>
+                <p className="text-sm text-slate-500 py-6 text-center">No scores yet — keep playing; your account syncs automatically.</p>
               ) : (
                 <ol className="space-y-1.5">
-                  {leaderboard.map((row, i) => (
-                    <li
-                      key={row.uid}
-                      className="rounded-xl border-2 border-slate-700 bg-slate-900/60 px-3 py-2.5 flex items-center gap-3"
-                    >
-                      <span className="gui-font-narrow text-sm text-slate-400 w-7 tabular-nums">{i + 1}</span>
-                      <div className="min-w-0 flex-1">
-                        <p className="gui-font text-sm text-white truncate">{row.fullName}</p>
-                        {row.updatedAt ? (
-                          <p className="text-[10px] text-slate-500">
-                            Updated {new Date(row.updatedAt).toLocaleString()}
+                  {leaderboard.map((row, i) => {
+                    const mine = leaderboardMe?.uid && row.uid === leaderboardMe.uid;
+                    return (
+                      <li
+                        key={row.uid}
+                        className={`rounded-xl border-2 px-3 py-2.5 flex items-center gap-3 ${
+                          mine
+                            ? 'border-sky-400/50 bg-sky-500/15'
+                            : 'border-slate-700 bg-slate-900/60'
+                        }`}
+                      >
+                        <span className="gui-font-narrow text-sm text-slate-400 w-7 tabular-nums">{i + 1}</span>
+                        <div className="min-w-0 flex-1">
+                          <p className="gui-font text-sm text-white truncate">
+                            {row.fullName}
+                            {mine ? ' (you)' : ''}
                           </p>
-                        ) : null}
-                      </div>
-                      <span className="gui-font text-sm sm:text-base text-amber-300 tabular-nums shrink-0">
-                        {formatMoney(row.lifetimeEarnings)}
-                      </span>
-                    </li>
-                  ))}
+                          {row.updatedAt ? (
+                            <p className="text-[10px] text-slate-500">
+                              Updated {new Date(row.updatedAt).toLocaleString()}
+                            </p>
+                          ) : null}
+                        </div>
+                        <span className="gui-font text-sm sm:text-base text-amber-300 tabular-nums shrink-0">
+                          {formatMoney(row.lifetimeEarnings)}
+                        </span>
+                      </li>
+                    );
+                  })}
                 </ol>
               )}
               <p className="text-[10px] text-slate-500">
-                Your current total: {formatMoney(totalLifetimeEarnings(state))}
+                Your current total: {formatMoney(lifetimeTotal)}
               </p>
             </div>
           ) : null}
@@ -786,19 +1172,24 @@ export default function CoachCapitalistPanel({ sandbox = false, isAdmin = false 
         confirmVariant="warning"
         cancelLabel="Cancel"
         onConfirm={() => {
-          const claimed = pendingAngels(depot, depotState);
-          patch(resetDepot(depot, depotState));
+          const claimed = pendingAngels(state);
+          const next = claimBackers(state, state.activeDepot);
+          replaceState(next);
+          stateRef.current = next;
           setResetOpen(false);
-          setToast(`Claimed ${formatMoney(claimed, { symbol: '' })} backers`);
+          setToast(`Claimed ${formatMoney(claimed, { symbol: '' })} shared backers`);
+          // Push immediately so a stale tab / delayed save cannot restore old cash.
+          pushCloudSave({ force: true }).catch(() => {});
         }}
       >
         <p className="text-sm text-slate-200">
-          Reset <strong>{depot.name}</strong> to claim{' '}
-          <strong>{formatMoney(pending, { symbol: '' })}</strong> silent partners.
-          Cash, vehicles, managers, and cash upgrades reset. Backers and backer upgrades stay.
+          Claim <strong>{formatMoney(pending, { symbol: '' })}</strong> shared silent partners and
+          reset <strong>all depots</strong> — wallet, vehicles, managers, and cash upgrades go back
+          to the start. Shared backers and backer upgrades stay.
         </p>
         <p className="text-xs text-slate-400">
-          Same prestige loop as Adventure Capitalist angel investors — formula uses lifetime earnings.
+          Account lifetime score is kept (Local ×1, Regional ×2.5, National ×5) so you keep earning
+          future backers. Unlocks stay; you rebuild from Local.
         </p>
       </GameUiModal>
     </div>
@@ -809,7 +1200,7 @@ export function CoachCapitalistSandbox() {
   return (
     <div className="space-y-3">
       <p className="text-sm text-slate-400">
-        Dev sandbox — progress saves in this browser under <code className="text-slate-300">coach-capitalist-v1</code>.
+        Dev sandbox — browser-only (no cloud save). Live game syncs to each staff account across devices.
       </p>
       <CoachCapitalistPanel sandbox isAdmin />
     </div>

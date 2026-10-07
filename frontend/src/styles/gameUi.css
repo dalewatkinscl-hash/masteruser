@@ -531,3 +531,411 @@
 .toolbox-gui .toolbox-gui__board > * {
   font-family: var(--gui-font-narrow);
 }
+
+/* ── Coach Capitalist — AdCap business rows (fixed tip depth, stripe mode) ── */
+.ccap-fleet {
+  --ccap-tip: 22px; /* fixed tip/notch depth — never squash with width */
+  --ccap-navy: #1b2c3d;
+  --ccap-track: #24384c;
+  --ccap-green: #58d460;
+  --ccap-green-hi: #8ef094;
+  --ccap-green-lo: #3db346;
+  --ccap-orange: #ff9f12;
+  --ccap-orange-hi: #ffc14d;
+  --ccap-orange-lo: #e88600;
+  --ccap-blue: #3a6d9a;
+  --ccap-blue-hi: #4e86b8;
+  --ccap-blue-lo: #2c5680;
+  --ccap-stroke: #101820;
+  --ccap-ink: #14202c;
+  font-family: "Arial Narrow", "Helvetica Neue Condensed", "Roboto Condensed", "Segoe UI Condensed", Arial, sans-serif;
+}
+
+.ccap-row {
+  display: grid;
+  /* Art tile is 2× prior size for upcoming game assets */
+  grid-template-columns: 156px minmax(0, 1fr);
+  column-gap: 10px;
+  align-items: center;
+}
+
+.ccap-row--locked {
+  opacity: 0.4;
+  filter: grayscale(0.4);
+}
+
+.ccap-side {
+  position: relative;
+  display: block;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  color: inherit;
+  width: 156px;
+  min-width: 0;
+}
+
+.ccap-side:disabled {
+  cursor: default;
+}
+
+.ccap-art {
+  width: 156px;
+  height: 156px;
+  border-radius: 8px;
+  border: 3px solid var(--ccap-stroke);
+  background: linear-gradient(180deg, #f4f7fb 0%, #e8eef5 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    inset 0 -2px 0 rgba(0, 0, 0, 0.22);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+
+.ccap-art__img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: center;
+  display: block;
+  pointer-events: none;
+  user-select: none;
+}
+
+.ccap-owned-wrap {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 8px;
+  z-index: 2;
+  height: 24px;
+  border-radius: 5px;
+  border: 3px solid var(--ccap-stroke);
+  background: var(--ccap-navy);
+  overflow: hidden;
+}
+
+.ccap-owned-wrap__fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: linear-gradient(180deg, #8c3 0%, #5a0 100%);
+  transition: width 120ms linear;
+}
+
+.ccap-owned-wrap__n {
+  position: relative;
+  z-index: 1;
+  display: block;
+  height: 100%;
+  text-align: center;
+  color: #fff;
+  font-weight: 800;
+  font-size: 13px;
+  line-height: 18px;
+  letter-spacing: -0.04em;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+  padding: 0 2px;
+  white-space: nowrap;
+}
+
+.ccap-owned-wrap__n--tight {
+  font-size: 11px;
+  letter-spacing: -0.06em;
+}
+
+.ccap-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.ccap-cat {
+  margin: 0;
+  padding: 0 2px;
+  color: #f1f5f9;
+  font-weight: 800;
+  font-size: 15px;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  background: transparent;
+  border: 0;
+  width: 100%;
+  text-align: left;
+}
+
+input.ccap-cat {
+  border: 1px solid rgba(251, 191, 36, 0.45);
+  border-radius: 4px;
+  background: rgba(15, 23, 42, 0.75);
+  padding: 1px 4px;
+  color: #fff;
+  outline: none;
+}
+
+/*
+  Arrow: CSS clip-path with FIXED px tip/notch so wide rows don't flatten the chevron.
+  Shape mirrors AdCap — concave left, convex right, same tip depth both ends.
+*/
+.ccap-arrow {
+  --ccap-arrow-clip: polygon(
+    var(--ccap-tip) 0%,
+    calc(100% - var(--ccap-tip)) 0%,
+    100% 50%,
+    calc(100% - var(--ccap-tip)) 100%,
+    var(--ccap-tip) 100%,
+    0% 50%
+  );
+  position: relative;
+  height: 38px;
+  width: 100%;
+  cursor: pointer;
+  filter: drop-shadow(0 0 0 var(--ccap-stroke));
+}
+
+.ccap-arrow__outline {
+  position: absolute;
+  inset: 0;
+  background: var(--ccap-stroke);
+  clip-path: var(--ccap-arrow-clip);
+}
+
+.ccap-arrow__inner {
+  position: absolute;
+  inset: 3px;
+  /* shrink tip depth for inner face so stroke stays even */
+  --ccap-tip-inner: 19px;
+  clip-path: polygon(
+    var(--ccap-tip-inner) 0%,
+    calc(100% - var(--ccap-tip-inner)) 0%,
+    100% 50%,
+    calc(100% - var(--ccap-tip-inner)) 100%,
+    var(--ccap-tip-inner) 100%,
+    0% 50%
+  );
+  background: var(--ccap-track);
+  overflow: hidden;
+}
+
+.ccap-arrow__fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 0%;
+  background: linear-gradient(180deg, var(--ccap-green-hi) 0%, var(--ccap-green) 48%, var(--ccap-green-lo) 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35);
+}
+
+/* AdCap "cash/sec" mode — full bar with marching diagonal stripes */
+.ccap-arrow__fill--stripe {
+  width: 100% !important;
+  background-color: #4ec857;
+  background-image:
+    repeating-linear-gradient(
+      -55deg,
+      #4ec857 0 10px,
+      #7eeb86 10px 20px
+    );
+  background-size: 28px 100%;
+  animation: ccap-stripe-march 0.5s linear infinite;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3);
+  will-change: background-position;
+}
+
+@keyframes ccap-stripe-march {
+  from { background-position: 0 0; }
+  to { background-position: 28px 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ccap-arrow__fill--stripe {
+    animation: none;
+  }
+}
+
+.ccap-arrow__label {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 calc(var(--ccap-tip) + 10px) 0 calc(var(--ccap-tip) + 6px);
+  color: #fff;
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  text-shadow: 0 1px 0 #000, 0 2px 3px rgba(0, 0, 0, 0.55);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+}
+
+.ccap-arrow__label--muted {
+  font-size: 16px;
+  color: #c5d2e0;
+}
+
+.ccap-arrow__icon {
+  width: 26px;
+  height: 26px;
+  border-radius: 4px;
+  border: 2px solid var(--ccap-stroke);
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+
+.ccap-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 52px;
+  gap: 5px;
+  height: 40px;
+}
+
+.ccap-buy {
+  appearance: none;
+  border: 3px solid var(--ccap-stroke);
+  border-radius: 6px;
+  padding: 0 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  line-height: 1.05;
+  cursor: pointer;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.4),
+    inset 0 -2px 0 rgba(0, 0, 0, 0.18);
+}
+
+.ccap-buy:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.ccap-buy:disabled {
+  cursor: not-allowed;
+  filter: saturate(0.7) brightness(0.88);
+}
+
+.ccap-buy--go {
+  background: linear-gradient(180deg, var(--ccap-orange-hi) 0%, var(--ccap-orange) 45%, var(--ccap-orange-lo) 100%);
+}
+
+.ccap-buy--wait {
+  background: linear-gradient(180deg, var(--ccap-blue-hi) 0%, var(--ccap-blue) 45%, var(--ccap-blue-lo) 100%);
+}
+
+.ccap-buy__top {
+  color: #fff;
+  font-weight: 800;
+  font-size: 13px;
+  letter-spacing: 0.01em;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.35);
+}
+
+.ccap-buy__cost {
+  color: var(--ccap-ink);
+  font-weight: 800;
+  font-size: 15px;
+  letter-spacing: -0.02em;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+
+.ccap-timer {
+  border: 3px solid var(--ccap-stroke);
+  border-radius: 6px;
+  background: linear-gradient(180deg, #2f455c 0%, var(--ccap-navy) 100%);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  display: grid;
+  place-items: center;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.65);
+}
+
+@media (min-width: 640px) {
+  .ccap-row {
+    grid-template-columns: 184px minmax(0, 1fr);
+    column-gap: 12px;
+  }
+
+  .ccap-side {
+    width: 184px;
+  }
+
+  .ccap-art {
+    width: 184px;
+    height: 184px;
+  }
+
+  .ccap-fleet {
+    --ccap-tip: 26px;
+  }
+
+  .ccap-cat {
+    font-size: 17px;
+  }
+
+  .ccap-arrow {
+    height: 48px;
+  }
+
+  .ccap-arrow__inner {
+    inset: 3px;
+    --ccap-tip-inner: 23px;
+  }
+
+  .ccap-arrow__label {
+    font-size: 24px;
+  }
+
+  .ccap-arrow__icon {
+    width: 30px;
+    height: 30px;
+  }
+
+  .ccap-controls {
+    height: 50px;
+    grid-template-columns: minmax(0, 1fr) 60px;
+    gap: 6px;
+  }
+
+  .ccap-buy__top {
+    font-size: 14px;
+  }
+
+  .ccap-buy__cost {
+    font-size: 17px;
+  }
+
+  .ccap-timer {
+    font-size: 16px;
+  }
+
+  .ccap-owned-wrap {
+    height: 26px;
+  }
+
+  .ccap-owned-wrap__n {
+    font-size: 14px;
+    line-height: 20px;
+  }
+
+  .ccap-owned-wrap__n--tight {
+    font-size: 12px;
+  }
+}

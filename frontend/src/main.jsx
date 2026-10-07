@@ -2,6 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App.jsx';
 import './index.css';
+import { startDeployRefreshWatcher } from './utils/deployRefresh';
 
 const LEGACY_HOSTS = new Set([
   'master-user-management.web.app',
@@ -15,6 +16,8 @@ if (LEGACY_HOSTS.has(currentHost)) {
   const target = `https://${canonicalHost}${window.location.pathname}${window.location.search}${window.location.hash}`;
   window.location.replace(target);
 }
+
+startDeployRefreshWatcher();
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>

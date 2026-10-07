@@ -11474,6 +11474,246 @@ exports.adminClawbackFunWinCoins = onRequest(
 );
 
 const COACH_CAPITALIST_CONFIG_DOC = 'coach_capitalist/config';
+const COACH_CAPITALIST_SAVES = 'coach_capitalist_saves';
+const COACH_CAPITALIST_SCORES = 'coach_capitalist_scores';
+const COACH_CAP_DEPOT_IDS = ['local', 'regional', 'national'];
+const COACH_CAP_MILESTONES = [
+  { id: 'life_1m', at: 1e6, coins: 5, label: '£1 million lifetime' },
+  { id: 'life_1b', at: 1e9, coins: 10, label: '£1 billion lifetime' },
+  { id: 'life_1t', at: 1e12, coins: 25, label: '£1 trillion lifetime' },
+  { id: 'life_1qa', at: 1e15, coins: 50, label: '£1 quadrillion lifetime' },
+  { id: 'life_1qi', at: 1e18, coins: 75, label: '£1 quintillion lifetime' },
+];
+
+function coachCapitalistLifetimeSortKey(lifetimeEarnings) {
+  const n = Number(lifetimeEarnings);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.log10(n);
+}
+
+/** Weights must match frontend coachCapitalist.js DEPOTS.lifetimeWeight */
+const COACH_CAP_LIFETIME_WEIGHT = { local: 1, regional: 2.5, national: 5 };
+
+function coachCapitalistTotalLifetime(state) {
+  if (!state?.depots) return 0;
+  let sum = 0;
+  for (const id of COACH_CAP_DEPOT_IDS) {
+    const life = Math.max(0, Number(state.depots?.[id]?.lifetimeEarnings) || 0);
+    const weight = COACH_CAP_LIFETIME_WEIGHT[id] || 1;
+    sum += life * weight;
+  }
+  return sum;
+}
+
+function coachCapitalistTotalSession(state) {
+  if (!state?.depots) return 0;
+  let sum = 0;
+  for (const id of COACH_CAP_DEPOT_IDS) {
+    sum += Math.max(0, Number(state.depots?.[id]?.sessionEarnings) || 0);
+  }
+  return sum;
+}
+
+/** Max shared backers from weighted lifetime (matches frontend ANGEL_SCALE = 180 = 150×1.2). */
+function coachCapitalistAngelsFromLifetime(weightedLifetime) {
+  const life = Math.max(0, Number(weightedLifetime) || 0);
+  if (life <= 0) return 0;
+  return Math.floor(180 * Math.sqrt(life / 1e15));
+}
+
+function clampCoachCapitalistAngels(state) {
+  if (!state) return state;
+  const maxTotal = coachCapitalistAngelsFromLifetime(coachCapitalistTotalLifetime(state));
+  const spent = Math.max(0, Number(state.angelsSpent) || 0);
+  const maxHeld = Math.max(0, maxTotal - spent);
+  return {
+    ...state,
+    angels: Math.min(Math.max(0, Number(state.angels) || 0), maxHeld),
+  };
+}
+
+/**
+ * Scale depot lifetimeEarnings so weighted total equals target (or leave if already ≤).
+ * Used for admin rebalance / lifetime caps after uncapped overnight play.
+ */
+function scaleCoachCapitalistLifetimeToTarget(rawState, targetWeighted) {
+  const state = sanitizeCoachCapitalistSave(rawState);
+  if (!state) return null;
+  const target = Math.max(0, Number(targetWeighted) || 0);
+  const current = coachCapitalistTotalLifetime(state);
+  if (current > 0 && target < current) {
+    const scale = target / current;
+    for (const id of COACH_CAP_DEPOT_IDS) {
+      const depot = state.depots[id];
+      if (!depot) continue;
+      const life = Math.max(0, Number(depot.lifetimeEarnings) || 0) * scale;
+      depot.lifetimeEarnings = life;
+      depot.sessionEarnings = Math.min(Math.max(0, Number(depot.sessionEarnings) || 0), life);
+    }
+  }
+  return clampCoachCapitalistAngels(state);
+}
+
+function sanitizeCoachCapitalistSave(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const depotsIn = raw.depots && typeof raw.depots === 'object' ? raw.depots : {};
+  const depots = {};
+  for (const id of COACH_CAP_DEPOT_IDS) {
+    const d = depotsIn[id] && typeof depotsIn[id] === 'object' ? depotsIn[id] : {};
+    depots[id] = {
+      cash: Math.max(0, Number(d.cash) || 0),
+      lifetimeEarnings: Math.max(0, Number(d.lifetimeEarnings) || 0),
+      sessionEarnings: Math.max(0, Number(d.sessionEarnings) || 0),
+      owned: Array.isArray(d.owned) ? d.owned.map((n) => Math.max(0, Math.floor(Number(n) || 0))).slice(0, 16) : [],
+      managers: Array.isArray(d.managers) ? d.managers.map(Boolean).slice(0, 16) : [],
+      upgrades: Array.isArray(d.upgrades) ? d.upgrades.map((x) => String(x || '').slice(0, 80)).filter(Boolean).slice(0, 200) : [],
+      angelUpgrades: Array.isArray(d.angelUpgrades)
+        ? d.angelUpgrades.map((x) => String(x || '').slice(0, 80)).filter(Boolean).slice(0, 100)
+        : [],
+      angels: Math.max(0, Number(d.angels) || 0),
+      angelsSpent: Math.max(0, Number(d.angelsSpent) || 0),
+      angelBonusExtra: Math.max(0, Number(d.angelBonusExtra) || 0),
+      progress: Array.isArray(d.progress) ? d.progress.map((n) => Math.max(0, Math.min(1, Number(n) || 0))).slice(0, 16) : [],
+      running: Array.isArray(d.running) ? d.running.map(Boolean).slice(0, 16) : [],
+      lastTick: Number(d.lastTick) || Date.now(),
+      unlocked: id === 'local' ? true : Boolean(d.unlocked),
+    };
+  }
+  const buyMode = raw.buyMode === 10 || raw.buyMode === 100 || raw.buyMode === 'max' ? raw.buyMode : 1;
+  const activeDepot = COACH_CAP_DEPOT_IDS.includes(raw.activeDepot) ? raw.activeDepot : 'local';
+  // Shared wallet (migrate from per-depot piles if account cash missing)
+  let cash = Math.max(0, Number(raw.cash) || 0);
+  if (raw.cash == null) {
+    cash = 0;
+    for (const id of COACH_CAP_DEPOT_IDS) {
+      cash += Math.max(0, Number(depots[id]?.cash) || 0);
+    }
+  }
+  // Shared backers pool (migrate from per-depot if account fields missing)
+  let angels = Math.max(0, Number(raw.angels) || 0);
+  let angelsSpent = Math.max(0, Number(raw.angelsSpent) || 0);
+  if (raw.angels == null && raw.angelsSpent == null) {
+    angels = 0;
+    angelsSpent = 0;
+    for (const id of COACH_CAP_DEPOT_IDS) {
+      angels += Math.max(0, Number(depots[id]?.angels) || 0);
+      angelsSpent += Math.max(0, Number(depots[id]?.angelsSpent) || 0);
+    }
+  }
+  return {
+    version: 1,
+    activeDepot,
+    buyMode,
+    cash,
+    angels,
+    angelsSpent,
+    depots,
+  };
+}
+
+async function upsertCoachCapitalistScore(uid, profile, lifetimeEarnings, { forceExact = false } = {}) {
+  const life = Math.max(0, Number(lifetimeEarnings) || 0);
+  const ref = db.collection(COACH_CAPITALIST_SCORES).doc(uid);
+  const prev = await ref.get();
+  const previous = prev.exists ? Number(prev.data()?.lifetimeEarnings) || 0 : 0;
+  const next = forceExact ? life : Math.max(previous, life);
+  const payload = {
+    uid,
+    fullName: profile?.fullName || profile?.email || 'Employee',
+    lifetimeEarnings: next,
+    lifetimeSort: coachCapitalistLifetimeSortKey(next),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+  await ref.set(payload, { merge: true });
+  return { lifetimeEarnings: next, updated: next !== previous, previous };
+}
+
+async function loadCoachCapitalistLeaderboard(limit = 100) {
+  const cap = Math.max(1, Math.min(200, Math.floor(Number(limit) || 100)));
+  let rows = [];
+  try {
+    const snap = await db.collection(COACH_CAPITALIST_SCORES)
+      .orderBy('lifetimeSort', 'desc')
+      .limit(cap)
+      .get();
+    rows = snap.docs.map((doc) => {
+      const data = doc.data() || {};
+      return {
+        uid: doc.id,
+        fullName: data.fullName || 'Employee',
+        lifetimeEarnings: Number(data.lifetimeEarnings) || 0,
+        updatedAt: data.updatedAt?.toDate?.()?.toISOString?.() || null,
+      };
+    });
+  } catch (queryError) {
+    console.warn('loadCoachCapitalistLeaderboard ordered query failed', queryError?.message || queryError);
+    const snap = await db.collection(COACH_CAPITALIST_SCORES).limit(500).get();
+    rows = snap.docs.map((doc) => {
+      const data = doc.data() || {};
+      return {
+        uid: doc.id,
+        fullName: data.fullName || 'Employee',
+        lifetimeEarnings: Number(data.lifetimeEarnings) || 0,
+        updatedAt: data.updatedAt?.toDate?.()?.toISOString?.() || null,
+      };
+    });
+  }
+  // Always re-sort in memory so every caller sees the same order
+  // (covers missing lifetimeSort on older docs / index fallback).
+  rows.sort((a, b) => {
+    if (b.lifetimeEarnings !== a.lifetimeEarnings) return b.lifetimeEarnings - a.lifetimeEarnings;
+    return String(a.fullName || '').localeCompare(String(b.fullName || ''));
+  });
+  return rows.slice(0, cap);
+}
+
+async function coachCapitalistRankForUid(uid, lifetimeEarnings) {
+  const life = Math.max(0, Number(lifetimeEarnings) || 0);
+  const sortKey = coachCapitalistLifetimeSortKey(life);
+  try {
+    const higher = await db.collection(COACH_CAPITALIST_SCORES)
+      .where('lifetimeSort', '>', sortKey)
+      .count()
+      .get();
+    return (higher.data().count || 0) + 1;
+  } catch {
+    const rows = await loadCoachCapitalistLeaderboard(200);
+    const idx = rows.findIndex((r) => r.uid === uid);
+    if (idx >= 0) return idx + 1;
+    return rows.filter((r) => r.lifetimeEarnings > life).length + 1;
+  }
+}
+
+async function awardCoachCapitalistMilestones(uid, profile, lifetimeEarnings) {
+  const life = Math.max(0, Number(lifetimeEarnings) || 0);
+  const awarded = [];
+  for (const mile of COACH_CAP_MILESTONES) {
+    if (life < mile.at) continue;
+    const result = await awardCoins(db, {
+      uid,
+      amount: mile.coins,
+      reason: 'coach_capitalist_milestone',
+      idempotencyKey: `coach_cap_milestone:${uid}:${mile.id}`,
+      FieldValue: admin.firestore.FieldValue,
+      fullName: profile?.fullName || profile?.email || '',
+      meta: {
+        source: 'coach_capitalist',
+        refType: 'milestone',
+        refId: mile.id,
+        message: mile.label,
+      },
+    });
+    if (result.awarded) {
+      awarded.push({
+        id: mile.id,
+        label: mile.label,
+        coins: mile.coins,
+        balance: result.balance,
+      });
+    }
+  }
+  return awarded;
+}
 
 function normalizeCoachCapitalistNameConfig(raw) {
   const out = { depots: {} };
@@ -11584,19 +11824,21 @@ exports.syncCoachCapitalistScore = onRequest(
         res.status(400).json({ error: 'lifetimeEarnings must be a number.' });
         return;
       }
-      const uid = session.profile.uid;
-      const ref = db.collection('coach_capitalist_scores').doc(uid);
-      const prev = await ref.get();
-      const previous = prev.exists ? Number(prev.data()?.lifetimeEarnings) || 0 : 0;
-      // Only ever increase — prevents accidental resets wiping the board.
-      const next = Math.max(previous, lifetimeEarnings);
-      await ref.set({
-        uid,
-        fullName: session.profile.fullName || session.profile.email || 'Employee',
-        lifetimeEarnings: next,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      }, { merge: true });
-      res.status(200).json({ lifetimeEarnings: next, updated: next > previous });
+      const result = await upsertCoachCapitalistScore(
+        session.profile.uid,
+        session.profile,
+        lifetimeEarnings,
+      );
+      const milestones = await awardCoachCapitalistMilestones(
+        session.profile.uid,
+        session.profile,
+        result.lifetimeEarnings,
+      );
+      res.status(200).json(withCoinAwards({
+        lifetimeEarnings: result.lifetimeEarnings,
+        updated: result.updated,
+        milestones,
+      }, milestones.map((m) => ({ amount: m.coins, reason: 'coach_capitalist_milestone' }))));
     } catch (error) {
       console.error('syncCoachCapitalistScore failed', error);
       res.status(500).json({ error: error.message || 'Failed to sync score.' });
@@ -11604,11 +11846,199 @@ exports.syncCoachCapitalistScore = onRequest(
   }),
 );
 
-// GET → admin: all-time Coach Capitalist earnings leaderboard.
-exports.adminCoachCapitalistLeaderboard = onRequest(
+// GET → shared all-time Coach Capitalist leaderboard (same board for every signed-in user).
+exports.getCoachCapitalistLeaderboard = onRequest(
   { region: 'europe-west2', timeoutSeconds: 60 },
   withCors(async (req, res) => {
     if (req.method !== 'GET') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
+    const session = await getVerifiedSessionUser(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+    try {
+      const limit = Math.min(100, Math.max(5, Math.floor(Number(req.query?.limit) || 50)));
+      const leaderboard = await loadCoachCapitalistLeaderboard(limit);
+      const uid = session.profile.uid;
+      const mineSnap = await db.collection(COACH_CAPITALIST_SCORES).doc(uid).get();
+      const myLife = mineSnap.exists
+        ? Number(mineSnap.data()?.lifetimeEarnings) || 0
+        : 0;
+      const myRank = myLife > 0 || mineSnap.exists
+        ? await coachCapitalistRankForUid(uid, myLife)
+        : null;
+      res.status(200).json({
+        leaderboard,
+        count: leaderboard.length,
+        me: {
+          uid,
+          fullName: session.profile.fullName || session.profile.email || 'Employee',
+          lifetimeEarnings: myLife,
+          rank: myRank,
+        },
+      });
+    } catch (error) {
+      console.error('getCoachCapitalistLeaderboard failed', error);
+      res.status(500).json({ error: error.message || 'Failed to load leaderboard.' });
+    }
+  }),
+);
+
+// Alias — older admin clients.
+exports.adminCoachCapitalistLeaderboard = exports.getCoachCapitalistLeaderboard;
+
+// GET → cloud save for this user (progress follows login across devices).
+exports.getCoachCapitalistSave = onRequest(
+  { region: 'europe-west2' },
+  withCors(async (req, res) => {
+    if (req.method !== 'GET') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
+    const session = await getVerifiedSessionUser(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+    try {
+      const uid = session.profile.uid;
+      const snap = await db.collection(COACH_CAPITALIST_SAVES).doc(uid).get();
+      const data = snap.exists ? (snap.data() || {}) : {};
+      let state = data.state ? sanitizeCoachCapitalistSave(data.state) : null;
+      const lifetimeCap = Number(data.lifetimeCap);
+      const hasCap = Number.isFinite(lifetimeCap) && lifetimeCap >= 0;
+      if (state && hasCap && coachCapitalistTotalLifetime(state) > lifetimeCap) {
+        state = scaleCoachCapitalistLifetimeToTarget(state, lifetimeCap);
+      }
+      const lifetimeEarnings = state
+        ? coachCapitalistTotalLifetime(state)
+        : (Number(data.lifetimeEarnings) || 0);
+      res.status(200).json({
+        state,
+        lifetimeEarnings,
+        lifetimeCap: hasCap ? lifetimeCap : null,
+        forceResetToken: data.forceResetToken ? String(data.forceResetToken) : null,
+        updatedAt: data.updatedAt?.toDate?.()?.toISOString?.() || null,
+      });
+    } catch (error) {
+      console.error('getCoachCapitalistSave failed', error);
+      res.status(500).json({ error: error.message || 'Failed to load save.' });
+    }
+  }),
+);
+
+// POST { state } → cloud save + score sync + milestone coins.
+exports.saveCoachCapitalistSave = onRequest(
+  { region: 'europe-west2', timeoutSeconds: 60 },
+  withCors(async (req, res) => {
+    if (req.method !== 'POST') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
+    const session = await getVerifiedSessionUser(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+    try {
+      const state = sanitizeCoachCapitalistSave(req.body?.state || req.body);
+      if (!state) {
+        res.status(400).json({ error: 'state is required.' });
+        return;
+      }
+      const uid = session.profile.uid;
+      const lifetimeEarnings = coachCapitalistTotalLifetime(state);
+      const ref = db.collection(COACH_CAPITALIST_SAVES).doc(uid);
+      const prevSnap = await ref.get();
+      const prevData = prevSnap.exists ? (prevSnap.data() || {}) : {};
+      const prevLife = prevSnap.exists
+        ? coachCapitalistTotalLifetime(prevData.state)
+        : 0;
+      const lifetimeCap = Number(prevData.lifetimeCap);
+      const hasCap = Number.isFinite(lifetimeCap) && lifetimeCap >= 0;
+      const cloudForceToken = prevData.forceResetToken ? String(prevData.forceResetToken) : '';
+      const clientForceToken = String(req.body?.forceResetToken || '').trim();
+      // Stale browser that has not loaded the admin/cloud wipe yet — never overwrite.
+      const staleForceReset = Boolean(cloudForceToken) && clientForceToken !== cloudForceToken;
+      const prevSession = prevSnap.exists ? coachCapitalistTotalSession(prevData.state) : 0;
+      const clientSession = coachCapitalistTotalSession(state);
+      const prevCash = Math.max(0, Number(prevData.state?.cash) || 0);
+      const clientCash = Math.max(0, Number(state.cash) || 0);
+      const lifeEps = Math.max(1, prevLife * 1e-12);
+      const sameLife = prevSnap.exists && Math.abs(prevLife - lifetimeEarnings) <= lifeEps;
+      // Keep cloud when: higher lifetime, OR same lifetime but cloud is the post-claim
+      // (lower session/cash) so a stale tab cannot undo a prestige.
+      let keepPrev = staleForceReset;
+      if (!keepPrev && !hasCap && prevSnap.exists) {
+        if (prevLife > lifetimeEarnings + lifeEps) {
+          keepPrev = true;
+        } else if (sameLife) {
+          if (prevSession < clientSession) keepPrev = true;
+          else if (prevSession === clientSession && prevCash < clientCash) keepPrev = true;
+        }
+      }
+      let nextState = keepPrev
+        ? sanitizeCoachCapitalistSave(prevData.state)
+        : state;
+      if (hasCap && coachCapitalistTotalLifetime(nextState) > lifetimeCap) {
+        nextState = scaleCoachCapitalistLifetimeToTarget(nextState, lifetimeCap);
+      }
+      const nextLife = coachCapitalistTotalLifetime(nextState);
+      const shouldWrite = !keepPrev || (hasCap && nextLife < prevLife - 1e-6);
+      // Fresh claim/prestige write — stamp a token so other open tabs cannot undo it.
+      const postClaimWrite = shouldWrite
+        && prevSnap.exists
+        && sameLife
+        && clientSession < prevSession;
+      const nextForceToken = postClaimWrite
+        ? `claim-${Date.now().toString(36)}`
+        : cloudForceToken;
+      if (shouldWrite) {
+        const payload = {
+          uid,
+          state: nextState,
+          lifetimeEarnings: nextLife,
+          lifetimeSort: coachCapitalistLifetimeSortKey(nextLife),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedByName: session.profile.fullName || session.profile.email || '',
+        };
+        if (postClaimWrite) payload.forceResetToken = nextForceToken;
+        await ref.set(payload, { merge: true });
+      }
+      const score = await upsertCoachCapitalistScore(
+        uid,
+        session.profile,
+        nextLife,
+        { forceExact: hasCap },
+      );
+      const milestones = await awardCoachCapitalistMilestones(uid, session.profile, score.lifetimeEarnings);
+      const rank = await coachCapitalistRankForUid(uid, score.lifetimeEarnings);
+      res.status(200).json(withCoinAwards({
+        state: nextState,
+        lifetimeEarnings: score.lifetimeEarnings,
+        lifetimeCap: hasCap ? lifetimeCap : null,
+        forceResetToken: nextForceToken || null,
+        keptCloud: keepPrev,
+        rank,
+        milestones,
+        updatedAt: new Date().toISOString(),
+      }, milestones.map((m) => ({ amount: m.coins, reason: 'coach_capitalist_milestone' }))));
+    } catch (error) {
+      console.error('saveCoachCapitalistSave failed', error);
+      res.status(500).json({ error: error.message || 'Failed to save progress.' });
+    }
+  }),
+);
+
+// POST { uid, lifetimeEarnings, reason? } → admin: set Cap weighted lifetime + hard cap
+// so a stale client cannot re-upload a pre-nerf overnight score.
+exports.adminSetCoachCapitalistLifetime = onRequest(
+  { region: 'europe-west2', timeoutSeconds: 60 },
+  withCors(async (req, res) => {
+    if (req.method !== 'POST') {
       res.status(405).json({ error: 'Method not allowed.' });
       return;
     }
@@ -11621,43 +12051,87 @@ exports.adminCoachCapitalistLeaderboard = onRequest(
       res.status(403).json({ error: 'Admin access is required.' });
       return;
     }
+    const uid = String(req.body?.uid || '').trim();
+    const targetLife = Number(req.body?.lifetimeEarnings);
+    const reason = String(req.body?.reason || '').trim().slice(0, 280);
+    const clearCap = req.body?.clearCap === true;
+    if (!uid) {
+      res.status(400).json({ error: 'uid is required.' });
+      return;
+    }
+    if (!clearCap && (!Number.isFinite(targetLife) || targetLife < 0)) {
+      res.status(400).json({ error: 'lifetimeEarnings must be a non-negative number.' });
+      return;
+    }
     try {
-      let rows = [];
-      try {
-        const snap = await db.collection('coach_capitalist_scores')
-          .orderBy('lifetimeEarnings', 'desc')
-          .limit(100)
-          .get();
-        rows = snap.docs.map((doc) => {
-          const data = doc.data() || {};
-          return {
-            uid: doc.id,
-            fullName: data.fullName || 'Employee',
-            lifetimeEarnings: Number(data.lifetimeEarnings) || 0,
-            updatedAt: data.updatedAt?.toDate?.()?.toISOString?.() || null,
-          };
-        });
-      } catch (queryError) {
-        // Missing index fallback
-        console.warn('adminCoachCapitalistLeaderboard ordered query failed', queryError?.message || queryError);
-        const snap = await db.collection('coach_capitalist_scores').limit(200).get();
-        rows = snap.docs
-          .map((doc) => {
-            const data = doc.data() || {};
-            return {
-              uid: doc.id,
-              fullName: data.fullName || 'Employee',
-              lifetimeEarnings: Number(data.lifetimeEarnings) || 0,
-              updatedAt: data.updatedAt?.toDate?.()?.toISOString?.() || null,
-            };
-          })
-          .sort((a, b) => b.lifetimeEarnings - a.lifetimeEarnings)
-          .slice(0, 100);
+      const saveRef = db.collection(COACH_CAPITALIST_SAVES).doc(uid);
+      const scoreRef = db.collection(COACH_CAPITALIST_SCORES).doc(uid);
+      const [saveSnap, scoreSnap] = await Promise.all([saveRef.get(), scoreRef.get()]);
+      if (!saveSnap.exists && !scoreSnap.exists) {
+        res.status(404).json({ error: 'No Coach Capitalist save/score for that user.' });
+        return;
       }
-      res.status(200).json({ leaderboard: rows, count: rows.length });
+      const prevData = saveSnap.exists ? (saveSnap.data() || {}) : {};
+      const prevState = sanitizeCoachCapitalistSave(prevData.state) || sanitizeCoachCapitalistSave({
+        activeDepot: 'local',
+        buyMode: 1,
+        cash: 0,
+        angels: 0,
+        angelsSpent: 0,
+        depots: {},
+      });
+      const previousLife = coachCapitalistTotalLifetime(prevState);
+      if (clearCap) {
+        await saveRef.set({
+          lifetimeCap: admin.firestore.FieldValue.delete(),
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          adminLifetimeNote: reason || 'lifetime cap cleared',
+          adminLifetimeBy: session.profile.fullName || session.profile.email || '',
+          adminLifetimeAt: admin.firestore.FieldValue.serverTimestamp(),
+        }, { merge: true });
+        res.status(200).json({
+          uid,
+          clearedCap: true,
+          lifetimeEarnings: previousLife,
+        });
+        return;
+      }
+      const nextState = scaleCoachCapitalistLifetimeToTarget(prevState, targetLife);
+      const nextLife = coachCapitalistTotalLifetime(nextState);
+      const profileName = scoreSnap.exists
+        ? (scoreSnap.data()?.fullName || '')
+        : (prevData.updatedByName || '');
+      await saveRef.set({
+        uid,
+        state: nextState,
+        lifetimeEarnings: nextLife,
+        lifetimeSort: coachCapitalistLifetimeSortKey(nextLife),
+        lifetimeCap: targetLife,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedByName: session.profile.fullName || session.profile.email || '',
+        adminLifetimeNote: reason || 'admin lifetime rebalance',
+        adminLifetimeBy: session.profile.fullName || session.profile.email || '',
+        adminLifetimeAt: admin.firestore.FieldValue.serverTimestamp(),
+        adminLifetimePrevious: previousLife,
+      }, { merge: true });
+      const score = await upsertCoachCapitalistScore(
+        uid,
+        { fullName: profileName || uid, email: '' },
+        nextLife,
+        { forceExact: true },
+      );
+      res.status(200).json({
+        uid,
+        previousLifetimeEarnings: previousLife,
+        lifetimeEarnings: score.lifetimeEarnings,
+        lifetimeCap: targetLife,
+        angels: nextState.angels,
+        angelsSpent: nextState.angelsSpent,
+        reason: reason || null,
+      });
     } catch (error) {
-      console.error('adminCoachCapitalistLeaderboard failed', error);
-      res.status(500).json({ error: error.message || 'Failed to load leaderboard.' });
+      console.error('adminSetCoachCapitalistLifetime failed', error);
+      res.status(500).json({ error: error.message || 'Failed to set lifetime.' });
     }
   }),
 );
