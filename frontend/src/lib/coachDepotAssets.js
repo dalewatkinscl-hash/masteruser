@@ -1,6 +1,7 @@
-/** Isometric City starter sprites + 12×12 yard helpers. */
+/** Isometric City starter sprites + 12×12 yard helpers + admin-mapped custom pack. */
 
 const BASE = '/coach-depot/iso';
+export const CUSTOM_BASE = '/coach-depot/custom';
 
 export const TILE_W = 128;
 export const TILE_H = 64;
@@ -8,6 +9,166 @@ export const GRID_SIZE = 12;
 
 export function assetUrl(...parts) {
   return `${BASE}/${parts.join('/')}`;
+}
+
+/** Resolve a custom pack filename (or absolute /coach-depot path) to a URL. */
+export function customAssetUrl(file) {
+  const f = String(file || '').trim();
+  if (!f) return null;
+  if (f.startsWith('/')) return f;
+  if (f.startsWith('iso/')) return `/coach-depot/${f}`;
+  if (f.startsWith('custom/')) return `/coach-depot/${f}`;
+  return `${CUSTOM_BASE}/${f.replace(/^\/+/, '')}`;
+}
+
+/**
+ * Default mapping for the Gemini custom pack under /coach-depot/custom/.
+ * Admins can override via Fun Admin → Depot asset map (Firestore).
+ */
+export const DEFAULT_CUSTOM_ASSET_MAP = {
+  office: [
+    'bld_hq_container_blue.png',
+    'bld_hq_metal_warehouse.png',
+    'bld_hq_modern_garden.png',
+    'bld_hq_glass_tall.png',
+  ],
+  opsOffice: [
+    'bld_ops_container.png',
+    'bld_ops_shack.png',
+    'bld_ops_dish.png',
+    'bld_ops_tower.png',
+  ],
+  trainingCentre: [
+    'bld_training_cabin.png',
+    'bld_training_container.png',
+    'bld_training_centre.png',
+  ],
+  workshop: [
+    'bld_workshop_wood.png',
+    'bld_workshop_brick.png',
+    'bld_workshop_industrial.png',
+  ],
+  wash: ['bld_wash_bay.png', 'bld_wash_brushes.png'],
+  breakRoom: ['bld_break_canteen.png', 'decor_picnic.png'],
+  paintShop: ['bld_workshop_tent.png', 'bld_workshop_garage.png'],
+  tourOffice: ['bld_tours_kiosk.png', 'bld_tours_office.png'],
+  chargers: ['bay_ev_charger.png'],
+  bay: 'bay_coach_only.png',
+  decorations: {
+    flowers: 'decor_flowerbed.png',
+    fence: 'decor_fence_chain.png',
+    light: 'decor_lamp_single.png',
+    rocks: 'decor_fountain.png',
+    box: 'decor_picnic.png',
+    fountain: 'decor_fountain.png',
+    picnic: 'decor_picnic.png',
+  },
+  vehicles: {
+    1: 'veh_minibus.png',
+    2: 'veh_coach.png',
+    3: 'veh_exec.png',
+    4: 'veh_electric.png',
+    5: 'veh_super_exec.png',
+  },
+  character: 'char_driver_wave.png',
+  grounds: {
+    grass: 'ground_grass_lush.png',
+    dirt: 'ground_grass_dry.png',
+    road: 'ground_road.png',
+  },
+};
+
+/** Empty map = use original Isometric City sprites (live players). */
+export function emptyCoachDepotAssetMap() {
+  return {
+    office: [],
+    opsOffice: [],
+    trainingCentre: [],
+    workshop: [],
+    wash: [],
+    breakRoom: [],
+    paintShop: [],
+    tourOffice: [],
+    chargers: [],
+    bay: '',
+    decorations: {},
+    vehicles: {},
+    character: '',
+    grounds: {},
+  };
+}
+
+/** Live game stays on stock sprites until the custom pack is approved. */
+let activeAssetMap = emptyCoachDepotAssetMap();
+
+/**
+ * @param {object|null} raw
+ * @param {{ useDefaults?: boolean }} [opts] useDefaults fills Gemini pack defaults (sandbox / mapper).
+ */
+export function normalizeCoachDepotAssetMap(raw, { useDefaults = true } = {}) {
+  const src = raw && typeof raw === 'object' ? raw : {};
+  const out = emptyCoachDepotAssetMap();
+  const defaults = useDefaults ? DEFAULT_CUSTOM_ASSET_MAP : emptyCoachDepotAssetMap();
+  const levelKeys = [
+    'office', 'opsOffice', 'trainingCentre', 'workshop', 'wash',
+    'breakRoom', 'paintShop', 'tourOffice', 'chargers',
+  ];
+  for (const key of levelKeys) {
+    const list = Array.isArray(src[key])
+      ? src[key]
+      : (useDefaults ? (defaults[key] || []) : []);
+    out[key] = list.map((f) => String(f || '').trim()).filter(Boolean).slice(0, 8);
+  }
+  out.bay = String(src.bay ?? (useDefaults ? defaults.bay : '') ?? '').trim();
+  out.character = String(src.character ?? (useDefaults ? defaults.character : '') ?? '').trim();
+  const decorIn = src.decorations && typeof src.decorations === 'object' ? src.decorations : {};
+  const decorDefault = defaults.decorations || {};
+  const decorKeys = useDefaults
+    ? Object.keys({ ...decorDefault, ...decorIn })
+    : Object.keys(decorIn);
+  for (const k of decorKeys) {
+    const v = String(decorIn[k] ?? decorDefault[k] ?? '').trim();
+    if (v) out.decorations[k] = v;
+  }
+  const vehIn = src.vehicles && typeof src.vehicles === 'object' ? src.vehicles : {};
+  for (let t = 1; t <= 5; t += 1) {
+    const v = String(
+      vehIn[t] ?? vehIn[String(t)] ?? (useDefaults ? defaults.vehicles?.[t] : '') ?? '',
+    ).trim();
+    if (v) out.vehicles[t] = v;
+  }
+  const gIn = src.grounds && typeof src.grounds === 'object' ? src.grounds : {};
+  for (const k of ['grass', 'dirt', 'asphalt', 'concrete', 'road']) {
+    const v = String(gIn[k] ?? (useDefaults ? defaults.grounds?.[k] : '') ?? '').trim();
+    if (v) out.grounds[k] = v;
+  }
+  return out;
+}
+
+/** Pass null/undefined to disable custom pack (stock sprites). */
+export function setCoachDepotAssetMap(map, { useDefaults = true } = {}) {
+  if (map == null) {
+    activeAssetMap = emptyCoachDepotAssetMap();
+    return activeAssetMap;
+  }
+  activeAssetMap = normalizeCoachDepotAssetMap(map, { useDefaults });
+  return activeAssetMap;
+}
+
+export function clearCoachDepotAssetMap() {
+  activeAssetMap = emptyCoachDepotAssetMap();
+  return activeAssetMap;
+}
+
+export function getCoachDepotAssetMap() {
+  return activeAssetMap;
+}
+
+function mappedLevelFile(key, level = 1) {
+  const list = activeAssetMap?.[key];
+  if (!Array.isArray(list) || !list.length) return null;
+  const idx = Math.max(0, Math.min(list.length - 1, Math.floor(Number(level) || 1) - 1));
+  return list[idx] || list[0] || null;
 }
 
 export const GROUND = {
@@ -23,6 +184,8 @@ export const GROUND = {
 };
 
 export function officeSprite(officeLevel = 1) {
+  const custom = mappedLevelFile('office', officeLevel);
+  if (custom) return customAssetUrl(custom);
   const list = [
     'bld_office_small_gray_a.png',
     'bld_office_medium_brickbrown_a.png',
@@ -45,11 +208,32 @@ export const BUILDING_SPRITES = {
   tourOffice: ['bld_hospital_a.png', 'bld_office_tall_yellow_a.png'],
 };
 
+/** Building keys that appear in the admin asset mapper. */
+export const ASSET_MAP_BUILDING_KEYS = [
+  'office',
+  'opsOffice',
+  'trainingCentre',
+  'workshop',
+  'wash',
+  'breakRoom',
+  'paintShop',
+  'tourOffice',
+  'chargers',
+];
+
 export function buildingSprite(key, level = 1) {
+  const custom = mappedLevelFile(key, level);
+  if (custom) return customAssetUrl(custom);
   const list = BUILDING_SPRITES[key];
   if (!list) return assetUrl('buildings', 'bld_warehouse_brown_a.png');
   const idx = level <= 1 ? 0 : Math.min(list.length - 1, 1);
   return assetUrl('buildings', list[idx]);
+}
+
+export function baySprite() {
+  const file = activeAssetMap?.bay;
+  if (file) return customAssetUrl(file);
+  return GROUND.concrete;
 }
 
 /** Every HQ / building / bay / decoration / driver sprite for the Lock calibrator yard. */
@@ -67,10 +251,11 @@ export function calibrationCatalog() {
       file: spriteFileName(src),
     });
   }
-  for (const [key, list] of Object.entries(BUILDING_SPRITES)) {
-    list.forEach((fileName, idx) => {
-      const level = idx + 1;
-      const src = assetUrl('buildings', fileName);
+  for (const key of ASSET_MAP_BUILDING_KEYS) {
+    if (key === 'office') continue;
+    const levels = Math.max(2, (activeAssetMap?.[key] || BUILDING_SPRITES[key] || []).length || 2);
+    for (let level = 1; level <= levels; level += 1) {
+      const src = buildingSprite(key, level);
       items.push({
         id: `${key}-lv${level}`,
         label: `${key} Lv ${level}`,
@@ -80,9 +265,9 @@ export function calibrationCatalog() {
         src,
         file: spriteFileName(src),
       });
-    });
+    }
   }
-  const baySrc = GROUND.concrete;
+  const baySrc = baySprite();
   items.push({
     id: 'bay',
     label: 'Parking bay',
@@ -104,6 +289,8 @@ export function calibrationCatalog() {
     { key: 'light', facing: 'SE', label: 'Light pole' },
     { key: 'rocks', facing: 'SE', label: 'Rocks' },
     { key: 'box', facing: 'SE', label: 'Crates' },
+    { key: 'fountain', facing: 'SE', label: 'Fountain' },
+    { key: 'picnic', facing: 'SE', label: 'Picnic set' },
   ];
   decorCatalog.forEach((d) => {
     const src = decorationSprite(d.key, d.facing);
@@ -173,8 +360,16 @@ export const VEHICLE_BASE = {
 };
 
 export function vehicleSprite(tier = 1, facing = 'SE') {
-  const base = VEHICLE_BASE[tier] || VEHICLE_BASE[1];
+  const t = Math.max(1, Math.min(5, Math.floor(Number(tier) || 1)));
+  const custom = activeAssetMap?.vehicles?.[t];
+  if (custom) return customAssetUrl(custom);
+  const base = VEHICLE_BASE[t] || VEHICLE_BASE[1];
   return assetUrl('vehicles', `${base}_${facing}.png`);
+}
+
+export function vehicleUsesCustomArt(tier = 1) {
+  const t = Math.max(1, Math.min(5, Math.floor(Number(tier) || 1)));
+  return Boolean(activeAssetMap?.vehicles?.[t]);
 }
 
 /** Minibus is 60% of a full coach footprint. */
@@ -185,6 +380,7 @@ export function vehicleDisplayWidth(tier, baseWidth = TILE_W * 0.7) {
 
 /** CSS filter so coach / exec / electric / super read clearly apart. */
 export function vehicleFilterStyle(tier) {
+  if (vehicleUsesCustomArt(tier)) return {}; // custom pack already coloured
   switch (Math.floor(Number(tier) || 1)) {
     case 1:
       return { filter: 'saturate(1.05)' }; // school-bus yellow, slightly punchy
@@ -223,6 +419,8 @@ export const DECOR_FACING_LABELS = {
 };
 
 export function decorationSprite(key, facing = 'SE') {
+  const mapped = activeAssetMap?.decorations?.[key];
+  if (mapped) return customAssetUrl(mapped);
   const edge = String(facing || 'SE').toUpperCase();
   if (key === 'fence') {
     // Parallel edges share a sprite (a ≈ NE/SW diagonal, b ≈ NW/SE).
@@ -232,6 +430,8 @@ export function decorationSprite(key, facing = 'SE') {
   if (key === 'box') return PROP.box;
   if (key === 'flowers') return PROP.flowers;
   if (key === 'rocks') return PROP.rocks;
+  if (key === 'fountain') return PROP.rocks;
+  if (key === 'picnic') return PROP.box;
   return PROP.box;
 }
 
@@ -240,8 +440,82 @@ export function decorationDisplayWidth(key) {
   if (key === 'light') return 28;
   if (key === 'flowers') return 36;
   if (key === 'rocks') return 40;
+  if (key === 'fountain') return TILE_W * 0.72;
+  if (key === 'picnic') return TILE_W * 0.68;
   return 32;
 }
+
+/** Filenames available under /coach-depot/custom/ for the admin mapper. */
+export const CUSTOM_ASSET_FILES = [
+  'bay_coach_only.png',
+  'bay_ev_charger.png',
+  'bld_break_canteen.png',
+  'bld_hq_container_blue.png',
+  'bld_hq_glass_tall.png',
+  'bld_hq_metal_warehouse.png',
+  'bld_hq_modern_garden.png',
+  'bld_ops_container.png',
+  'bld_ops_dish.png',
+  'bld_ops_shack.png',
+  'bld_ops_tower.png',
+  'bld_tours_kiosk.png',
+  'bld_tours_office.png',
+  'bld_training_cabin.png',
+  'bld_training_centre.png',
+  'bld_training_container.png',
+  'bld_wash_bay.png',
+  'bld_wash_brushes.png',
+  'bld_workshop_brick.png',
+  'bld_workshop_garage.png',
+  'bld_workshop_industrial.png',
+  'bld_workshop_tent.png',
+  'bld_workshop_wood.png',
+  'char_driver_wave.png',
+  'decor_container_barrels.png',
+  'decor_container_tires.png',
+  'decor_fence_chain.png',
+  'decor_flowerbed.png',
+  'decor_fountain.png',
+  'decor_lamp_double.png',
+  'decor_lamp_single.png',
+  'decor_metal_barrels.png',
+  'decor_metal_tires.png',
+  'decor_picnic.png',
+  'ground_grass_dry.png',
+  'ground_grass_lush.png',
+  'ground_road.png',
+  'veh_coach.png',
+  'veh_electric.png',
+  'veh_exec.png',
+  'veh_minibus.png',
+  'veh_super_exec.png',
+];
+
+export const ASSET_MAP_DECOR_KEYS = [
+  'flowers', 'fence', 'light', 'rocks', 'box', 'fountain', 'picnic',
+];
+
+export const ASSET_MAP_VEHICLE_TIERS = [
+  { tier: 1, label: 'Minibus' },
+  { tier: 2, label: 'Coach' },
+  { tier: 3, label: 'Exec' },
+  { tier: 4, label: 'Electric' },
+  { tier: 5, label: 'Super exec' },
+];
+
+export const ASSET_MAP_GROUND_KEYS = ['grass', 'dirt', 'asphalt', 'concrete', 'road'];
+
+export const BUILDING_MAP_LABELS = {
+  office: 'HQ / Depot',
+  opsOffice: 'Operations',
+  trainingCentre: 'Training centre',
+  workshop: 'Workshop',
+  wash: 'Wash bay',
+  breakRoom: 'Break room',
+  paintShop: 'Paint shop',
+  tourOffice: 'Tour office',
+  chargers: 'EV chargers',
+};
 
 /**
  * Screen position for a decoration on a tile centre (sx, sy from isoToScreen).
@@ -315,15 +589,25 @@ export function characterScreenLayout(facing, sx, sy, anchors = {}) {
 }
 
 export function characterSprite(facing = 'SE') {
+  const mapped = activeAssetMap?.character;
+  if (mapped) return customAssetUrl(mapped);
   return assetUrl('characters', `char_a_idle_${facing}_f01.png`);
 }
 
 export function groundForAge(ageOrHq = 1) {
   const n = Math.max(1, Math.floor(Number(ageOrHq) || 1));
-  if (n >= 4) return GROUND.concrete;
-  if (n >= 3) return GROUND.asphalt;
-  if (n >= 2) return GROUND.grass;
-  return GROUND.dirt;
+  if (n >= 4) {
+    return customAssetUrl(activeAssetMap?.grounds?.concrete) || GROUND.concrete;
+  }
+  if (n >= 3) {
+    return customAssetUrl(activeAssetMap?.grounds?.asphalt)
+      || customAssetUrl(activeAssetMap?.grounds?.road)
+      || GROUND.asphalt;
+  }
+  if (n >= 2) {
+    return customAssetUrl(activeAssetMap?.grounds?.grass) || GROUND.grass;
+  }
+  return customAssetUrl(activeAssetMap?.grounds?.dirt) || GROUND.dirt;
 }
 
 export const groundForHq = groundForAge;

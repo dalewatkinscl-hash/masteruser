@@ -31,6 +31,9 @@ const TOOLBOX_KICK_GAME = { key: 'toolboxkick', label: 'Little Dicks Toolbox' };
 const WANTED_LIVE_FROM = '2026-09-08';
 const WANTED_GAME = { key: 'wanted', label: 'Daily Wanted' };
 
+/** Always offered on Fun (test build — not counted in weekday rotation). */
+const COUNTRY_HOLES_GAME = { key: 'countryholes', label: 'Country Holes' };
+
 /** Soft launch / secret unlock from this day; joins weekday rotation from LIVE_FROM. */
 const STACK_WALK_PREVIEW_FROM = '2026-09-18';
 /** Joins Fun rotation (normal play) from this Europe/London day. */
@@ -53,6 +56,7 @@ const FUN_GAMES = [
   TOOLBOX_KICK_GAME,
   WANTED_GAME,
   STACK_WALK_GAME,
+  COUNTRY_HOLES_GAME,
 ];
 const FUN_GAME_ROSTER = FUN_GAMES;
 const ALL_ROSTER_KEYS = FUN_GAME_ROSTER.map((g) => g.key);
@@ -456,6 +460,7 @@ module.exports = {
   TOOLBOX_KICK_LIVE_FROM,
   WANTED_GAME,
   WANTED_LIVE_FROM,
+  COUNTRY_HOLES_GAME,
   STACK_WALK_GAME,
   STACK_WALK_LIVE_FROM,
   STACK_WALK_PREVIEW_FROM,

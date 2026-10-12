@@ -92,6 +92,20 @@ const DECORATIONS = {
     blurb: 'Decoration only — looks busy.',
     facings: true,
   },
+  fountain: {
+    key: 'fountain',
+    label: 'Fountain',
+    cost: 18,
+    blurb: 'Decoration only — a yard centrepiece.',
+    facings: true,
+  },
+  picnic: {
+    key: 'picnic',
+    label: 'Picnic set',
+    cost: 10,
+    blurb: 'Decoration only — staff break-out area.',
+    facings: true,
+  },
 };
 const DECORATION_KEYS = Object.keys(DECORATIONS);
 
@@ -512,6 +526,131 @@ async function saveSpriteAnchors(db, raw, { uid = '', fullName = '', FieldValue 
   };
   await db.collection('coach_depot_config').doc('spriteAnchors').set(payload, { merge: false });
   return anchors;
+}
+
+/** Default Gemini custom pack mapping (mirrors frontend DEFAULT_CUSTOM_ASSET_MAP). */
+const DEFAULT_ASSET_MAP = {
+  office: [
+    'bld_hq_container_blue.png',
+    'bld_hq_metal_warehouse.png',
+    'bld_hq_modern_garden.png',
+    'bld_hq_glass_tall.png',
+  ],
+  opsOffice: [
+    'bld_ops_container.png',
+    'bld_ops_shack.png',
+    'bld_ops_dish.png',
+    'bld_ops_tower.png',
+  ],
+  trainingCentre: [
+    'bld_training_cabin.png',
+    'bld_training_container.png',
+    'bld_training_centre.png',
+  ],
+  workshop: [
+    'bld_workshop_wood.png',
+    'bld_workshop_brick.png',
+    'bld_workshop_industrial.png',
+  ],
+  wash: ['bld_wash_bay.png', 'bld_wash_brushes.png'],
+  breakRoom: ['bld_break_canteen.png', 'decor_picnic.png'],
+  paintShop: ['bld_workshop_tent.png', 'bld_workshop_garage.png'],
+  tourOffice: ['bld_tours_kiosk.png', 'bld_tours_office.png'],
+  chargers: ['bay_ev_charger.png'],
+  bay: 'bay_coach_only.png',
+  decorations: {
+    flowers: 'decor_flowerbed.png',
+    fence: 'decor_fence_chain.png',
+    light: 'decor_lamp_single.png',
+    rocks: 'decor_fountain.png',
+    box: 'decor_picnic.png',
+    fountain: 'decor_fountain.png',
+    picnic: 'decor_picnic.png',
+  },
+  vehicles: {
+    1: 'veh_minibus.png',
+    2: 'veh_coach.png',
+    3: 'veh_exec.png',
+    4: 'veh_electric.png',
+    5: 'veh_super_exec.png',
+  },
+  character: 'char_driver_wave.png',
+  grounds: {
+    grass: 'ground_grass_lush.png',
+    dirt: 'ground_grass_dry.png',
+    road: 'ground_road.png',
+  },
+};
+
+function normalizeAssetMap(raw) {
+  const src = raw && typeof raw === 'object' ? raw : {};
+  const out = {
+    office: [],
+    opsOffice: [],
+    trainingCentre: [],
+    workshop: [],
+    wash: [],
+    breakRoom: [],
+    paintShop: [],
+    tourOffice: [],
+    chargers: [],
+    bay: '',
+    decorations: {},
+    vehicles: {},
+    character: '',
+    grounds: {},
+  };
+  const levelKeys = [
+    'office', 'opsOffice', 'trainingCentre', 'workshop', 'wash',
+    'breakRoom', 'paintShop', 'tourOffice', 'chargers',
+  ];
+  for (const key of levelKeys) {
+    const list = Array.isArray(src[key]) ? src[key] : (DEFAULT_ASSET_MAP[key] || []);
+    out[key] = list.map((f) => String(f || '').trim()).filter(Boolean).slice(0, 8);
+  }
+  out.bay = String(src.bay ?? DEFAULT_ASSET_MAP.bay ?? '').trim();
+  out.character = String(src.character ?? DEFAULT_ASSET_MAP.character ?? '').trim();
+  const decorIn = src.decorations && typeof src.decorations === 'object' ? src.decorations : {};
+  const decorDefault = DEFAULT_ASSET_MAP.decorations;
+  for (const k of Object.keys({ ...decorDefault, ...decorIn })) {
+    const v = String(decorIn[k] ?? decorDefault[k] ?? '').trim();
+    if (v) out.decorations[k] = v;
+  }
+  const vehIn = src.vehicles && typeof src.vehicles === 'object' ? src.vehicles : {};
+  for (let t = 1; t <= 5; t += 1) {
+    const v = String(vehIn[t] ?? vehIn[String(t)] ?? DEFAULT_ASSET_MAP.vehicles[t] ?? '').trim();
+    if (v) out.vehicles[t] = v;
+  }
+  const gIn = src.grounds && typeof src.grounds === 'object' ? src.grounds : {};
+  for (const k of ['grass', 'dirt', 'asphalt', 'concrete', 'road']) {
+    const v = String(gIn[k] ?? DEFAULT_ASSET_MAP.grounds?.[k] ?? '').trim();
+    if (v) out.grounds[k] = v;
+  }
+  return out;
+}
+
+async function loadAssetMap(db) {
+  if (!db) return normalizeAssetMap(DEFAULT_ASSET_MAP);
+  try {
+    const snap = await db.collection('coach_depot_config').doc('assetMap').get();
+    if (!snap.exists) return normalizeAssetMap(DEFAULT_ASSET_MAP);
+    const data = snap.data() || {};
+    return normalizeAssetMap(data.map || data);
+  } catch {
+    return normalizeAssetMap(DEFAULT_ASSET_MAP);
+  }
+}
+
+async function saveAssetMap(db, raw, { uid = '', fullName = '', FieldValue = null } = {}) {
+  const map = normalizeAssetMap(raw?.map || raw || {});
+  const payload = {
+    map,
+    updatedAt: FieldValue ? FieldValue.serverTimestamp() : new Date().toISOString(),
+    updatedByUid: uid || null,
+    updatedByName: fullName || null,
+  };
+  await db.collection('coach_depot_config').doc('assetMap').set(payload, { merge: false });
+  return map;
 }
 
 function roadKeySet(depotOrConfig) {
@@ -1763,19 +1902,22 @@ function serializeDepot(depot, { jobs = [], walletBalance = 0, sandbox = false }
     effect: 'Service road — parking bays must touch a road.',
   };
 
-  const decorationShop = DECORATION_KEYS.map((key) => {
-    const def = DECORATIONS[key];
-    return {
-      key,
-      label: def.label,
-      cost: def.cost,
-      blurb: def.blurb,
-      decoration: true,
-      facings: Boolean(def.facings),
-      edge: Boolean(def.edge),
-      facingOptions: def.facings ? [...DECOR_FACINGS] : null,
-    };
-  });
+  // Fountain / picnic use the Gemini custom pack — sandbox preview only for now.
+  const decorationShop = DECORATION_KEYS
+    .filter((key) => sandbox || (key !== 'fountain' && key !== 'picnic'))
+    .map((key) => {
+      const def = DECORATIONS[key];
+      return {
+        key,
+        label: def.label,
+        cost: def.cost,
+        blurb: def.blurb,
+        decoration: true,
+        facings: Boolean(def.facings),
+        edge: Boolean(def.edge),
+        facingOptions: def.facings ? [...DECOR_FACINGS] : null,
+      };
+    });
 
   const jobTypes = Object.values(JOB_TYPES)
     .filter((j) => jobVisible(depot, j))
@@ -2563,6 +2705,10 @@ module.exports = {
   loadSpriteAnchors,
   saveSpriteAnchors,
   normalizeSpriteAnchors,
+  DEFAULT_ASSET_MAP,
+  normalizeAssetMap,
+  loadAssetMap,
+  saveAssetMap,
   computeJobReward,
   computeJobDurationMs,
   serializeJob,

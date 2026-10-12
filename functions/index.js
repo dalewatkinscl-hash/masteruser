@@ -213,6 +213,14 @@ const {
   STACK_WALK_PREVIEW_FROM,
 } = require('./stackWalk');
 const {
+  serializeCountryHolesGame,
+  compareCountryHolesRows,
+  countryHolesResultLabel,
+  clampStrokes: clampCountryHolesStrokes,
+  clampPar: clampCountryHolesPar,
+  clampToPar: clampCountryHolesToPar,
+} = require('./countryHoles');
+const {
   JOB_TYPES: COACH_DEPOT_JOB_TYPES,
   emptyDepot: emptyCoachDepot,
   normalizeDepot: normalizeCoachDepot,
@@ -234,6 +242,9 @@ const {
   loadSpriteAnchors: loadCoachDepotSpriteAnchors,
   saveSpriteAnchors: saveCoachDepotSpriteAnchors,
   normalizeSpriteAnchors: normalizeCoachDepotSpriteAnchors,
+  loadAssetMap: loadCoachDepotAssetMap,
+  saveAssetMap: saveCoachDepotAssetMap,
+  normalizeAssetMap: normalizeCoachDepotAssetMap,
 } = require('./coachDepot');
 const {
   recordFunStreakWin: recordFunStreakWinBase,
@@ -9660,6 +9671,194 @@ exports.submitStackWalkResult = onRequest(
   }),
 );
 
+// GET → Country Holes saved round / daily leaderboard (Profile tab; not Fun rotation).
+exports.getDailyCountryHoles = onRequest(
+  { region: 'europe-west2' },
+  withCors(async (req, res) => {
+    if (req.method !== 'GET') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
+
+    const session = await getVerifiedSessionUser(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+
+    try {
+      const todayKey = getLondonDayKey();
+      const sandbox = parseSandboxFlag(req) && canManagePortalAccess(session.profile);
+      const { dayKey, practice } = resolvePlayableDayKey(req.query?.dayKey, todayKey, {
+        sandbox,
+        allowFuturePreview: sandbox,
+      });
+
+      const leaderboard = practice ? [] : await buildCountryHolesLeaderboard(dayKey);
+      let gameData = {
+        uid: session.profile.uid,
+        dayKey,
+        status: 'ready',
+        strokes: 0,
+        par: 0,
+        toPar: 0,
+      };
+      if (!practice) {
+        const snap = await db.collection('country_holes_games').doc(`${dayKey}_${session.profile.uid}`).get();
+        if (snap.exists) gameData = { ...gameData, ...(snap.data() || {}) };
+      }
+
+      const streaks = await loadFunStreaks(db, session.profile.uid, {
+        todayKey: dayKey,
+        fullName: session.profile.fullName || session.profile.email || 'Colleague',
+        email: session.profile.email || '',
+        FieldValue: admin.firestore.FieldValue,
+      });
+      const achievements = serializeAchievements(streaks, dayKey);
+
+      res.status(200).json({
+        practice,
+        sandbox: Boolean(sandbox),
+        uid: session.profile.uid,
+        game: serializeCountryHolesGame(gameData),
+        leaderboard,
+        totalSolved: leaderboard.length,
+        achievements,
+      });
+    } catch (error) {
+      console.error('getDailyCountryHoles failed', error);
+      res.status(error.status || 500).json({ error: error.message || 'Failed to load Country Holes.' });
+    }
+  }),
+);
+
+// POST { strokes, par, toPar, dayKey?, sandbox?, scorecard? } → one competitive round per day.
+exports.submitCountryHolesResult = onRequest(
+  { region: 'europe-west2' },
+  withCors(async (req, res) => {
+    if (req.method !== 'POST') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
+
+    const session = await getVerifiedSessionUser(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+
+    try {
+      const todayKey = getLondonDayKey();
+      const sandbox = parseSandboxFlag(req) && canManagePortalAccess(session.profile);
+      const { dayKey, practice } = resolvePlayableDayKey(req.body?.dayKey, todayKey, {
+        sandbox,
+        allowFuturePreview: sandbox,
+      });
+
+      if (!Number.isFinite(Number(req.body?.strokes))) {
+        res.status(400).json({ error: 'Need a valid stroke count.' });
+        return;
+      }
+      const strokes = clampCountryHolesStrokes(req.body?.strokes);
+      const par = clampCountryHolesPar(req.body?.par);
+      const toPar = clampCountryHolesToPar(req.body?.toPar, strokes, par);
+      const scorecard = Array.isArray(req.body?.scorecard) ? req.body.scorecard.slice(0, 18) : null;
+
+      if (practice || sandbox) {
+        res.status(200).json({
+          practice: Boolean(practice),
+          sandbox: Boolean(sandbox),
+          game: serializeCountryHolesGame({
+            dayKey,
+            status: 'won',
+            strokes,
+            par,
+            toPar,
+            scorecard,
+            completedAt: new Date().toISOString(),
+          }),
+          leaderboard: [],
+          totalSolved: 0,
+        });
+        return;
+      }
+
+      const gameId = `${dayKey}_${session.profile.uid}`;
+      const ref = db.collection('country_holes_games').doc(gameId);
+      const existing = await ref.get();
+      const existingData = existing.exists ? existing.data() || {} : {};
+      if (existing.exists && existingData.status === 'won') {
+        const prev = clampCountryHolesStrokes(existingData.strokes);
+        if (strokes >= prev) {
+          const leaderboard = await buildCountryHolesLeaderboard(dayKey);
+          res.status(200).json({
+            practice: false,
+            game: serializeCountryHolesGame(existingData),
+            leaderboard,
+            totalSolved: leaderboard.length,
+            alreadySubmitted: true,
+          });
+          return;
+        }
+      }
+
+      const payload = {
+        uid: session.profile.uid,
+        fullName: session.profile.fullName || session.profile.email || 'Colleague',
+        email: session.profile.email || '',
+        dayKey,
+        status: 'won',
+        strokes,
+        par,
+        toPar,
+        scorecard,
+        completedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+      if (!existing.exists) {
+        payload.createdAt = admin.firestore.FieldValue.serverTimestamp();
+      }
+      await ref.set(payload, { merge: true });
+
+      const streaks = await recordFunStreakWin(db, {
+        uid: session.profile.uid,
+        fullName: payload.fullName,
+        email: payload.email,
+        gameKey: 'countryholes',
+        dayKey,
+        FieldValue: admin.firestore.FieldValue,
+      });
+      const all = await loadFunStreaks(db, session.profile.uid, {
+        todayKey: dayKey,
+        fullName: payload.fullName,
+        email: payload.email,
+        FieldValue: admin.firestore.FieldValue,
+      });
+      const achievements = serializeAchievements({ ...all, countryholes: streaks }, dayKey);
+
+      const snap = await ref.get();
+      const leaderboard = await buildCountryHolesLeaderboard(dayKey);
+      await syncDayMedals(db, {
+        gameKey: 'countryholes',
+        dayKey,
+        leaderboardRows: leaderboard,
+        FieldValue: admin.firestore.FieldValue,
+      });
+
+      res.status(200).json({
+        practice: false,
+        game: serializeCountryHolesGame(snap.data() || {}),
+        leaderboard,
+        totalSolved: leaderboard.length,
+        achievements,
+      });
+    } catch (error) {
+      console.error('submitCountryHolesResult failed', error);
+      res.status(error.status || 500).json({ error: error.message || 'Failed to submit Country Holes.' });
+    }
+  }),
+);
+
 async function loadCoachDepotState(uid) {
   const depotRef = db.collection('coach_depots').doc(uid);
   const depotSnap = await depotRef.get();
@@ -9793,7 +9992,10 @@ exports.getCoachDepot = onRequest(
         fullName: session.profile.fullName || session.profile.email || '',
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
       }, { merge: true });
-      const spriteAnchors = await loadCoachDepotSpriteAnchors(db);
+      const [spriteAnchors, assetMap] = await Promise.all([
+        loadCoachDepotSpriteAnchors(db),
+        loadCoachDepotAssetMap(db),
+      ]);
       res.status(200).json({
         depot: serializeCoachDepot(depot, {
           jobs,
@@ -9801,6 +10003,7 @@ exports.getCoachDepot = onRequest(
           sandbox,
         }),
         spriteAnchors,
+        assetMap,
         settledJobs: settled.settled,
         coinsAwarded: settled.coinsAwarded,
       });
@@ -10453,6 +10656,64 @@ exports.saveCoachDepotSpriteAnchors = onRequest(
   }),
 );
 
+// GET → admin: current Coach Depot custom asset map (+ defaults if unset).
+exports.getCoachDepotAssetMap = onRequest(
+  { region: 'europe-west2', invoker: 'public' },
+  withCors(async (req, res) => {
+    if (req.method !== 'GET') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
+    const session = await getVerifiedSessionUser(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+    if (!canManagePortalAccess(session.profile)) {
+      res.status(403).json({ error: 'Admin access is required.' });
+      return;
+    }
+    try {
+      const assetMap = await loadCoachDepotAssetMap(db);
+      res.status(200).json({ assetMap });
+    } catch (error) {
+      console.error('getCoachDepotAssetMap failed', error);
+      res.status(error.status || 500).json({ error: error.message || 'Failed to load asset map.' });
+    }
+  }),
+);
+
+// POST → admin: save Coach Depot custom asset map (buildings / decors / vehicles).
+exports.saveCoachDepotAssetMap = onRequest(
+  { region: 'europe-west2', invoker: 'public' },
+  withCors(async (req, res) => {
+    if (req.method !== 'POST') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
+    const session = await getVerifiedSessionUser(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+    if (!canManagePortalAccess(session.profile)) {
+      res.status(403).json({ error: 'Admin access is required.' });
+      return;
+    }
+    try {
+      const assetMap = await saveCoachDepotAssetMap(db, req.body || {}, {
+        uid: session.profile.uid,
+        fullName: session.profile.fullName || session.profile.email || '',
+        FieldValue: admin.firestore.FieldValue,
+      });
+      res.status(200).json({ assetMap });
+    } catch (error) {
+      console.error('saveCoachDepotAssetMap failed', error);
+      res.status(error.status || 500).json({ error: error.message || 'Failed to save asset map.' });
+    }
+  }),
+);
+
 const FUN_LEADERBOARD_LIMIT = 2000;
 
 const FUN_GAME_COLLECTIONS = {
@@ -10468,7 +10729,43 @@ const FUN_GAME_COLLECTIONS = {
   toolboxkick: 'toolbox_kick_games',
   wanted: 'wanted_games',
   stackwalk: 'stack_walk_games',
+  countryholes: 'country_holes_games',
 };
+
+async function buildCountryHolesLeaderboard(dayKey) {
+  const snap = await db.collection('country_holes_games').where('dayKey', '==', dayKey).limit(FUN_LEADERBOARD_LIMIT).get();
+  const rows = snap.docs.map((doc) => {
+    const data = doc.data() || {};
+    const strokes = clampCountryHolesStrokes(data.strokes);
+    const par = clampCountryHolesPar(data.par);
+    return {
+      uid: data.uid || doc.id,
+      fullName: data.fullName || 'Colleague',
+      status: data.status || 'ready',
+      strokes,
+      par,
+      toPar: clampCountryHolesToPar(data.toPar, strokes, par),
+      completedAt: data.completedAt?.toDate?.()?.toISOString?.() || null,
+    };
+  }).filter((row) => row.status === 'won');
+
+  rows.sort(compareCountryHolesRows);
+  assignJointRanks(rows, (a, b) => a.strokes === b.strokes && a.toPar === b.toPar);
+
+  return rows.map((row) => ({
+    uid: row.uid,
+    fullName: row.fullName,
+    status: row.status,
+    strokes: row.strokes,
+    par: row.par,
+    toPar: row.toPar,
+    rank: row.rank,
+    joint: row.joint,
+    medal: row.medal,
+    completedAt: row.completedAt,
+    resultLabel: countryHolesResultLabel(row),
+  }));
+}
 
 async function buildStackWalkLeaderboard(dayKey) {
   const snap = await db.collection('stack_walk_games').where('dayKey', '==', dayKey).limit(FUN_LEADERBOARD_LIMIT).get();
@@ -10764,6 +11061,7 @@ async function buildLeaderboardForGame(gameKey, dayKey) {
   if (gameKey === 'toolboxkick') return buildToolboxKickLeaderboard(dayKey);
   if (gameKey === 'wanted') return buildWantedLeaderboard(dayKey);
   if (gameKey === 'stackwalk') return buildStackWalkLeaderboard(dayKey);
+  if (gameKey === 'countryholes') return buildCountryHolesLeaderboard(dayKey);
   return [];
 }
 
@@ -11415,6 +11713,7 @@ exports.adminBackfillFunMedals = onRequest(
         toolboxkick: (dayKey) => buildToolboxKickLeaderboard(dayKey),
         wanted: (dayKey) => buildWantedLeaderboard(dayKey),
         stackwalk: (dayKey) => buildStackWalkLeaderboard(dayKey),
+        countryholes: (dayKey) => buildCountryHolesLeaderboard(dayKey),
       };
       const dayKeysByGame = {};
       await Promise.all(Object.entries(FUN_GAME_COLLECTIONS).map(async ([gameKey, collectionName]) => {

@@ -9,6 +9,8 @@ import {
   normalizeSpriteAnchor,
   normalizeSpriteAnchors,
   officeSprite,
+  clearCoachDepotAssetMap,
+  setCoachDepotAssetMap,
   spriteAnchorKey,
   vehicleFilterStyle,
   vehicleSprite,
@@ -255,6 +257,12 @@ export default function CoachDepotPanel({
     if (!response.ok) throw new Error(payload.error || 'Failed to load Coach Depot.');
     setDepot(payload.depot || null);
     setSpriteAnchors(normalizeSpriteAnchors(payload.spriteAnchors || {}));
+    // Custom Gemini pack is sandbox / Fun Admin only until art is approved.
+    if (sandbox) {
+      setCoachDepotAssetMap(payload.assetMap || undefined, { useDefaults: true });
+    } else {
+      clearCoachDepotAssetMap();
+    }
     setAnchorsDirty(false);
     applySettlePayload(payload);
     return payload;
@@ -843,6 +851,31 @@ export default function CoachDepotPanel({
     }
 
     if (pick.type === 'owned') {
+      // Pads with HQ / building / bay must open inspect (upgrade + move), not the fence menu.
+      const structure = (depot?.grid?.placements || []).find((p) => (
+        (p.type === 'building' || p.type === 'hq' || p.type === 'bay')
+        && Number(p.x) === Number(pick.x)
+        && Number(p.y) === Number(pick.y)
+      ));
+      if (structure?.type === 'hq') {
+        openUpgrade('office');
+        return;
+      }
+      if (structure?.type === 'building' && structure.key) {
+        openUpgrade(structure.key);
+        return;
+      }
+      if (structure?.type === 'bay') {
+        setSelectedBayId(structure.id || null);
+        setSelectedBuildingKey(null);
+        setSelectedVehicleId(null);
+        setPlaceBuildingKey(null);
+        setPlaceBay(false);
+        setMoveBuildingKey(null);
+        setDock('bay');
+        setDockPane('menu');
+        return;
+      }
       const root = depotRootRef.current;
       const rect = root?.getBoundingClientRect();
       const cx = Number(pick.clientX);
@@ -2470,6 +2503,33 @@ export default function CoachDepotPanel({
                           Development cost — relocate on any free owned pad.
                         </p>
                       )}
+                      {(() => {
+                        const pad = (depot.grid?.placements || []).find((p) => (
+                          selectedBuildingKey === 'office'
+                            ? p.type === 'hq'
+                            : (p.type === 'building' && p.key === selectedBuildingKey)
+                        ));
+                        if (!pad || !Number.isFinite(pad.x) || !Number.isFinite(pad.y)) return null;
+                        return (
+                          <GameUiButton
+                            variant="neutral"
+                            disabled={busy}
+                            onClick={() => {
+                              setPendingBuild({
+                                x: pad.x,
+                                y: pad.y,
+                                anchorX: 80,
+                                anchorY: 120,
+                                occupied: true,
+                              });
+                              setDecorDraft(null);
+                              setDock(null);
+                            }}
+                          >
+                            Add edge fence…
+                          </GameUiButton>
+                        );
+                      })()}
                     </div>
                   </div>
                 ) : null}
@@ -2683,6 +2743,9 @@ function ShopRow({ title, sub, cost, locked, busy, balance, onBuy, sandbox = fal
 export function CoachDepotSandbox() {
   return (
     <div className="space-y-3 w-full">
+      <p className="text-sm text-amber-200/90 px-1">
+        Sandbox preview — custom Gemini pack with transparent backgrounds. Live player Depot is unchanged.
+      </p>
       <p className="text-sm text-slate-400 px-1">
         Sandbox toolbar: <span className="text-amber-300">Lock</span> calibrates buildings, decorations, and drivers on the tile
         (nudge scale/X/Y, Save for everyone), Map paints the starter yard, Reset wipes progress.

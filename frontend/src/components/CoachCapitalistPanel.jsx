@@ -34,10 +34,24 @@ import {
   totalRevenuePerSecond,
 } from '../lib/coachCapitalist';
 import { GameUiBadge, GameUiButton, GameUiModal, GameUiPanel } from './gameUi';
+import { SHOW_COACH_CAPITALIST } from '../utils/featureFlags';
 
 const BUY_MODES = [1, 10, 100, 'max'];
 const EMPTY_NAMES = { depots: {} };
 const CLOUD_SAVE_DEBOUNCE_MS = 4000;
+
+function CoachCapitalistMaintenance() {
+  return (
+    <div className="w-full max-w-lg mx-auto rounded-2xl border border-amber-400/30 bg-[#12100a] px-6 py-10 text-center shadow-xl">
+      <div className="text-[11px] uppercase tracking-[0.16em] text-amber-300/90">Coach Capitalist</div>
+      <h2 className="mt-2 text-xl font-semibold text-white">Down for maintenance</h2>
+      <p className="mt-3 text-sm text-white/70 leading-relaxed">
+        Coach Capitalist is temporarily unavailable while we carry out maintenance.
+        Please check back later — your progress is saved.
+      </p>
+    </div>
+  );
+}
 
 async function readJsonResponse(res) {
   const contentType = res.headers.get('content-type') || '';
@@ -282,6 +296,13 @@ function BusinessRow({
 }
 
 export default function CoachCapitalistPanel({ sandbox = false, isAdmin = false }) {
+  if (!SHOW_COACH_CAPITALIST && !sandbox) {
+    return <CoachCapitalistMaintenance />;
+  }
+  return <CoachCapitalistPanelLive sandbox={sandbox} isAdmin={isAdmin} />;
+}
+
+function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false }) {
   const [state, dispatch] = useReducer(reducer, null, loadState);
   const [tab, setTab] = useState('fleet'); // fleet | managers | upgrades | angels | leaderboard
   const [resetOpen, setResetOpen] = useState(false);
@@ -1189,7 +1210,7 @@ export default function CoachCapitalistPanel({ sandbox = false, isAdmin = false 
         </p>
         <p className="text-xs text-slate-400">
           Account lifetime score is kept (Local ×1, Regional ×2.5, National ×5) so you keep earning
-          future backers. Unlocks stay; you rebuild from Local.
+          future backers. Regional and National lock again until you re-earn their unlock this run.
         </p>
       </GameUiModal>
     </div>

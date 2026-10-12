@@ -790,6 +790,7 @@ export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
           ) : null}
         </FunSection>
       ))}
+
     </div>
   );
 }

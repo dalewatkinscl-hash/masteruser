@@ -5,6 +5,7 @@ import EmployeeProfileCard from '../components/EmployeeProfileCard';
 import EmployeeFunPanel from '../components/EmployeeFunPanel';
 import CoachDepotPanel from '../components/CoachDepotPanel';
 import CoachCapitalistPanel from '../components/CoachCapitalistPanel';
+import { CountryHolesDailyPanel } from '../components/CountryHolesPanel';
 import FunErrorBoundary from '../components/FunErrorBoundary';
 import SuggestionBoxPanel from '../components/SuggestionBoxPanel';
 import KudosPanel from '../components/KudosPanel';
@@ -168,6 +169,12 @@ export default function Profile() {
         <div className="py-4 sm:py-6 w-full max-w-5xl mx-auto px-1 sm:px-2">
           <FunErrorBoundary>
             <CoachCapitalistPanel isAdmin={canManagePortalAccess(user)} />
+          </FunErrorBoundary>
+        </div>
+      ) : activeTab === 'countryholes' ? (
+        <div className="py-4 sm:py-6 w-full max-w-4xl mx-auto px-1 sm:px-2">
+          <FunErrorBoundary>
+            <CountryHolesDailyPanel isAdmin={canManagePortalAccess(user)} />
           </FunErrorBoundary>
         </div>
       ) : activeTab === 'cases' ? (
