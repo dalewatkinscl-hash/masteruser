@@ -316,9 +316,44 @@ const auth = admin.auth();
 
 const gmailUser = defineSecret('GMAIL_USER');
 const gmailPass = defineSecret('GMAIL_PASS');
+const redshiftHost = defineSecret('REDSHIFT_HOST');
+const redshiftPort = defineSecret('REDSHIFT_PORT');
+const redshiftDatabase = defineSecret('REDSHIFT_DATABASE');
+const redshiftUser = defineSecret('REDSHIFT_USER');
+const redshiftPassword = defineSecret('REDSHIFT_PASSWORD');
+const redshiftCustomer = defineSecret('REDSHIFT_CUSTOMER');
 const hrNotificationEmail = defineString('HR_NOTIFICATION_EMAIL', {
   default: 'hradmin@countrylion.co.uk',
 });
+const FINANCE_REPORTS_SECRETS = [
+  redshiftHost,
+  redshiftPort,
+  redshiftDatabase,
+  redshiftUser,
+  redshiftPassword,
+  redshiftCustomer,
+];
+
+function applyRedshiftSecretsToEnv() {
+  // Firebase secrets are only available when the function declares them.
+  // Prefer secret values; fall back to plain process.env for local emulator.
+  const pairs = [
+    ['REDSHIFT_HOST', redshiftHost],
+    ['REDSHIFT_PORT', redshiftPort],
+    ['REDSHIFT_DATABASE', redshiftDatabase],
+    ['REDSHIFT_USER', redshiftUser],
+    ['REDSHIFT_PASSWORD', redshiftPassword],
+    ['REDSHIFT_CUSTOMER', redshiftCustomer],
+  ];
+  for (const [key, secret] of pairs) {
+    try {
+      const value = secret.value();
+      if (value) process.env[key] = value;
+    } catch {
+      // Secret not bound in this runtime (e.g. local without secrets).
+    }
+  }
+}
 
 const SESSION_COOKIE_NAME = '__session';
 const SESSION_EXPIRES_IN_MS = 5 * 24 * 60 * 60 * 1000;
@@ -754,7 +789,9 @@ function sanitizePortalsAccess(portalsAccess) {
 const {
   sanitizeFeatureAccess,
   hasFeatureAccess,
+  canAccessFinanceReports,
 } = require('./featureAccess');
+const { getFinanceDashboard } = require('./financeReports/financeService');
 
 function canAccessBonusAdmin(profile) {
   if (!profile) return false;
@@ -13596,6 +13633,51 @@ exports.verifyUserSession = onRequest(
       res.status(200).json({ user: buildEffectiveProfile(profile) });
     } catch {
       res.status(401).json({ error: 'Not authenticated.' });
+    }
+  }),
+);
+// GET → Country Lion Reports finance dashboard (feature-gated).
+exports.getFinanceReports = onRequest(
+  {
+    region: 'europe-west2',
+    secrets: FINANCE_REPORTS_SECRETS,
+    timeoutSeconds: 60,
+    memory: '512MiB',
+  },
+  withCors(async (req, res) => {
+    if (req.method !== 'GET') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
+
+    const session = await getVerifiedSessionUser(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+
+    if (!canAccessFinanceReports(session.profile)) {
+      res.status(403).json({
+        error: 'You do not have access to Country Lion Reports. Ask an admin to grant Finance reports.',
+      });
+      return;
+    }
+
+    try {
+      applyRedshiftSecretsToEnv();
+      const filters = {
+        period: typeof req.query.period === 'string' ? req.query.period : '12m',
+        depot: typeof req.query.depot === 'string' ? req.query.depot : 'All',
+        segment: typeof req.query.segment === 'string' ? req.query.segment : 'All',
+        fromDate: typeof req.query.from === 'string' ? req.query.from : undefined,
+        toDate: typeof req.query.to === 'string' ? req.query.to : undefined,
+      };
+      const data = await getFinanceDashboard(filters);
+      res.status(200).json({ ok: true, data });
+    } catch (error) {
+      console.error('getFinanceReports failed', error);
+      const message = error instanceof Error ? error.message : 'Failed to load finance reports';
+      res.status(500).json({ ok: false, error: message.slice(0, 240) });
     }
   }),
 );

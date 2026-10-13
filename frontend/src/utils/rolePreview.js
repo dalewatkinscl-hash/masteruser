@@ -73,6 +73,15 @@ export const ROLE_PREVIEW_PRESETS = [
     featureAccess: { bonus_deductions: true },
     flags: { canIssueKudos: false },
   },
+  {
+    id: 'finance_reports',
+    label: 'Finance reports',
+    hint: 'Country Lion Reports only (no HR / People Cases)',
+    homePath: '/dashboard/reports',
+    portalsAccess: {},
+    featureAccess: { finance_reports: true },
+    flags: { canIssueKudos: false },
+  },
 ];
 
 export function canUseRolePreview(realUser) {

@@ -5,6 +5,11 @@ export const KNOWN_FEATURES = [
     label: 'Bonus deductions',
     description: 'Bonus deductions and payment schedule without People Cases access',
   },
+  {
+    key: 'finance_reports',
+    label: 'Finance reports',
+    description: 'Country Lion Reports — Private Hire, Contracts, By vehicle, By driver',
+  },
 ];
 
 export const FEATURE_KEYS = KNOWN_FEATURES.map((feature) => feature.key);

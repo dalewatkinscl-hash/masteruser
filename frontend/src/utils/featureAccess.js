@@ -14,4 +14,9 @@ export function canAccessBonusAdmin(user) {
   return hasFeatureAccess(user, 'bonus_deductions');
 }
 
+/** Country Lion Reports finance dashboards — master admin OR finance_reports feature. */
+export function canAccessFinanceReports(user) {
+  return hasFeatureAccess(user, 'finance_reports');
+}
+
 export { buildFeatureAccess };

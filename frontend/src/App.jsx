@@ -54,6 +54,7 @@ const EmergencyPhone = lazyPage(() => import('./pages/EmergencyPhone'));
 const FunAdmin = lazyPage(() => import('./pages/FunAdmin'));
 const RollCallLists = lazyPage(() => import('./pages/RollCallLists'));
 const RollCallListDetail = lazyPage(() => import('./pages/RollCallListDetail'));
+const Reports = lazyPage(() => import('./pages/Reports'));
 
 function LazyPage({ children }) {
   return (
@@ -107,6 +108,14 @@ export default function App() {
                 >
                   <Route index element={<Navigate to="profile" replace />} />
                   <Route path="profile" element={<Profile />} />
+                  <Route
+                    path="reports"
+                    element={(
+                      <ProtectedRoute requireFinanceReports>
+                        <LazyPage><Reports /></LazyPage>
+                      </ProtectedRoute>
+                    )}
+                  />
                   <Route path="bump-card" element={<LazyPage><BumpCardPage /></LazyPage>} />
                   <Route path="emergency-phone" element={<LazyPage><EmergencyPhone /></LazyPage>} />
 

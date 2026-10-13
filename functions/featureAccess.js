@@ -3,7 +3,7 @@
  * Stored on users/{uid}.featureAccess as { [featureKey]: true }.
  */
 
-const KNOWN_FEATURE_KEYS = Object.freeze(['bonus_deductions']);
+const KNOWN_FEATURE_KEYS = Object.freeze(['bonus_deductions', 'finance_reports']);
 
 function sanitizeFeatureAccess(featureAccess) {
   if (!featureAccess || typeof featureAccess !== 'object' || Array.isArray(featureAccess)) {
@@ -22,8 +22,13 @@ function hasFeatureAccess(profile, featureKey) {
   return profile?.featureAccess?.[featureKey] === true;
 }
 
+function canAccessFinanceReports(profile) {
+  return hasFeatureAccess(profile, 'finance_reports');
+}
+
 module.exports = {
   KNOWN_FEATURE_KEYS,
   sanitizeFeatureAccess,
   hasFeatureAccess,
+  canAccessFinanceReports,
 };

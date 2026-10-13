@@ -890,6 +890,11 @@
         "region": "europe-west2"
       },
       {
+        "source": "/api/getFinanceReports",
+        "function": "getFinanceReports",
+        "region": "europe-west2"
+      },
+      {
         "source": "**",
         "destination": "/index.html"
       }

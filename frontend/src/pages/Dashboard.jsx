@@ -14,6 +14,7 @@ import KawaiiDecor from '../components/KawaiiDecor';
 import { useTheme } from '../context/ThemeContext';
 import { useLanguage } from '../context/LanguageContext';
 import { canAccessHrPortal } from '../utils/peopleCasesAccess';
+import { canAccessFinanceReports } from '../utils/featureAccess';
 import RolePreviewToolbar from '../components/RolePreviewToolbar';
 
 function MenuIcon({ className }) {
@@ -40,6 +41,16 @@ function BookOpenIcon({ className }) {
       <path d="M4 6.5A2.5 2.5 0 0 1 6.5 4H20v14.5A1.5 1.5 0 0 1 18.5 20H6.5A2.5 2.5 0 0 1 4 17.5v-11Z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M8 8h8M8 12h8M8 16h5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
       <path d="M4 17.5A2.5 2.5 0 0 1 6.5 15H20" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function ChartIcon({ className }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M4 19V5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <path d="M4 19h16" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+      <path d="M8 15v-4M12 15V8M16 15v-6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
     </svg>
   );
 }
@@ -134,7 +145,9 @@ export default function Dashboard() {
 
   const isProfileActive = location.pathname.includes('/profile');
   const isHrPortalActive = location.pathname.includes('/dashboard/hr');
+  const isReportsActive = location.pathname.includes('/dashboard/reports');
   const showHrPortal = canAccessHrPortal(user);
+  const showReports = canAccessFinanceReports(user);
   const mentoringRole = user?.portalsAccess?.mentoring_app || user?.portalsAccess?.mentor;
   const hasMentoringAccess = typeof mentoringRole === 'string' && mentoringRole.trim().length > 0;
   const assessmentRole = user?.portalsAccess?.assessment_app;
@@ -230,6 +243,13 @@ export default function Dashboard() {
           <button type="button" onClick={() => go('/dashboard/hr')} className={navClass(isHrPortalActive)}>
             <BookOpenIcon className="w-5 h-5 flex-shrink-0" />
             {showLabels && <span>{t('nav.hr')}</span>}
+          </button>
+        )}
+
+        {showReports && (
+          <button type="button" onClick={() => go('/dashboard/reports')} className={navClass(isReportsActive)}>
+            <ChartIcon className="w-5 h-5 flex-shrink-0" />
+            {showLabels && <span>{t('nav.reports')}</span>}
           </button>
         )}
 
