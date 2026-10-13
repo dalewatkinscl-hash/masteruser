@@ -23,6 +23,7 @@ const TITLE_MAP = [
   { test: (p) => p.startsWith('/dashboard/hr/cases/bump'), title: 'Bump prompt' },
   { test: (p) => /^\/dashboard\/hr\/cases\/[^/]+$/.test(p), title: 'Case' },
   { test: (p) => p.startsWith('/dashboard/hr/cases'), title: 'People cases' },
+  { test: (p) => p.startsWith('/dashboard/hr/vehicle-accidents'), title: 'Vehicle accidents' },
 ];
 
 export default function RouteDocumentTitle() {

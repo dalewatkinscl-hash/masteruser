@@ -5,6 +5,7 @@ import EmployeeProfileCard from '../components/EmployeeProfileCard';
 import EmployeeFunPanel from '../components/EmployeeFunPanel';
 import CoachDepotPanel from '../components/CoachDepotPanel';
 import CoachCapitalistPanel from '../components/CoachCapitalistPanel';
+import { CountryHolesDailyPanel } from '../components/CountryHolesPanel';
 import FunErrorBoundary from '../components/FunErrorBoundary';
 import SuggestionBoxPanel from '../components/SuggestionBoxPanel';
 import KudosPanel from '../components/KudosPanel';
@@ -12,7 +13,9 @@ import PollsPanel from '../components/PollsPanel';
 import ProfileWidgets from '../components/ProfileWidgets';
 import WorkspaceTabs from '../components/WorkspaceTabs';
 import EmployeeCaseActionsPanel from '../components/EmployeeCaseActionsPanel';
+import SubmitBumpCardCta from '../components/SubmitBumpCardCta';
 import { canManagePortalAccess } from '../utils/portalAccess';
+import { canManagePeopleCases } from '../utils/peopleCasesAccess';
 import { useLanguage } from '../context/LanguageContext';
 
 function KeyIcon({ className }) {
@@ -170,6 +173,12 @@ export default function Profile() {
             <CoachCapitalistPanel isAdmin={canManagePortalAccess(user)} />
           </FunErrorBoundary>
         </div>
+      ) : activeTab === 'countryholes' ? (
+        <div className="py-4 sm:py-6 w-full max-w-4xl mx-auto px-1 sm:px-2">
+          <FunErrorBoundary>
+            <CountryHolesDailyPanel isAdmin={canManagePortalAccess(user)} />
+          </FunErrorBoundary>
+        </div>
       ) : activeTab === 'cases' ? (
         <div className="px-4 sm:px-8 py-6">
           <EmployeeCaseActionsPanel />
@@ -197,6 +206,7 @@ export default function Profile() {
           <div className="max-w-7xl mx-auto grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_320px] gap-6 items-start">
             <div className="space-y-6 min-w-0">
               <h1 className="sr-only">{t('profile.heading')}</h1>
+              {!canManagePeopleCases(user) && <SubmitBumpCardCta />}
               {user?.uid && (
                 <EmployeeProfileCard uid={user.uid} />
               )}

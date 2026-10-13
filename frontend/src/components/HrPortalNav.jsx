@@ -45,7 +45,13 @@ export default function HrPortalNav() {
       id: 'cases',
       label: 'People Cases',
       to: '/dashboard/hr/cases',
-      active: pathname.includes('/hr/cases'),
+      active: pathname.includes('/hr/cases') && !pathname.includes('/hr/vehicle-accidents'),
+    },
+    canCases && {
+      id: 'vehicle-accidents',
+      label: 'Vehicle accidents',
+      to: '/dashboard/hr/vehicle-accidents',
+      active: pathname.includes('/hr/vehicle-accidents'),
     },
     canCases && {
       id: 'measures',

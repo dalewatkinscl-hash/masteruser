@@ -32,6 +32,11 @@ import { buildFileNoteForImprovementHtml, printHtmlDocument } from '../utils/fil
 import { ALLOW_DELETE_CASES } from '../utils/featureFlags';
 import { isAmendmentPending } from '../utils/interviewNotes';
 import { buildHearingCalendarOffer, buildReviewCalendarOffer, downloadIcsFromOffer } from '../utils/calendarLinks';
+import {
+  accidentPenaltyTriggerLabels,
+  computeAccidentPenaltyPoints,
+  groupAccidentPenaltyTriggers,
+} from '../utils/accidentPenaltyPoints';
 
 const CASE_TYPES = [
   'attendance',
@@ -226,6 +231,7 @@ export default function DisciplinaryCase() {
   const [events, setEvents] = useState([]);
   const [documents, setDocuments] = useState([]);
   const [bumpCard, setBumpCard] = useState(null);
+  const [penaltyTriggers, setPenaltyTriggers] = useState([]);
   const [fleetVehicles, setFleetVehicles] = useState([]);
   const [fleetLoading, setFleetLoading] = useState(false);
   const [minutes, setMinutes] = useState([]);
@@ -306,6 +312,7 @@ export default function DisciplinaryCase() {
     vehicleReg: '',
     vehicleId: '',
     vehicleRegOther: '',
+    hideFromEmployee: false,
   });
   const family = caseData?.processFamily || form.processFamily || 'disciplinary';
   const isSamsaraCreate = isNew && isSamsaraCreateForm(form);
@@ -465,6 +472,24 @@ export default function DisciplinaryCase() {
     const person = employees.find((item) => item.uid === form.employeeUid);
     return person?.fullName || person?.email || prefilledEmployeeName || '';
   }, [employees, form.employeeUid, prefilledEmployeeName]);
+
+  const penaltyPointsSelected = useMemo(
+    () => computeAccidentPenaltyPoints(penaltyTriggers),
+    [penaltyTriggers],
+  );
+  const penaltyGroups = useMemo(() => groupAccidentPenaltyTriggers(), []);
+  const casePenaltyLabels = useMemo(
+    () => accidentPenaltyTriggerLabels(caseData?.accidentPenaltyTriggers || []),
+    [caseData?.accidentPenaltyTriggers],
+  );
+
+  const togglePenaltyTrigger = (triggerId) => {
+    setPenaltyTriggers((prev) => (
+      prev.includes(triggerId)
+        ? prev.filter((id) => id !== triggerId)
+        : [...prev, triggerId]
+    ));
+  };
 
   const composedCaseTitle = useMemo(() => {
     const name = selectedEmployeeName.trim() || 'Employee';
@@ -970,6 +995,9 @@ export default function DisciplinaryCase() {
           vehicleReg: isAccident ? vehicleReg : '',
           vehicleId: isAccident && form.vehicleReg !== '__other__' ? (form.vehicleId || '') : '',
           stage: isAccident ? 'recorded' : undefined,
+          ...(isRecord
+            ? { publishToEmployee: form.hideFromEmployee ? false : undefined }
+            : {}),
         }),
       });
       const data = (await readJsonResponse(response)) || {};
@@ -2955,6 +2983,53 @@ export default function DisciplinaryCase() {
             <p className="text-xs uppercase tracking-wide text-slate-500 mb-3">Bump card summary</p>
             {renderBumpSummary(bumpCard)}
           </div>
+
+          <div className="rounded-lg border border-amber-500/25 bg-amber-500/5 p-4 mb-4 space-y-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-medium text-amber-100">Penalty points (driver at fault)</p>
+                <p className="text-xs text-slate-400 mt-1">
+                  Tick every applicable trigger. Points use the highest band selected.
+                </p>
+              </div>
+              <p className="text-sm font-semibold text-white">
+                Highest band selected: {penaltyPointsSelected}
+              </p>
+            </div>
+            {penaltyGroups.map((group) => (
+              <div key={group.points} className="space-y-2">
+                <p className="text-xs uppercase tracking-wide text-slate-500">
+                  {group.points} point trigger{group.points === 1 ? '' : 's'}
+                </p>
+                <div className="space-y-2">
+                  {group.triggers.map((trigger) => (
+                    <label
+                      key={trigger.id}
+                      className={`flex items-start gap-3 rounded-lg border px-3 py-2.5 cursor-pointer ${
+                        penaltyTriggers.includes(trigger.id)
+                          ? 'border-amber-400/50 bg-amber-500/10'
+                          : 'border-[#1a2540] bg-[#060e1a]/40'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        className="mt-1"
+                        checked={penaltyTriggers.includes(trigger.id)}
+                        onChange={() => togglePenaltyTrigger(trigger.id)}
+                      />
+                      <span className="text-sm text-slate-100">{trigger.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            ))}
+            {penaltyPointsSelected < 1 ? (
+              <p className="text-xs text-amber-300">
+                Select at least one trigger before continuing as disciplinary.
+              </p>
+            ) : null}
+          </div>
+
           <ChoiceRow>
             <ChoiceButton
               title="Third party at fault — close"
@@ -2967,8 +3042,12 @@ export default function DisciplinaryCase() {
             <ChoiceButton
               primary
               title="Driver at fault — continue as disciplinary"
-              disabled={saving}
-              onClick={() => apiUpdate({ accidentFault: 'driver' })}
+              disabled={saving || penaltyPointsSelected < 1}
+              onClick={() => apiUpdate({
+                accidentFault: 'driver',
+                accidentPenaltyPoints: penaltyPointsSelected,
+                accidentPenaltyTriggers: penaltyTriggers,
+              })}
             />
           </ChoiceRow>
         </StepCard>
@@ -3069,6 +3148,20 @@ export default function DisciplinaryCase() {
               <div>
                 <dt className="text-xs uppercase tracking-wide text-slate-500">Opened by</dt>
                 <dd className="mt-1 text-white">{recordedByName || '—'}</dd>
+              </div>
+              <div>
+                <dt className="text-xs uppercase tracking-wide text-slate-500">Employee visibility</dt>
+                <dd className="mt-1">
+                  {caseData?.unpublishedFromEmployeeAt ? (
+                    <span className="inline-flex rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-xs text-amber-100">
+                      Hidden from employee
+                    </span>
+                  ) : (
+                    <span className="inline-flex rounded-md border border-[#1a2540] bg-[#060e1a]/50 px-2 py-0.5 text-xs text-slate-300">
+                      Visible when shared
+                    </span>
+                  )}
+                </dd>
               </div>
               {currentStage === 'closed' ? (
                 <div>
@@ -3298,6 +3391,15 @@ export default function DisciplinaryCase() {
                 {family === 'record' ? 'Record' : String(family).replace(/_/g, ' ')}
                 {caseData?.suspensionActive ? ' · Suspension active' : ''}
               </p>
+              {Number(caseData?.accidentPenaltyPoints) > 0 ? (
+                <p className="text-sm text-amber-200/90">
+                  Accident penalty: {caseData.accidentPenaltyPoints} point
+                  {caseData.accidentPenaltyPoints === 1 ? '' : 's'}
+                  {casePenaltyLabels.length
+                    ? ` — ${casePenaltyLabels.join('; ')}`
+                    : ''}
+                </p>
+              ) : null}
               {family === 'grievance' && (
                 <p className="text-sm text-slate-400">
                   About{' '}
@@ -3654,6 +3756,36 @@ export default function DisciplinaryCase() {
                     <textarea name="informalNotAppropriateReason" value={form.informalNotAppropriateReason} onChange={handleChange} rows={3} className={inputClass} />
                   </Field>
                 )}
+              </div>
+            )}
+
+            {isRecordCreate && (
+              <div className="rounded-lg border border-[#1a2540] bg-[#060e1a]/50 px-4 py-3 flex items-center justify-between gap-4">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-white">Hide from employee</p>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    When on, this record stays off their My cases list (including if you add interviews later).
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={Boolean(form.hideFromEmployee)}
+                  aria-label="Hide from employee"
+                  onClick={() => setForm((prev) => ({
+                    ...prev,
+                    hideFromEmployee: !prev.hideFromEmployee,
+                  }))}
+                  className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors ${
+                    form.hideFromEmployee ? 'bg-indigo-500' : 'bg-slate-600'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
+                      form.hideFromEmployee ? 'translate-x-6' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
               </div>
             )}
 

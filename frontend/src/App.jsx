@@ -19,6 +19,7 @@ import { HrPortalLanding } from './components/HrPortalNav';
 // (orphaned assets after deploy return index.html and crash the section boundary).
 import EmployeesDirectory from './pages/EmployeesDirectory';
 import DisciplinaryDashboard from './pages/DisciplinaryDashboard';
+import VehicleAccidentsDashboard from './pages/VehicleAccidentsDashboard';
 import DisciplinaryCase from './pages/DisciplinaryCase';
 
 /** Reload once when a deploy orphans a lazy chunk (HTML served instead of JS). */
@@ -204,6 +205,14 @@ export default function App() {
                       element={(
                         <ProtectedRoute requireCasesManager>
                           <DisciplinaryDashboard />
+                        </ProtectedRoute>
+                      )}
+                    />
+                    <Route
+                      path="vehicle-accidents"
+                      element={(
+                        <ProtectedRoute requireCasesManager>
+                          <VehicleAccidentsDashboard />
                         </ProtectedRoute>
                       )}
                     />

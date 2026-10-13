@@ -34,10 +34,90 @@ import {
   totalRevenuePerSecond,
 } from '../lib/coachCapitalist';
 import { GameUiBadge, GameUiButton, GameUiModal, GameUiPanel } from './gameUi';
+import { SHOW_COACH_CAPITALIST } from '../utils/featureFlags';
 
 const BUY_MODES = [1, 10, 100, 'max'];
 const EMPTY_NAMES = { depots: {} };
 const CLOUD_SAVE_DEBOUNCE_MS = 4000;
+const HEARTBEAT_INTERVAL_MS = 45_000;
+const SEASON_INTRO_ACK_PREFIX = 'coach-capitalist-season-intro:';
+
+function seasonIntroAckKey(seasonId) {
+  return `${SEASON_INTRO_ACK_PREFIX}${String(seasonId || '').trim() || 'default'}`;
+}
+
+function hasAcknowledgedSeasonIntro(seasonId) {
+  try {
+    return localStorage.getItem(seasonIntroAckKey(seasonId)) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function acknowledgeSeasonIntro(seasonId) {
+  try {
+    localStorage.setItem(seasonIntroAckKey(seasonId), '1');
+  } catch {
+    /* ignore */
+  }
+}
+
+function depotLabel(depot) {
+  if (depot === 'national') return 'National';
+  if (depot === 'regional') return 'Regional';
+  if (depot === 'local') return 'Local';
+  return depot || '—';
+}
+
+function formatPlayRemaining(ms) {
+  const totalSec = Math.max(0, Math.ceil((Number(ms) || 0) / 1000));
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function normalizePlayStatus(play, fallbackCap = 60 * 60 * 1000) {
+  if (!play || typeof play !== 'object') {
+    return {
+      dayKey: '',
+      playedMs: 0,
+      remainingMs: fallbackCap,
+      locked: false,
+      dailyPlayCapMs: fallbackCap,
+    };
+  }
+  const cap = Number(play.dailyPlayCapMs);
+  const dailyPlayCapMs = Number.isFinite(cap) && cap >= 0 ? cap : fallbackCap;
+  const playedMs = Math.max(0, Math.floor(Number(play.playedMs) || 0));
+  const remainingMs = Math.max(
+    0,
+    Number.isFinite(Number(play.remainingMs))
+      ? Math.floor(Number(play.remainingMs))
+      : dailyPlayCapMs - playedMs,
+  );
+  return {
+    dayKey: play.dayKey ? String(play.dayKey) : '',
+    playedMs,
+    remainingMs,
+    locked: Boolean(play.locked) || remainingMs <= 0,
+    dailyPlayCapMs,
+  };
+}
+
+function CoachCapitalistMaintenance() {
+  return (
+    <div className="w-full max-w-lg mx-auto rounded-2xl border border-amber-400/30 bg-[#12100a] px-6 py-10 text-center shadow-xl">
+      <div className="text-[11px] uppercase tracking-[0.16em] text-amber-300/90">Coach Capitalist</div>
+      <h2 className="mt-2 text-xl font-semibold text-white">Down for maintenance</h2>
+      <p className="mt-3 text-sm text-white/70 leading-relaxed">
+        Coach Capitalist is temporarily unavailable while we carry out maintenance.
+        Please check back later — your progress is saved.
+      </p>
+    </div>
+  );
+}
 
 async function readJsonResponse(res) {
   const contentType = res.headers.get('content-type') || '';
@@ -93,6 +173,7 @@ function BusIcon({ colour = '#38bdf8', className = 'w-10 h-10' }) {
 const STRIPE_TIME_SEC = 1;
 
 function BusinessRow({
+  playLocked = false,
   biz,
   index,
   owned,
@@ -122,9 +203,9 @@ function BusinessRow({
   const unlockRaw = buyCost(biz.baseCost, biz.coefficient, 0, 1);
   const cost = rawCost * mult;
   const unlockCost = unlockRaw * mult;
-  const canBuy = owned > 0
+  const canBuy = !playLocked && (owned > 0
     ? (buyMode === 'max' ? costQty > 0 : cash >= cost)
-    : cash >= unlockCost;
+    : cash >= unlockCost);
   const unlockAt = nextUnlockAtForBusiness(biz, owned);
   const locked = owned <= 0 && cash < unlockCost && index > 0;
   const showCost = owned <= 0
@@ -209,9 +290,9 @@ function BusinessRow({
       <button
         type="button"
         className="ccap-side"
-        disabled={owned <= 0 || running || managed}
+        disabled={playLocked || owned <= 0 || running || managed}
         onClick={onRun}
-        title={runTitle}
+        title={playLocked ? 'Daily play time used' : runTitle}
       >
         <span className="ccap-art">
           {biz.art ? (
@@ -245,9 +326,9 @@ function BusinessRow({
         <button
           type="button"
           className="ccap-arrow"
-          disabled={owned <= 0 || running || managed}
+          disabled={playLocked || owned <= 0 || running || managed}
           onClick={onRun}
-          title={runTitle}
+          title={playLocked ? 'Daily play time used' : runTitle}
         >
           <span className="ccap-arrow__outline" aria-hidden />
           <span className="ccap-arrow__inner" aria-hidden>
@@ -262,7 +343,7 @@ function BusinessRow({
           <button
             type="button"
             className={`ccap-buy ${canBuy ? 'ccap-buy--go' : 'ccap-buy--wait'}`}
-            disabled={!canBuy && owned > 0}
+            disabled={playLocked || (!canBuy && owned > 0)}
             onClick={onBuy}
           >
             <span className="ccap-buy__top">{buyLabel}</span>
@@ -282,6 +363,13 @@ function BusinessRow({
 }
 
 export default function CoachCapitalistPanel({ sandbox = false, isAdmin = false }) {
+  if (!SHOW_COACH_CAPITALIST && !sandbox) {
+    return <CoachCapitalistMaintenance />;
+  }
+  return <CoachCapitalistPanelLive sandbox={sandbox} isAdmin={isAdmin} />;
+}
+
+function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false }) {
   const [state, dispatch] = useReducer(reducer, null, loadState);
   const [tab, setTab] = useState('fleet'); // fleet | managers | upgrades | angels | leaderboard
   const [resetOpen, setResetOpen] = useState(false);
@@ -298,12 +386,26 @@ export default function CoachCapitalistPanel({ sandbox = false, isAdmin = false 
   const [leaderboardMe, setLeaderboardMe] = useState(null);
   const [leaderboardLoading, setLeaderboardLoading] = useState(false);
   const [leaderboardError, setLeaderboardError] = useState('');
+  const [playStatus, setPlayStatus] = useState(() => normalizePlayStatus(null));
+  const [pageVisible, setPageVisible] = useState(
+    () => typeof document === 'undefined' || document.visibilityState === 'visible',
+  );
+  const [simulateCap, setSimulateCap] = useState(false);
+  const [seasonId, setSeasonId] = useState('');
+  const [seasonWrapup, setSeasonWrapup] = useState(null);
+  const [seasonIntroOpen, setSeasonIntroOpen] = useState(false);
   const lastSyncedEarnings = useRef(0);
   const cloudTimerRef = useRef(null);
   const savingCloudRef = useRef(false);
   const forceResetTokenRef = useRef(currentForceResetAck());
   const stateRef = useRef(state);
+  const playStatusRef = useRef(playStatus);
+  const heartbeatInFlightRef = useRef(false);
   stateRef.current = state;
+  playStatusRef.current = playStatus;
+  // Sandbox bypasses the daily cap unless "simulate cap" is on (Fun Admin testing).
+  const bypassPlayCap = sandbox && !simulateCap;
+  const playLocked = !bypassPlayCap && Boolean(playStatus.locked);
 
   const baseDepot = getDepot(state.activeDepot);
   const depot = useMemo(
@@ -334,14 +436,50 @@ export default function CoachCapitalistPanel({ sandbox = false, isAdmin = false 
     }
   };
 
+  const applyPlayPayload = (payload) => {
+    if (!payload?.play) return;
+    const next = normalizePlayStatus(payload.play, Number(payload.dailyPlayCapMs) || undefined);
+    setPlayStatus(next);
+    playStatusRef.current = next;
+  };
+
+  const sendPlayHeartbeat = async () => {
+    if (sandbox || bypassPlayCap) return null;
+    if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return null;
+    if (heartbeatInFlightRef.current) return null;
+    heartbeatInFlightRef.current = true;
+    try {
+      const response = await fetch('/api/coachCapitalistHeartbeat', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const payload = (await readJsonResponse(response)) || {};
+      if (!response.ok) throw new Error(payload.error || 'Heartbeat failed.');
+      applyPlayPayload(payload);
+      return payload;
+    } catch {
+      return null;
+    } finally {
+      heartbeatInFlightRef.current = false;
+    }
+  };
+
   const pushCloudSave = async ({ force = false } = {}) => {
     if (sandbox) return null;
+    // While daily-capped, skip saves so a keptCloud freeze cannot wipe local away earnings.
+    if (playStatusRef.current?.locked && !bypassPlayCap) {
+      await sendPlayHeartbeat();
+      return null;
+    }
     const cur = stateRef.current;
     const total = totalLifetimeEarnings(cur);
     if (!force && total <= 0 && total <= lastSyncedEarnings.current) return null;
     if (savingCloudRef.current) return null;
     savingCloudRef.current = true;
     try {
+      await sendPlayHeartbeat();
       const response = await fetch('/api/saveCoachCapitalistSave', {
         method: 'POST',
         credentials: 'include',
@@ -357,12 +495,13 @@ export default function CoachCapitalistPanel({ sandbox = false, isAdmin = false 
         forceResetTokenRef.current = String(payload.forceResetToken);
         acknowledgeForceReset(payload.forceResetToken);
       }
+      applyPlayPayload(payload);
       const nextLife = Math.max(
         lastSyncedEarnings.current,
         Number(payload.lifetimeEarnings) || total,
       );
       lastSyncedEarnings.current = nextLife;
-      if (payload.keptCloud && payload.state) {
+      if (payload.keptCloud && payload.state && !payload.playLocked) {
         dispatch({ type: 'replace', state: normalizeGameState(payload.state) });
         stateRef.current = normalizeGameState(payload.state);
       }
@@ -400,6 +539,14 @@ export default function CoachCapitalistPanel({ sandbox = false, isAdmin = false 
         if (!cancelled) {
           setNameConfig(draftNameConfig(payload.names));
           setNamesDirty(false);
+          if (payload.seasonId) setSeasonId(String(payload.seasonId));
+          if (payload.previousSeasonWrapup) {
+            setSeasonWrapup(payload.previousSeasonWrapup);
+            const sid = String(payload.seasonId || '');
+            if (sid && !hasAcknowledgedSeasonIntro(sid) && !sandbox) {
+              setSeasonIntroOpen(true);
+            }
+          }
         }
       } catch {
         // Keep defaults if config unavailable.
@@ -427,6 +574,13 @@ export default function CoachCapitalistPanel({ sandbox = false, isAdmin = false 
           const forceToken = payload.forceResetToken ? String(payload.forceResetToken) : '';
           const newlyForced = forceToken ? acknowledgeForceReset(forceToken) : false;
           if (forceToken) forceResetTokenRef.current = forceToken;
+          applyPlayPayload(payload);
+          if (payload.seasonId) setSeasonId(String(payload.seasonId));
+          if (payload.previousSeasonWrapup) {
+            setSeasonWrapup(payload.previousSeasonWrapup);
+            const sid = String(payload.seasonId || '');
+            if (sid && !hasAcknowledgedSeasonIntro(sid)) setSeasonIntroOpen(true);
+          }
           // New admin/claim wipe token: take cloud and drop localStorage. Later loads merge normally.
           const picked = newlyForced
             ? { state: normalizeGameState(payload.state), source: 'cloud' }
@@ -447,7 +601,7 @@ export default function CoachCapitalistPanel({ sandbox = false, isAdmin = false 
               `While you were away · ${formatMoney(away.earned)} over ${formatDuration(away.awayMs / 1000)}`,
             );
           } else if (newlyForced) {
-            setToast('Save reset from server — Local & Regional wiped');
+            setToast('New season — progress reset. Good luck!');
           } else if (picked.source === 'cloud') {
             setToast('Progress restored from your account');
           }
@@ -483,9 +637,9 @@ export default function CoachCapitalistPanel({ sandbox = false, isAdmin = false 
     return () => window.clearInterval(id);
   }, []);
 
-  // Economy tick — cash / cycle completion. Bar fills animate imperatively in BusinessRow.
+  // Economy tick — pause when tab hidden or daily play budget locked (away earnings apply on return).
   useEffect(() => {
-    if (!cloudReady) return undefined;
+    if (!cloudReady || !pageVisible || playLocked) return undefined;
     const id = window.setInterval(() => {
       const cur = stateRef.current;
       const d = applyNameOverrides(getDepot(cur.activeDepot), nameConfig);
@@ -508,10 +662,10 @@ export default function CoachCapitalistPanel({ sandbox = false, isAdmin = false 
       });
     }, 80);
     return () => window.clearInterval(id);
-  }, [nameConfig, cloudReady]);
+  }, [nameConfig, cloudReady, pageVisible, playLocked]);
 
   useEffect(() => {
-    if (!cloudReady) return undefined;
+    if (!cloudReady || !pageVisible || playLocked) return undefined;
     const id = window.setInterval(() => {
       const cur = stateRef.current;
       let changed = false;
@@ -543,7 +697,96 @@ export default function CoachCapitalistPanel({ sandbox = false, isAdmin = false 
       }
     }, 2000);
     return () => window.clearInterval(id);
-  }, [nameConfig, cloudReady]);
+  }, [nameConfig, cloudReady, pageVisible, playLocked]);
+
+  // Heartbeat every 45s while visible (also on mount / becoming visible).
+  useEffect(() => {
+    if (sandbox || !cloudReady || bypassPlayCap) return undefined;
+    const beat = () => {
+      if (document.visibilityState !== 'visible') return;
+      sendPlayHeartbeat().catch(() => {});
+    };
+    beat();
+    const id = window.setInterval(beat, HEARTBEAT_INTERVAL_MS);
+    return () => window.clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sandbox, cloudReady, bypassPlayCap]);
+
+  // Fun Admin: local simulate of the 60m cap without cloud heartbeats.
+  useEffect(() => {
+    if (!sandbox || !simulateCap || playStatus.locked) return undefined;
+    const id = window.setInterval(() => {
+      setPlayStatus((prev) => {
+        const playedMs = Math.min(prev.dailyPlayCapMs, prev.playedMs + HEARTBEAT_INTERVAL_MS);
+        const remainingMs = Math.max(0, prev.dailyPlayCapMs - playedMs);
+        const next = { ...prev, playedMs, remainingMs, locked: remainingMs <= 0 };
+        playStatusRef.current = next;
+        return next;
+      });
+    }, HEARTBEAT_INTERVAL_MS);
+    return () => window.clearInterval(id);
+  }, [sandbox, simulateCap, playStatus.locked]);
+
+  // Smooth countdown between server heartbeats (display only).
+  useEffect(() => {
+    if (bypassPlayCap || playLocked || !pageVisible || !cloudReady) return undefined;
+    const id = window.setInterval(() => {
+      setPlayStatus((prev) => {
+        if (prev.locked || prev.remainingMs <= 0) return prev;
+        const remainingMs = Math.max(0, prev.remainingMs - 1000);
+        const playedMs = Math.min(prev.dailyPlayCapMs, prev.dailyPlayCapMs - remainingMs);
+        const next = {
+          ...prev,
+          remainingMs,
+          playedMs,
+          locked: remainingMs <= 0,
+        };
+        playStatusRef.current = next;
+        return next;
+      });
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [bypassPlayCap, playLocked, pageVisible, cloudReady]);
+
+  // While daily-locked, keep ~10% away earnings even if the tab stays open.
+  useEffect(() => {
+    if (!cloudReady || !playLocked) return undefined;
+    const id = window.setInterval(() => {
+      const away = applyAwayEarnings(stateRef.current);
+      if (away.earned > 0 || away.state !== stateRef.current) {
+        dispatch({ type: 'replace', state: away.state });
+        stateRef.current = away.state;
+      }
+    }, 60_000);
+    return () => window.clearInterval(id);
+  }, [cloudReady, playLocked]);
+
+  // Visibility: pause live ticks; on return credit ~10% away earnings and heartbeat.
+  useEffect(() => {
+    const onVis = () => {
+      const visible = document.visibilityState === 'visible';
+      setPageVisible(visible);
+      if (!visible) return;
+      const away = applyAwayEarnings(stateRef.current);
+      if (away.awayMs >= 1500 && away.earned > 0) {
+        dispatch({ type: 'replace', state: away.state });
+        stateRef.current = away.state;
+        setAwayBanner(
+          `While you were away · ${formatMoney(away.earned)} over ${formatDuration(away.awayMs / 1000)}`,
+        );
+      } else if (away.state !== stateRef.current) {
+        // Refresh lastTick even if quiet hours / zero earn so the next away window is clean.
+        dispatch({ type: 'replace', state: away.state });
+        stateRef.current = away.state;
+      }
+      if (!sandbox && !bypassPlayCap) {
+        sendPlayHeartbeat().catch(() => {});
+      }
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sandbox, bypassPlayCap]);
 
   useEffect(() => {
     saveState(state);
@@ -727,14 +970,67 @@ export default function CoachCapitalistPanel({ sandbox = false, isAdmin = false 
               Night stop · no earnings 10pm–5am (Europe/London). Fleet resumes at 5am.
             </div>
           ) : null}
+          {playLocked ? (
+            <div className="rounded-xl border-2 border-rose-400/40 bg-rose-500/10 px-3 py-3 text-sm text-rose-50">
+              <p className="gui-font text-base text-rose-100">Daily play time used</p>
+              <p className="mt-1 text-rose-100/85">
+                1 hour used for today (London time). Come back after midnight.
+                Managed fleets still earn at the reduced away rate while you&apos;re away.
+              </p>
+            </div>
+          ) : null}
 
           <div className="flex flex-wrap items-end justify-between gap-3">
             <div>
               <p className="gui-font text-2xl sm:text-3xl text-amber-300 tabular-nums tracking-wide">
                 {formatMoney(accountCash)}
               </p>
+              <div className="mt-1 flex flex-wrap items-center gap-2">
+                {!bypassPlayCap ? (
+                  <span
+                    className={`inline-flex items-center rounded-md border px-2 py-0.5 text-[11px] tabular-nums ${
+                      playLocked
+                        ? 'border-rose-400/50 bg-rose-500/15 text-rose-100'
+                        : 'border-sky-400/40 bg-sky-500/10 text-sky-100'
+                    }`}
+                    title="Active play budget (Europe/London day). Hidden tabs do not spend time."
+                  >
+                    {playLocked
+                      ? 'Play left today · 0:00'
+                      : `Play left today · ${formatPlayRemaining(playStatus.remainingMs)}`}
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center rounded-md border border-slate-600 bg-slate-800/80 px-2 py-0.5 text-[11px] text-slate-300">
+                    Sandbox · cap off
+                  </span>
+                )}
+                {sandbox ? (
+                  <label className="inline-flex items-center gap-1.5 text-[11px] text-slate-400 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={simulateCap}
+                      onChange={(e) => {
+                        setSimulateCap(e.target.checked);
+                        if (e.target.checked) {
+                          setPlayStatus(normalizePlayStatus({
+                            playedMs: 0,
+                            remainingMs: 60 * 60 * 1000,
+                            locked: false,
+                            dailyPlayCapMs: 60 * 60 * 1000,
+                          }));
+                        }
+                      }}
+                    />
+                    Simulate cap
+                  </label>
+                ) : null}
+              </div>
               <p className="text-xs text-slate-400 mt-1">
-                {rps > 0 ? `${formatMoney(rps)}/s with managers` : 'Click a vehicle to send it on a job'}
+                {playLocked
+                  ? 'Active play paused — away earnings still tick at ~10%'
+                  : rps > 0
+                    ? `${formatMoney(rps)}/s with managers`
+                    : 'Click a vehicle to send it on a job'}
                 {' · '}
                 Shared wallet
                 {priceMult !== 1 ? ` · prices ×${priceMult}` : ''}
@@ -872,7 +1168,15 @@ export default function CoachCapitalistPanel({ sandbox = false, isAdmin = false 
               </GameUiButton>
             ))}
             <div className="flex-1" />
-            <GameUiButton size="sm" variant="warning" onClick={() => setResetOpen(true)}>
+            <GameUiButton
+              size="sm"
+              variant="warning"
+              disabled={playLocked}
+              onClick={() => {
+                if (playLocked) return;
+                setResetOpen(true);
+              }}
+            >
               Claim {pending > 0 ? formatMoney(pending, { symbol: '' }) : '0'} backers
             </GameUiButton>
           </div>
@@ -882,6 +1186,7 @@ export default function CoachCapitalistPanel({ sandbox = false, isAdmin = false 
               {depot.businesses.map((biz, i) => (
                 <BusinessRow
                   key={biz.id}
+                  playLocked={playLocked}
                   biz={biz}
                   index={i}
                   owned={depotState.owned[i] || 0}
@@ -895,8 +1200,12 @@ export default function CoachCapitalistPanel({ sandbox = false, isAdmin = false 
                   lastTick={depotState.lastTick || 0}
                   adminMode={adminMode && isAdmin}
                   onRename={renameBusiness}
-                  onRun={() => patch(startCycle(depot, depotState, i))}
+                  onRun={() => {
+                    if (playLocked) return;
+                    patch(startCycle(depot, depotState, i));
+                  }}
                   onBuy={() => {
+                    if (playLocked) return;
                     const prevOwned = depotState.owned[i] || 0;
                     const next = buyBusinesses(state, state.activeDepot, i, state.buyMode);
                     if ((next.depots[state.activeDepot]?.owned[i] || 0) !== prevOwned) {
@@ -915,7 +1224,7 @@ export default function CoachCapitalistPanel({ sandbox = false, isAdmin = false 
                 const owned = depotState.owned[i] || 0;
                 const have = depotState.managers[i];
                 const mgrCost = (mgr.cost || 0) * priceMult;
-                const can = !have && owned > 0 && accountCash >= mgrCost;
+                const can = !playLocked && !have && owned > 0 && accountCash >= mgrCost;
                 return (
                   <div
                     key={mgr.name}
@@ -945,6 +1254,7 @@ export default function CoachCapitalistPanel({ sandbox = false, isAdmin = false 
                         variant={can ? 'success' : 'neutral'}
                         disabled={!can}
                         onClick={() => {
+                          if (playLocked) return;
                           replaceState(buyManager(state, state.activeDepot, i));
                           setToast(`Hired ${mgr.name}`);
                         }}
@@ -969,7 +1279,7 @@ export default function CoachCapitalistPanel({ sandbox = false, isAdmin = false 
               ) : null}
               {affordables.map((up) => {
                 const upCost = up.cost * priceMult;
-                const can = accountCash >= upCost;
+                const can = !playLocked && accountCash >= upCost;
                 const target = up.business === 'all'
                   ? 'All fleet'
                   : up.business === 'angel'
@@ -1003,6 +1313,7 @@ export default function CoachCapitalistPanel({ sandbox = false, isAdmin = false 
                       variant={can ? 'accent' : 'neutral'}
                       disabled={!can}
                       onClick={() => {
+                        if (playLocked) return;
                         replaceState(buyCashUpgrade(state, state.activeDepot, up.id));
                         setToast(up.name);
                       }}
@@ -1063,7 +1374,7 @@ export default function CoachCapitalistPanel({ sandbox = false, isAdmin = false 
                 </p>
               </div>
               {angelAfford.map((up) => {
-                const can = accountAngels >= up.cost;
+                const can = !playLocked && accountAngels >= up.cost;
                 return (
                   <div
                     key={up.id}
@@ -1082,6 +1393,7 @@ export default function CoachCapitalistPanel({ sandbox = false, isAdmin = false 
                       variant={can ? 'warning' : 'neutral'}
                       disabled={!can}
                       onClick={() => {
+                        if (playLocked) return;
                         replaceState(buyAngelUpgrade(state, state.activeDepot, up.id));
                         setToast(up.name);
                       }}
@@ -1189,9 +1501,193 @@ export default function CoachCapitalistPanel({ sandbox = false, isAdmin = false 
         </p>
         <p className="text-xs text-slate-400">
           Account lifetime score is kept (Local ×1, Regional ×2.5, National ×5) so you keep earning
-          future backers. Unlocks stay; you rebuild from Local.
+          future backers. Regional and National lock again until you re-earn their unlock this run.
         </p>
       </GameUiModal>
+
+      <GameUiModal
+        open={seasonIntroOpen && Boolean(seasonWrapup)}
+        onClose={() => {
+          if (seasonId) acknowledgeSeasonIntro(seasonId);
+          setSeasonIntroOpen(false);
+        }}
+        title={seasonId ? `Season ${seasonId} is live` : 'New season is live'}
+        header="blue"
+        dark
+        confirmLabel="Let's go"
+        confirmVariant="accent"
+        cancelLabel="Close"
+        className="!w-[min(28rem,calc(100%-1.5rem))]"
+        onConfirm={() => {
+          if (seasonId) acknowledgeSeasonIntro(seasonId);
+          setSeasonIntroOpen(false);
+        }}
+      >
+        <SeasonWrapupBody wrapup={seasonWrapup} />
+      </GameUiModal>
+    </div>
+  );
+}
+
+function SeasonWrapupBody({ wrapup }) {
+  if (!wrapup) return null;
+  const label = wrapup.previousSeasonLabel || 'Season 1';
+  const champ = wrapup.champion;
+  const unclaimed = wrapup.mostUnclaimedBackers;
+  const claimed = wrapup.mostClaimedBackers;
+  const cash = wrapup.richestCash;
+  const furthest = wrapup.furthestDepot;
+  const top = Array.isArray(wrapup.topEarners) ? wrapup.topEarners : [];
+
+  return (
+    <div className="space-y-3 text-sm text-slate-200">
+      <p>
+        Everyone starts fresh for the new season. Here&apos;s how <strong>{label}</strong> finished.
+      </p>
+      {champ ? (
+        <div className="rounded-lg border border-amber-400/40 bg-amber-500/10 px-3 py-2">
+          <p className="text-[11px] uppercase tracking-wider text-amber-200/80">Top earner</p>
+          <p className="gui-font text-amber-200 mt-0.5">
+            {champ.fullName}
+            {' · '}
+            {formatMoney(champ.lifetimeEarnings)}
+          </p>
+        </div>
+      ) : null}
+      {unclaimed ? (
+        <div className="rounded-lg border border-sky-400/35 bg-sky-500/10 px-3 py-2">
+          <p className="text-[11px] uppercase tracking-wider text-sky-200/80">Most unclaimed backers</p>
+          <p className="gui-font text-sky-100 mt-0.5">
+            {unclaimed.fullName}
+            {' · '}
+            {formatMoney(unclaimed.pendingAngels, { symbol: '' })} waiting to claim
+          </p>
+        </div>
+      ) : null}
+      {claimed ? (
+        <div className="rounded-lg border border-violet-400/35 bg-violet-500/10 px-3 py-2">
+          <p className="text-[11px] uppercase tracking-wider text-violet-200/80">Most claimed backers</p>
+          <p className="gui-font text-violet-100 mt-0.5">
+            {claimed.fullName}
+            {' · '}
+            {formatMoney(claimed.claimedAngels, { symbol: '' })} claimed
+          </p>
+        </div>
+      ) : null}
+      {furthest ? (
+        <p className="text-xs text-slate-300">
+          Furthest depot · <strong>{furthest.fullName}</strong> reached {depotLabel(furthest.depot)}
+          {wrapup.reachedNational != null ? ` · ${wrapup.reachedNational} hit National` : ''}
+          {wrapup.reachedRegional != null ? ` · ${wrapup.reachedRegional} reached Regional+` : ''}
+        </p>
+      ) : null}
+      {cash ? (
+        <p className="text-xs text-slate-300">
+          Biggest wallet · <strong>{cash.fullName}</strong> · {formatMoney(cash.cash)}
+        </p>
+      ) : null}
+      {wrapup.playerCount ? (
+        <p className="text-xs text-slate-400">
+          {wrapup.playerCount} players on the board
+          {wrapup.scoredPlayers != null ? ` (${wrapup.scoredPlayers} with scores)` : ''}.
+        </p>
+      ) : null}
+      {top.length > 1 ? (
+        <div className="space-y-1">
+          <p className="text-[11px] uppercase tracking-wider text-slate-400">Top 5</p>
+          <ol className="space-y-1">
+            {top.map((row) => (
+              <li key={row.uid || row.rank} className="flex justify-between gap-3 text-xs">
+                <span className="truncate">
+                  {row.rank}. {row.fullName}
+                </span>
+                <span className="tabular-nums text-amber-300 shrink-0">
+                  {formatMoney(row.lifetimeEarnings)}
+                </span>
+              </li>
+            ))}
+          </ol>
+        </div>
+      ) : null}
+      <p className="text-xs text-slate-400 border-t border-slate-700 pt-2">
+        New this season: <strong>60 minutes</strong> of active play per London day. Hidden tabs pause
+        the clock; away earnings stay at ~10%.
+      </p>
+    </div>
+  );
+}
+
+function CoachCapitalistSeasonAdmin() {
+  const [seasonId, setSeasonId] = useState('2026-S2');
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState('');
+
+  const startSeason = async () => {
+    const id = String(seasonId || '').trim();
+    if (!id) {
+      setError('seasonId is required.');
+      return;
+    }
+    if (!window.confirm(
+      `Start Coach Capitalist season "${id}"?\n\nThis archives scores, clears the leaderboard, resets every save, and issues a force-reset token.`,
+    )) {
+      return;
+    }
+    setBusy(true);
+    setError('');
+    setResult(null);
+    try {
+      const response = await fetch('/api/adminStartCoachCapitalistSeason', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          seasonId: id,
+          dailyPlayCapMs: 60 * 60 * 1000,
+          awayEarningsEnabled: true,
+          archiveScores: true,
+          previousSeasonLabel: 'Season 1',
+        }),
+      });
+      const payload = (await readJsonResponse(response)) || {};
+      if (!response.ok) throw new Error(payload.error || 'Failed to start season.');
+      setResult(payload);
+    } catch (err) {
+      setError(err.message || 'Failed to start season.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 space-y-2">
+      <p className="text-sm font-medium text-amber-100">Start new season</p>
+      <p className="text-xs text-amber-100/80">
+        Wipes leaderboard + all cloud saves, sets daily 60-minute play cap, keeps ~10% away earnings.
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          type="text"
+          value={seasonId}
+          maxLength={40}
+          onChange={(e) => setSeasonId(e.target.value)}
+          className="rounded-md border border-amber-400/40 bg-slate-950/70 px-2 py-1.5 text-sm text-white min-w-[10rem]"
+          placeholder="2026-S2"
+        />
+        <GameUiButton size="sm" variant="warning" disabled={busy} onClick={startSeason}>
+          {busy ? 'Starting…' : 'Start season'}
+        </GameUiButton>
+      </div>
+      {error ? <p className="text-xs text-rose-300">{error}</p> : null}
+      {result ? (
+        <p className="text-xs text-emerald-200">
+          Season {result.seasonId} live · saves reset {result.savesReset} · scores cleared {result.scoresCleared}
+          {result.archived != null ? ` · archived ${result.archived}` : ''}
+          {' · '}
+          token {result.forceResetToken}
+        </p>
+      ) : null}
     </div>
   );
 }
@@ -1202,6 +1698,7 @@ export function CoachCapitalistSandbox() {
       <p className="text-sm text-slate-400">
         Dev sandbox — browser-only (no cloud save). Live game syncs to each staff account across devices.
       </p>
+      <CoachCapitalistSeasonAdmin />
       <CoachCapitalistPanel sandbox isAdmin />
     </div>
   );

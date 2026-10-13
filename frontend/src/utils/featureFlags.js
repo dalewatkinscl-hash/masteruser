@@ -3,6 +3,12 @@
  */
 export const SHOW_HR_RECORDS = false;
 
+/** Coach Capitalist Profile game — false shows “down for maintenance”. Fun Admin sandbox still works. */
+export const SHOW_COACH_CAPITALIST = true;
+
+/** Coach Depot Profile game — false shows “down for maintenance”. Fun Admin sandbox still works. */
+export const SHOW_COACH_DEPOT = false;
+
 /** People Cases hub (disciplinary / grievance / accidents). Independent of HR records hide. */
 export const SHOW_CASES_PORTAL = true;
 

@@ -96,6 +96,10 @@ const {
   updateVehicleAccident,
   getVehicleAccident,
 } = require('./vehiclesPortalClient');
+const {
+  sanitizeAccidentPenaltyTriggers,
+  computeAccidentPenaltyPoints,
+} = require('./accidentPenaltyPoints');
 
 function canAccessBonusAdmin(profile, getEffectivePortalRole) {
   if (!profile) return false;
@@ -684,6 +688,7 @@ function createPeopleCasesApi({
       try {
         const employeeUid = toTrimmedString(req.query?.employeeUid);
         const processFamily = toTrimmedString(req.query?.processFamily);
+        const scope = toTrimmedString(req.query?.scope).toLowerCase();
         const mine = toTrimmedString(req.query?.mine) === '1';
         const attention = toTrimmedString(req.query?.attention) === '1';
 
@@ -695,6 +700,9 @@ function createPeopleCasesApi({
             .where('ownerManagerUid', '==', session.profile.uid)
             .limit(300)
             .get();
+        } else if (scope === 'vehicle_accidents') {
+          // Pull a wider recent window so converted accident cases are not crowded out by other families.
+          snapshot = await db.collection('disciplinary_cases').orderBy('createdAt', 'desc').limit(1000).get();
         } else {
           snapshot = await db.collection('disciplinary_cases').orderBy('createdAt', 'desc').limit(300).get();
         }
@@ -706,6 +714,18 @@ function createPeopleCasesApi({
         }
         if (processFamily) {
           cases = cases.filter((item) => (item.processFamily || 'disciplinary') === processFamily);
+        }
+
+        // Open accident cases plus those converted to disciplinary that still carry accident metadata.
+        if (scope === 'vehicle_accidents') {
+          cases = cases.filter((item) => (
+            (item.processFamily || '') === 'vehicle_accident'
+            || Boolean(item.vehiclesAccidentId)
+            || Boolean(item.accidentFault)
+            || Boolean(item.convertedFromAccidentAt)
+            || (Number(item.accidentPenaltyPoints) || 0) > 0
+            || (item.origin || '') === 'bump_card'
+          ));
         }
 
         if (attention) {
@@ -1173,6 +1193,8 @@ function createPeopleCasesApi({
         const employeeName = employee.fullName || employee.email || 'Employee';
         const isSamsara = input.processFamily === 'samsara_coaching';
         const isAccident = input.processFamily === 'vehicle_accident';
+        const isRecord = input.processFamily === 'record';
+        const hideFromEmployee = isRecord && input.publishToEmployee === false;
         const issue = input.issue;
         const title = input.title
           || (isSamsara
@@ -1232,6 +1254,8 @@ function createPeopleCasesApi({
           vehiclesAccidentId: '',
           bumpCardId: '',
           accidentFault: isAccident ? 'pending' : '',
+          accidentPenaltyPoints: isAccident ? 0 : 0,
+          accidentPenaltyTriggers: [],
           processedOnSamsara: isSamsara,
           historyReviewedAt: isSamsara ? now : null,
           historyReviewedByUid: isSamsara ? session.profile.uid : '',
@@ -1261,8 +1285,8 @@ function createPeopleCasesApi({
           dismissalPossible: false,
           publishedToEmployeeAt: null,
           publishedToEmployeeByUid: '',
-          unpublishedFromEmployeeAt: null,
-          unpublishedFromEmployeeByUid: '',
+          unpublishedFromEmployeeAt: hideFromEmployee ? now : null,
+          unpublishedFromEmployeeByUid: hideFromEmployee ? session.profile.uid : '',
           outcomePreset: isSamsara ? 'samsara_coaching' : '',
           outcomePackSteps: [],
           warningEffectiveAt: '',
@@ -1367,6 +1391,12 @@ function createPeopleCasesApi({
           }, session.profile);
         }
 
+        if (hideFromEmployee) {
+          await appendEvent(caseDoc.id, 'unpublished_from_employee', {
+            atCreate: true,
+          }, session.profile);
+        }
+
         res.status(200).json({
           id: caseDoc.id,
           vehiclesAccidentId,
@@ -1374,7 +1404,9 @@ function createPeopleCasesApi({
             ? 'Samsara coaching logged and closed.'
             : isAccident
               ? 'Accident recorded. Driver has been prompted to complete the bump card.'
-              : 'Case created.',
+              : hideFromEmployee
+                ? 'Record created and hidden from the employee.'
+                : 'Case created.',
         });
       } catch (error) {
         console.error('createPeopleCase failed', error);
@@ -2523,29 +2555,50 @@ function createPeopleCasesApi({
             patch.closedByName = session.profile.fullName || session.profile.email || '';
             patch.closeNotes = toTrimmedString(body.closeNotes) || 'Third party at fault — accident case closed.';
             patch.outcomePreset = 'no_further_action';
+            patch.accidentPenaltyPoints = 0;
+            patch.accidentPenaltyTriggers = [];
             events.push(['accident_fault_third_party', { fault: 'third_party' }]);
             if (existing.vehiclesAccidentId) {
               try {
                 await updateVehicleAccident(existing.vehiclesAccidentId, {
                   status: 'closed',
                   fault: 'third_party',
+                  penaltyPoints: 0,
+                  penaltyTriggers: [],
                 }, session.profile.uid);
               } catch (vehError) {
                 console.error('updatePeopleCase vehicles accident close failed', vehError);
               }
             }
           } else {
+            const triggers = sanitizeAccidentPenaltyTriggers(body.accidentPenaltyTriggers);
+            const points = computeAccidentPenaltyPoints(triggers);
+            if (!triggers.length || points < 1) {
+              res.status(400).json({
+                error: 'Select at least one penalty trigger before continuing as disciplinary.',
+              });
+              return;
+            }
+            patch.accidentPenaltyPoints = points;
+            patch.accidentPenaltyTriggers = triggers;
             patch.processFamily = 'disciplinary';
             patch.caseType = existing.caseType === 'vehicle_accident' ? 'conduct' : (existing.caseType || 'conduct');
             patch.stage = 'fact_finding';
             patch.status = 'open';
             patch.convertedFromAccidentAt = admin.firestore.FieldValue.serverTimestamp();
-            events.push(['accident_converted_disciplinary', { fault: 'driver', stage: 'fact_finding' }]);
+            events.push(['accident_converted_disciplinary', {
+              fault: 'driver',
+              stage: 'fact_finding',
+              accidentPenaltyPoints: points,
+              accidentPenaltyTriggers: triggers,
+            }]);
             if (existing.vehiclesAccidentId) {
               try {
                 await updateVehicleAccident(existing.vehiclesAccidentId, {
                   status: 'converted_disciplinary',
                   fault: 'driver',
+                  penaltyPoints: points,
+                  penaltyTriggers: triggers,
                 }, session.profile.uid);
               } catch (vehError) {
                 console.error('updatePeopleCase vehicles accident convert failed', vehError);

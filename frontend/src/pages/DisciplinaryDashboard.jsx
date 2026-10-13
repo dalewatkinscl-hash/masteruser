@@ -202,7 +202,7 @@ function CaseMobileCard({
   );
 }
 
-export default function DisciplinaryDashboard() {
+export default function DisciplinaryDashboard({ accidentsOnly = false }) {
   const navigate = useNavigate();
   const [cases, setCases] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -358,7 +358,11 @@ export default function DisciplinaryDashboard() {
       const params = new URLSearchParams();
       if (mineOnly) params.set('mine', '1');
       if (attentionOnly) params.set('attention', '1');
-      if (familyFilter) params.set('processFamily', familyFilter);
+      if (accidentsOnly) {
+        params.set('scope', 'vehicle_accidents');
+      } else if (familyFilter) {
+        params.set('processFamily', familyFilter);
+      }
       const response = await fetch(`/api/getPeopleCases?${params.toString()}`, { credentials: 'include' });
       const data = (await readJsonResponse(response)) || {};
       if (!response.ok) throw new Error(data.error || 'Failed to load cases.');
@@ -372,7 +376,7 @@ export default function DisciplinaryDashboard() {
 
   useEffect(() => {
     load();
-  }, [mineOnly, attentionOnly, familyFilter]);
+  }, [mineOnly, attentionOnly, familyFilter, accidentsOnly]);
 
   const baseFilteredCases = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -388,6 +392,9 @@ export default function DisciplinaryDashboard() {
         item.processFamily,
         item.stage,
         item.status,
+        item.vehicleReg,
+        item.accidentFault,
+        item.accidentPenaltyPoints,
         formatCaseDate(item),
         getCaseProgressStatus(item).label,
       ].filter(Boolean).join(' ').toLowerCase();
@@ -466,25 +473,33 @@ export default function DisciplinaryDashboard() {
     <div className="flex flex-col h-full">
       <div className="flex items-center justify-between px-4 sm:px-8 py-6 border-b border-[#1a2540] gap-4 flex-wrap">
         <div>
-          <h1 className="text-2xl font-bold text-white">People Cases</h1>
+          <h1 className="text-2xl font-bold text-white">
+            {accidentsOnly ? 'Vehicle accidents' : 'People Cases'}
+          </h1>
           <p className="text-sm text-slate-400 mt-1">
-            Disciplinary, grievance, and vehicle accident case management with Acas-guided steps
+            {accidentsOnly
+              ? 'Recorded accidents, bump-card triage, and cases converted to disciplinary after driver-at-fault'
+              : 'Disciplinary, grievance, and vehicle accident case management with Acas-guided steps'}
           </p>
         </div>
         <div className="flex gap-2 flex-wrap w-full sm:w-auto">
+          {!accidentsOnly && (
+            <button
+              type="button"
+              onClick={() => navigate('/dashboard/hr/cases/bump-prompt')}
+              className="min-h-11 px-4 py-2.5 rounded-lg border border-[#1a2540] text-slate-200 text-sm hover:bg-[#0b1220]"
+            >
+              Prompt bump card
+            </button>
+          )}
           <button
             type="button"
-            onClick={() => navigate('/dashboard/hr/cases/bump-prompt')}
-            className="min-h-11 px-4 py-2.5 rounded-lg border border-[#1a2540] text-slate-200 text-sm hover:bg-[#0b1220]"
-          >
-            Prompt bump card
-          </button>
-          <button
-            type="button"
-            onClick={() => navigate('/dashboard/hr/cases/new')}
+            onClick={() => navigate(accidentsOnly
+              ? '/dashboard/hr/cases/new?processFamily=vehicle_accident'
+              : '/dashboard/hr/cases/new')}
             className="min-h-11 px-4 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-semibold"
           >
-            New case
+            {accidentsOnly ? 'Record accident' : 'New case'}
           </button>
         </div>
       </div>
@@ -539,19 +554,21 @@ export default function DisciplinaryDashboard() {
           type="search"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Search cases…"
+          placeholder={accidentsOnly ? 'Search accidents…' : 'Search cases…'}
           className="w-full sm:w-72 min-h-11 bg-[#060e1a] border border-[#1a2540] text-slate-100 text-sm rounded-lg px-4 py-2.5"
         />
-        <select
-          value={familyFilter}
-          onChange={(e) => setFamilyFilter(e.target.value)}
-          className="w-full sm:w-auto min-h-11 bg-[#060e1a] border border-[#1a2540] text-slate-100 text-sm rounded-lg px-3 py-2.5"
-        >
-          <option value="">All families</option>
-          {PROCESS_FAMILIES.map((family) => (
-            <option key={family.id} value={family.id}>{family.label}</option>
-          ))}
-        </select>
+        {!accidentsOnly && (
+          <select
+            value={familyFilter}
+            onChange={(e) => setFamilyFilter(e.target.value)}
+            className="w-full sm:w-auto min-h-11 bg-[#060e1a] border border-[#1a2540] text-slate-100 text-sm rounded-lg px-3 py-2.5"
+          >
+            <option value="">All families</option>
+            {PROCESS_FAMILIES.map((family) => (
+              <option key={family.id} value={family.id}>{family.label}</option>
+            ))}
+          </select>
+        )}
         <select
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value)}

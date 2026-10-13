@@ -14,6 +14,7 @@ import KawaiiDecor from '../components/KawaiiDecor';
 import { useTheme } from '../context/ThemeContext';
 import { useLanguage } from '../context/LanguageContext';
 import { canAccessHrPortal } from '../utils/peopleCasesAccess';
+import RolePreviewToolbar from '../components/RolePreviewToolbar';
 
 function MenuIcon({ className }) {
   return (
@@ -261,10 +262,12 @@ export default function Dashboard() {
   );
 
   return (
-    <div className="relative flex h-screen bg-base-100 text-base-content">
+    <div className="relative flex h-screen bg-base-100 text-base-content flex-col">
       <AmbientBackground />
       {isKawaii && <KawaiiDecor />}
+      <RolePreviewToolbar />
 
+      <div className="relative flex flex-1 min-h-0">
       {!isDesktop && sidebarOpen && (
         <button
           type="button"
@@ -325,6 +328,7 @@ export default function Dashboard() {
       </main>
       <KudosWelcomeModal uid={user?.uid} />
       <CoinAwardToaster />
+      </div>
     </div>
   );
 }

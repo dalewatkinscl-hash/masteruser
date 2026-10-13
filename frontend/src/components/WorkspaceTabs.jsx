@@ -164,6 +164,7 @@ export default function WorkspaceTabs({ activeProfileTab = null, onProfileTabCha
     { id: 'fun', label: t('tabs.fun'), kind: 'profile', profileTab: 'fun' },
     { id: 'coachdepot', label: t('tabs.coachDepot'), kind: 'profile', profileTab: 'coachdepot' },
     { id: 'coachcapitalist', label: t('tabs.coachCapitalist'), kind: 'profile', profileTab: 'coachcapitalist' },
+    { id: 'countryholes', label: t('tabs.countryHoles'), kind: 'profile', profileTab: 'countryholes' },
     { id: 'polls', label: t('tabs.polls'), kind: 'profile', profileTab: 'polls' },
     {
       id: 'suggestions',

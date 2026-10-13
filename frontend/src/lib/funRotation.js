@@ -28,6 +28,9 @@ export const TOOLBOX_KICK_GAME = { key: 'toolboxkick', label: 'Little Dicks Tool
 export const WANTED_LIVE_FROM = '2026-09-08';
 export const WANTED_GAME = { key: 'wanted', label: 'Daily Wanted' };
 
+/** Always offered on Fun (test build — not in weekday rotation count). */
+export const COUNTRY_HOLES_GAME = { key: 'countryholes', label: 'Country Holes' };
+
 /** Soft launch / O×5 secret unlock from this day. */
 export const STACK_WALK_PREVIEW_FROM = '2026-09-18';
 /** Joins Fun rotation (normal play) from this Europe/London day. */
@@ -50,6 +53,7 @@ export const FUN_GAME_ROSTER = [
   TOOLBOX_KICK_GAME,
   WANTED_GAME,
   STACK_WALK_GAME,
+  COUNTRY_HOLES_GAME,
 ];
 
 export const ROTATION_START_DAY_KEY = '2026-08-03';

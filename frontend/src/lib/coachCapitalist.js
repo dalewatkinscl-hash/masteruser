@@ -315,8 +315,8 @@ export const DEPOTS = [
     id: 'regional',
     name: 'Regional Hub',
     blurb: 'A proper depot with a workshop and night parking.',
-    unlockCost: 1e12, // unlock when local lifetime hits £1 trillion (soft gate via angels/progress)
-    unlockHint: 'Earn £1 trillion lifetime at Local Depot',
+    unlockCost: 1e12, // unlock when local session (this run) hits £1 trillion
+    unlockHint: 'Earn £1 trillion this run at Local Depot',
     lifetimeWeight: 2.5, // Regional £ counts 2.5× toward score + shared backers
     angelDivisor: 1e15,
     angelScale: 198, // 165 × 1.2 (legacy per-depot curve)
@@ -360,7 +360,7 @@ export const DEPOTS = [
     name: 'National Network',
     blurb: 'Boardrooms, terminals, and a logo on every motorway.',
     unlockCost: 1e18,
-    unlockHint: 'Earn £1 quintillion lifetime at Regional Hub',
+    unlockHint: 'Earn £1 quintillion this run at Regional Hub',
     lifetimeWeight: 5, // National £ counts 5× toward score + shared backers
     angelDivisor: 1e14, // Mars uses 100B equivalent scale (wiki: 100 billion vs 400 billion)
     angelScale: 180, // 150 × 1.2 (legacy per-depot curve)
@@ -1203,6 +1203,7 @@ export function buyAngelUpgrade(state, depotId, upgradeId) {
 /**
  * Prestige: bank pending shared backers and reset ALL depot boards + shared wallet.
  * Lifetime on each depot is kept (account score / future backers). Backer upgrades stay.
+ * Regional/National lock again until this-run session earnings re-unlock them.
  */
 export function claimBackers(state, depotId) {
   const focus = getDepot(depotId);
@@ -1212,11 +1213,11 @@ export function claimBackers(state, depotId) {
   for (const d of DEPOTS) {
     const prev = depots[d.id];
     if (!prev) continue;
-    const wasUnlocked = d.id === 'local' || Boolean(prev.unlocked);
     const next = emptyDepotState(d);
     next.lifetimeEarnings = Number(prev.lifetimeEarnings) || 0;
     next.angelUpgrades = [...(prev.angelUpgrades || [])];
-    next.unlocked = wasUnlocked;
+    // Only Local starts unlocked after claim — higher depots re-unlock via session.
+    next.unlocked = d.id === 'local';
     for (const id of next.angelUpgrades) {
       const up = d.angelUpgrades.find((u) => u.id === id);
       if (up?.flatOwned != null && typeof up.business === 'number') {
@@ -1225,13 +1226,13 @@ export function claimBackers(state, depotId) {
     }
     depots[d.id] = next;
   }
-  return {
+  return syncDepotUnlocks({
     ...state,
     cash: Number(focus.startingCash) || 0,
     activeDepot: 'local',
     angels: (Number(state.angels) || 0) + pending,
     depots,
-  };
+  });
 }
 
 /** @deprecated Use claimBackers(state, depotId) — kept name for older imports. */
@@ -1251,13 +1252,21 @@ export function resetDepot(depot, depotState) {
 
 export function syncDepotUnlocks(state) {
   const next = { ...state, depots: { ...state.depots } };
-  const localLife = next.depots.local?.lifetimeEarnings || 0;
-  const regionalLife = next.depots.regional?.lifetimeEarnings || 0;
-  if (localLife >= DEPOTS[1].unlockCost) {
-    next.depots.regional = { ...next.depots.regional, unlocked: true };
-  }
-  if (regionalLife >= DEPOTS[2].unlockCost) {
-    next.depots.national = { ...next.depots.national, unlocked: true };
+  // Unlock from this-run session earnings so a claim locks Regional/National again.
+  const localSession = Number(next.depots.local?.sessionEarnings) || 0;
+  const regionalSession = Number(next.depots.regional?.sessionEarnings) || 0;
+  next.depots.local = { ...next.depots.local, unlocked: true };
+  next.depots.regional = {
+    ...next.depots.regional,
+    unlocked: localSession >= DEPOTS[1].unlockCost,
+  };
+  next.depots.national = {
+    ...next.depots.national,
+    unlocked: regionalSession >= DEPOTS[2].unlockCost,
+  };
+  // If user was viewing a now-locked depot, drop them back to Local.
+  if (next.activeDepot !== 'local' && !next.depots[next.activeDepot]?.unlocked) {
+    next.activeDepot = 'local';
   }
   return next;
 }

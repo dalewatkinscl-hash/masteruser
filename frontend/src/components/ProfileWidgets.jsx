@@ -6,8 +6,10 @@ import { KudosBadgeGraphic } from './kudosGraphics';
 import { FunRankBadge } from './FunLeaderboardRow';
 import { getLondonDayKey } from './FunDayPicker';
 import { getFunRotationForDay, setClientRotationSettings } from '../lib/funRotation';
+import { formatMoney } from '../lib/coachCapitalist';
 import { coinReasonLabel, visibleCoinEarnActions } from '../utils/coinAwards';
 import { useAuth } from '../context/AuthContext';
+import { SHOW_COACH_CAPITALIST } from '../utils/featureFlags';
 
 async function readJsonResponse(res) {
   const contentType = res.headers.get('content-type') || '';
@@ -167,6 +169,7 @@ export default function ProfileWidgets({ currentUserUid }) {
   const [votingId, setVotingId] = useState('');
   const [textDrafts, setTextDrafts] = useState({});
   const [earnOpen, setEarnOpen] = useState(false);
+  const [coachCapBoard, setCoachCapBoard] = useState({ leaderboard: [], me: null });
 
   const load = async () => {
     const response = await fetch('/api/getProfileWidgets', { credentials: 'include' });
@@ -182,12 +185,29 @@ export default function ProfileWidgets({ currentUserUid }) {
     setData(payload);
   };
 
+  const loadCoachCapBoard = async () => {
+    try {
+      const response = await fetch('/api/getCoachCapitalistLeaderboard?limit=5', {
+        credentials: 'include',
+      });
+      const payload = (await readJsonResponse(response)) || {};
+      if (!response.ok) return;
+      setCoachCapBoard({
+        leaderboard: Array.isArray(payload.leaderboard) ? payload.leaderboard : [],
+        me: payload.me || null,
+      });
+    } catch {
+      /* ignore */
+    }
+  };
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         setLoading(true);
         await load();
+        if (!cancelled && SHOW_COACH_CAPITALIST) await loadCoachCapBoard();
       } catch (err) {
         if (!cancelled) setError(err.message || 'Failed to load widgets.');
       } finally {
@@ -406,6 +426,49 @@ export default function ProfileWidgets({ currentUserUid }) {
             )
           )}
         </div>
+      </WidgetShell>
+
+      <WidgetShell
+        title="Coach Capitalist"
+        empty={
+          !SHOW_COACH_CAPITALIST
+            ? 'Down for maintenance — check back later.'
+            : !coachCapBoard.leaderboard.length
+              ? 'Play Coach Capitalist — progress syncs to your account.'
+              : null
+        }
+      >
+        {SHOW_COACH_CAPITALIST ? (
+          <>
+            {coachCapBoard.me?.rank ? (
+              <p className="text-xs text-indigo-200 mb-2">
+                Your rank #{coachCapBoard.me.rank}
+                {coachCapBoard.me.lifetimeEarnings > 0
+                  ? ` · ${formatMoney(coachCapBoard.me.lifetimeEarnings)}`
+                  : ''}
+              </p>
+            ) : null}
+            {coachCapBoard.leaderboard.length > 0 ? (
+              <ol className="space-y-1.5">
+                {coachCapBoard.leaderboard.slice(0, 5).map((row, index) => (
+                  <WidgetLeaderRow
+                    key={row.uid || index}
+                    row={{ ...row, rank: index + 1 }}
+                    currentUserUid={currentUserUid}
+                    resultText={formatMoney(row.lifetimeEarnings)}
+                  />
+                ))}
+              </ol>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => navigate('/dashboard/profile', { state: { profileTab: 'coachcapitalist' } })}
+              className="mt-2 text-[11px] text-indigo-300 hover:text-indigo-200"
+            >
+              Open Coach Capitalist →
+            </button>
+          </>
+        ) : null}
       </WidgetShell>
 
       <WidgetShell

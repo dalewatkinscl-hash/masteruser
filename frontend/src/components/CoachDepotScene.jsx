@@ -8,6 +8,7 @@ import {
   TILE_W,
   GRID_SIZE,
   GROUND,
+  baySprite,
   buildingFootY,
   buildingSprite,
   calibrationYardLayout,
@@ -617,6 +618,16 @@ export default function CoachDepotScene({
     return true;
   };
 
+  /** Structure on a pad that should open inspect / move — not the decorate menu. */
+  const structureAt = (tx, ty) => {
+    const list = placements || [];
+    return list.find((p) => (
+      (p.type === 'building' || p.type === 'hq' || p.type === 'bay')
+      && Number(p.x) === Number(tx)
+      && Number(p.y) === Number(ty)
+    )) || null;
+  };
+
   /** Tap an unowned tile → buy popup (if adjacent) or a short hint. */
   const tryClaimAtPointer = (clientX, clientY) => {
     if (placingActive || editorMode) return false;
@@ -625,6 +636,40 @@ export default function CoachDepotScene({
     const key = tileKey(tile.x, tile.y);
     if (roads.has(key) || blocked.has(key)) return false;
     if (owned.has(key)) {
+      const structure = structureAt(tile.x, tile.y);
+      if (structure?.type === 'hq') {
+        handlePick({
+          type: 'office',
+          key: 'office',
+          x: tile.x,
+          y: tile.y,
+          clientX,
+          clientY,
+        });
+        return true;
+      }
+      if (structure?.type === 'building') {
+        handlePick({
+          type: 'building',
+          key: structure.key,
+          x: tile.x,
+          y: tile.y,
+          clientX,
+          clientY,
+        });
+        return true;
+      }
+      if (structure?.type === 'bay') {
+        handlePick({
+          type: 'bay',
+          id: structure.id,
+          x: tile.x,
+          y: tile.y,
+          clientX,
+          clientY,
+        });
+        return true;
+      }
       handlePick({
         type: 'owned',
         x: tile.x,
@@ -680,7 +725,8 @@ export default function CoachDepotScene({
     });
   }
 
-  // Owned pads — click opens build / decorate menu (free or occupied).
+  // Owned pads — click opens build / decorate menu (free or fence-only pads).
+  // Skip pads that already have HQ / building / bay so those sprites keep upgrade/move.
   // Skip in Lock mode so short sprites (drivers) stay clickable above the diamond.
   const freeTiles = calibYard ? [] : (grid.freeTiles || []);
   if (!editorMode && !placingActive && !calibrateMode) {
@@ -694,6 +740,8 @@ export default function CoachDepotScene({
       if (!t || !Number.isFinite(t.x) || !Number.isFinite(t.y)) return;
       const key = tileKey(t.x, t.y);
       if (roads.has(key)) return;
+      // Building / HQ / bay pads are selected via their sprites (and tryClaimAtPointer).
+      if (structureAt(t.x, t.y)) return;
       const { x, y } = isoToScreen(t.x, t.y);
       const isFree = freeTileKeys.has(key);
       entities.push({
@@ -716,7 +764,7 @@ export default function CoachDepotScene({
       ? officeSprite(depot?.officeLevel || 1)
       : (ghostKey
         ? buildingSprite(ghostKey, 1)
-        : (placeBay ? GROUND.concrete : GROUND.dirtPatch));
+        : (placeBay ? baySprite() : GROUND.dirtPatch));
     const layout = (ghostKey || moveOffice)
       ? resolveBuildingPlacement(x, y, ghostSrc, spriteAnchors)
       : { left: x, top: buildingFootY(y), width: TILE_W };
@@ -773,7 +821,8 @@ export default function CoachDepotScene({
         src,
         left: layout.left,
         top: layout.top,
-        z: 40 + p.x + p.y,
+        // Above owned-pad diamonds (210) so HQ clicks open upgrade/move, not fences.
+        z: 230 + p.x + p.y,
         width: layout.width,
         // Don't let tall HQ sprites steal free-pad clicks while placing.
         pick: placingActive && !calibrateMode
@@ -791,7 +840,7 @@ export default function CoachDepotScene({
         ring: selectedBuildingKey === 'office' || (calibrateTarget?.file === layout.file),
       });
     } else if (p.type === 'bay') {
-      const src = p.src || GROUND.concrete;
+      const src = p.src || baySprite();
       const layout = resolveBuildingPlacement(x, y, src, spriteAnchors);
       const charged = Boolean(p.charged) || Math.floor(Number(p.level) || 1) >= 2;
       const baySlot = bayPlacements.findIndex((b) => b.id === p.id);
@@ -802,7 +851,7 @@ export default function CoachDepotScene({
         src,
         left: layout.left,
         top: layout.top,
-        z: 10 + p.x + p.y,
+        z: 225 + p.x + p.y,
         width: layout.width,
         pick: placingActive && !calibrateMode
           ? null
@@ -832,7 +881,8 @@ export default function CoachDepotScene({
         src,
         left: layout.left,
         top: layout.top,
-        z: 30 + p.x + p.y,
+        // Above owned-pad diamonds so building clicks open upgrade/move, not fences.
+        z: 230 + p.x + p.y,
         width: layout.width,
         pick: placingActive && !calibrateMode
           ? null
@@ -1342,14 +1392,16 @@ export default function CoachDepotScene({
           )) : placements.map((p) => {
             const { x, y } = isoToScreen(p.x, p.y);
             if (p.type === 'bay') {
+              const baySrc = baySprite();
+              const bayLayout = resolveBuildingPlacement(x, y, baySrc, spriteAnchors);
               return (
                 <Sprite
                   key={`ed-${p.id || p.type}`}
-                  src={GROUND.concrete}
-                  left={x}
-                  top={buildingFootY(y)}
+                  src={baySrc}
+                  left={bayLayout.left}
+                  top={bayLayout.top}
                   z={40 + p.x + p.y}
-                  width={TILE_W}
+                  width={bayLayout.width}
                   pick={null}
                   title={p.type}
                 />

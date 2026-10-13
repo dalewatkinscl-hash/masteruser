@@ -1,4 +1,10 @@
-import { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import { createContext, useContext, useEffect, useState, useCallback, useMemo } from 'react';
+import {
+  applyRolePreview,
+  canUseRolePreview,
+  readStoredRolePreviewId,
+  writeStoredRolePreviewId,
+} from '../utils/rolePreview';
 
 const AuthContext = createContext(null);
 
@@ -16,9 +22,10 @@ async function readJsonResponse(res) {
 }
 
 export function AuthProvider({ children }) {
-  const [user, setUser] = useState(null);
+  const [sessionUser, setSessionUser] = useState(null);
   // Start as loading=true so ProtectedRoute shows a spinner instead of flashing /login.
   const [loading, setLoading] = useState(true);
+  const [rolePreviewId, setRolePreviewIdState] = useState(() => readStoredRolePreviewId());
 
   const refreshSession = useCallback(async () => {
     try {
@@ -26,12 +33,12 @@ export function AuthProvider({ children }) {
 
       if (res.ok) {
         const data = await readJsonResponse(res);
-        setUser(data?.user ?? null);
+        setSessionUser(data?.user ?? null);
       } else {
-        setUser(null);
+        setSessionUser(null);
       }
     } catch {
-      setUser(null);
+      setSessionUser(null);
     } finally {
       setLoading(false);
     }
@@ -41,8 +48,52 @@ export function AuthProvider({ children }) {
     refreshSession();
   }, [refreshSession]);
 
+  const canPreviewRoles = canUseRolePreview(sessionUser);
+
+  useEffect(() => {
+    if (!canPreviewRoles && rolePreviewId) {
+      setRolePreviewIdState('');
+      writeStoredRolePreviewId('');
+    }
+  }, [canPreviewRoles, rolePreviewId]);
+
+  const setRolePreview = useCallback((id) => {
+    const next = typeof id === 'string' ? id : '';
+    setRolePreviewIdState(next);
+    writeStoredRolePreviewId(next);
+  }, []);
+
+  const setUser = useCallback((next) => {
+    setSessionUser(next);
+  }, []);
+
+  const user = useMemo(
+    () => applyRolePreview(sessionUser, canPreviewRoles ? rolePreviewId : ''),
+    [sessionUser, rolePreviewId, canPreviewRoles],
+  );
+
+  const value = useMemo(() => ({
+    user,
+    realUser: sessionUser,
+    loading,
+    setUser,
+    refreshSession,
+    rolePreviewId: canPreviewRoles ? rolePreviewId : '',
+    setRolePreview,
+    canPreviewRoles,
+  }), [
+    user,
+    sessionUser,
+    loading,
+    setUser,
+    refreshSession,
+    rolePreviewId,
+    setRolePreview,
+    canPreviewRoles,
+  ]);
+
   return (
-    <AuthContext.Provider value={{ user, loading, setUser, refreshSession }}>
+    <AuthContext.Provider value={value}>
       {children}
     </AuthContext.Provider>
   );

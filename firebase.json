@@ -565,6 +565,16 @@
         "region": "europe-west2"
       },
       {
+        "source": "/api/getDailyCountryHoles",
+        "function": "getDailyCountryHoles",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/submitCountryHolesResult",
+        "function": "submitCountryHolesResult",
+        "region": "europe-west2"
+      },
+      {
         "source": "/api/getCoachDepot",
         "function": "getCoachDepot",
         "region": "europe-west2"
@@ -612,6 +622,16 @@
       {
         "source": "/api/saveCoachDepotSpriteAnchors",
         "function": "saveCoachDepotSpriteAnchors",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getCoachDepotAssetMap",
+        "function": "getCoachDepotAssetMap",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/saveCoachDepotAssetMap",
+        "function": "saveCoachDepotAssetMap",
         "region": "europe-west2"
       },
       {
@@ -702,6 +722,16 @@
       {
         "source": "/api/saveCoachCapitalistSave",
         "function": "saveCoachCapitalistSave",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/coachCapitalistHeartbeat",
+        "function": "coachCapitalistHeartbeat",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/adminStartCoachCapitalistSeason",
+        "function": "adminStartCoachCapitalistSeason",
         "region": "europe-west2"
       },
       {

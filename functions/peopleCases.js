@@ -509,6 +509,12 @@ function sanitizeCaseCreateInput(input = {}) {
     incidentAt,
     vehicleReg,
     vehicleId,
+    // Explicit only — null means leave default create visibility.
+    publishToEmployee: input.publishToEmployee === true
+      ? true
+      : (input.publishToEmployee === false || input.hideFromEmployee === true)
+        ? false
+        : null,
   };
 }
 

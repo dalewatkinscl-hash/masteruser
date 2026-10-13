@@ -13,10 +13,12 @@ import { PipesSandbox } from '../components/PipesPanel';
 import { StackWalkSandbox } from '../components/StackWalkPanel';
 import { CoachDepotSandbox } from '../components/CoachDepotPanel';
 import { CoachCapitalistSandbox } from '../components/CoachCapitalistPanel';
-import CoachDepotArtPreview from '../components/CoachDepotArtPreview';
+import CoachDepotAssetMapper from '../components/CoachDepotAssetMapper';
 import { CasefileSandbox } from '../components/CasefilePanel';
 import { ToolboxKickSandbox } from '../components/ToolboxKickPanel';
+import { SmashGrabSandbox } from '../components/SmashGrabPanel';
 import { WantedSandbox } from '../components/WantedPanel';
+import { CountryHolesSandbox } from '../components/CountryHolesPanel';
 import EmployeeSelect from '../components/EmployeeSelect';
 import SokobanBuilder from '../components/SokobanBuilder';
 import NonogramManagerPanel from './NonogramManager';
@@ -375,10 +377,12 @@ const TABS = [
   { id: 'pipes', label: 'Dev · Pipes' },
   { id: 'stackwalk', label: "Dev · O Dell's Amazon Run" },
   { id: 'coachdepot', label: 'Dev · Coach Depot' },
-  { id: 'coachdepot-art', label: 'Dev · Depot art preview' },
+  { id: 'coachdepot-assets', label: 'Dev · Depot asset map' },
   { id: 'coachcapitalist', label: 'Dev · Coach Capitalist' },
   { id: 'casefile', label: 'Dev · Casefile' },
   { id: 'toolboxkick', label: 'Dev · Little Dicks Toolbox' },
+  { id: 'smashgrab', label: 'Dev · Daz Smash & Grab' },
+  { id: 'countryholes', label: 'Dev · Country Holes' },
   { id: 'geoguessr', label: 'GeoGuessr' },
   { id: 'nonograms', label: 'Build Nonogram' },
   { id: 'sokoban', label: 'Build Sokoban' },
@@ -1496,7 +1500,7 @@ export default function FunAdmin() {
   return (
     <div className="min-h-screen bg-cl-bg text-cl-fg">
       <WorkspaceTabs />
-      <div className={`${tab === 'geoguessr' || tab === 'nonograms' || tab === 'casefile' || tab === 'wanted' ? 'max-w-6xl' : tab === 'coachdepot' || tab === 'coachdepot-art' || tab === 'coachcapitalist' || tab === 'toolboxkick' ? 'max-w-7xl' : 'max-w-4xl'} mx-auto px-4 sm:px-8 py-6 space-y-5`}>
+      <div className={`${tab === 'geoguessr' || tab === 'nonograms' || tab === 'casefile' || tab === 'wanted' ? 'max-w-6xl' : tab === 'coachdepot' || tab === 'coachdepot-assets' || tab === 'coachcapitalist' || tab === 'toolboxkick' || tab === 'smashgrab' || tab === 'countryholes' ? 'max-w-7xl' : 'max-w-4xl'} mx-auto px-4 sm:px-8 py-6 space-y-5`}>
         <div>
           <button
             type="button"
@@ -1626,10 +1630,12 @@ export default function FunAdmin() {
         {tab === 'pipes' && <PipesSandbox />}
         {tab === 'stackwalk' && <StackWalkSandbox />}
         {tab === 'coachdepot' && <CoachDepotSandbox />}
-        {tab === 'coachdepot-art' && <CoachDepotArtPreview />}
+        {tab === 'coachdepot-assets' && <CoachDepotAssetMapper />}
         {tab === 'coachcapitalist' && <CoachCapitalistSandbox />}
         {tab === 'casefile' && <CasefileSandbox />}
         {tab === 'toolboxkick' && <ToolboxKickSandbox />}
+        {tab === 'smashgrab' && <SmashGrabSandbox />}
+        {tab === 'countryholes' && <CountryHolesSandbox />}
         {tab === 'geoguessr' && <GeoGuessrSandbox />}
         {tab === 'library' && (
           <ContentLibrary items={items} onRefresh={loadLibrary} onDelete={deleteItem} />
