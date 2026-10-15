@@ -7,6 +7,23 @@ import { useLanguage } from '../context/LanguageContext';
 const BADGE_POLL_MS = 45000;
 const LAST_SEEN_KEY = 'cl_suggestion_latest_id';
 
+function startVisiblePoll(run, intervalMs) {
+  const tick = () => {
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+    run();
+  };
+  tick();
+  const timer = window.setInterval(tick, intervalMs);
+  const onVisibility = () => {
+    if (document.visibilityState === 'visible') run();
+  };
+  document.addEventListener('visibilitychange', onVisibility);
+  return () => {
+    window.clearInterval(timer);
+    document.removeEventListener('visibilitychange', onVisibility);
+  };
+}
+
 async function readJsonResponse(res) {
   const contentType = res.headers.get('content-type') || '';
   if (!contentType.includes('application/json')) return null;
@@ -117,13 +134,14 @@ export default function WorkspaceTabs({ activeProfileTab = null, onProfileTabCha
       }
     };
 
-    refreshBadge();
-    const timer = window.setInterval(refreshBadge, BADGE_POLL_MS);
+    const stopPoll = startVisiblePoll(() => {
+      if (!cancelled) refreshBadge();
+    }, BADGE_POLL_MS);
     const onChanged = () => { refreshBadge(); };
     window.addEventListener('cl-suggestions-changed', onChanged);
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
+      stopPoll();
       window.removeEventListener('cl-suggestions-changed', onChanged);
     };
   }, [canSeeSuggestionBadge, onSuggestionsTab, t]);
@@ -141,7 +159,7 @@ export default function WorkspaceTabs({ activeProfileTab = null, onProfileTabCha
     let cancelled = false;
     const refreshCaseBadge = async () => {
       try {
-        const response = await fetch('/api/getEmployeeCaseActions', { credentials: 'include' });
+        const response = await fetch('/api/getEmployeeCaseActions?badge=1', { credentials: 'include' });
         const payload = (await readJsonResponse(response)) || {};
         if (!cancelled && response.ok) {
           setCaseActionCount(Number(payload.badgeCount) || 0);
@@ -150,11 +168,12 @@ export default function WorkspaceTabs({ activeProfileTab = null, onProfileTabCha
         // ignore
       }
     };
-    refreshCaseBadge();
-    const timer = window.setInterval(refreshCaseBadge, BADGE_POLL_MS);
+    const stopPoll = startVisiblePoll(() => {
+      if (!cancelled) refreshCaseBadge();
+    }, BADGE_POLL_MS);
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
+      stopPoll();
     };
   }, []);
 

@@ -980,6 +980,7 @@ function createPeopleCasesApi({
               relatedDocuments: documents,
               hearingManagerName,
             });
+            if (!refreshedHtml || refreshedHtml === inviteDoc.portalHtml) continue;
             inviteDoc.portalHtml = refreshedHtml;
             // eslint-disable-next-line no-await-in-loop
             await db.collection('disciplinary_documents').doc(inviteDoc.id).update({
@@ -3141,6 +3142,7 @@ function createPeopleCasesApi({
         return;
       }
       const uid = session.profile.uid;
+      const badgeOnly = String(req.query?.badge || '') === '1';
       try {
         const [minutesSnap, casesSnap, promptsSnap, docsSnap] = await Promise.all([
           db.collection('case_minutes').where('employeeUid', '==', uid).get(),
@@ -3187,7 +3189,8 @@ function createPeopleCasesApi({
           if (!include) continue;
 
           if (
-            (item.documentType === 'invite' || item.source === 'hearing_invite')
+            !badgeOnly
+            && (item.documentType === 'invite' || item.source === 'hearing_invite')
             && !portalHtmlHasLetterhead(item.portalHtml)
           ) {
             let hearingManagerName = '';
@@ -3207,15 +3210,17 @@ function createPeopleCasesApi({
               relatedDocuments: relatedForCase,
               hearingManagerName,
             });
-            item.portalHtml = refreshedHtml;
-            // Persist so the employee keeps seeing the letterheaded version.
-            // eslint-disable-next-line no-await-in-loop
-            await db.collection('disciplinary_documents').doc(item.id).update({
-              portalHtml: refreshedHtml,
-              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-            }).catch((err) => {
-              console.error('Failed to refresh hearing invite portalHtml', item.id, err);
-            });
+            if (refreshedHtml && refreshedHtml !== item.portalHtml) {
+              item.portalHtml = refreshedHtml;
+              // Persist so the employee keeps seeing the letterheaded version.
+              // eslint-disable-next-line no-await-in-loop
+              await db.collection('disciplinary_documents').doc(item.id).update({
+                portalHtml: refreshedHtml,
+                updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              }).catch((err) => {
+                console.error('Failed to refresh hearing invite portalHtml', item.id, err);
+              });
+            }
           }
 
           documents.push(item);
@@ -3258,6 +3263,17 @@ function createPeopleCasesApi({
             };
           });
 
+        const badgeCount = pendingMinutes.length
+          + prompts.length
+          + pendingHearingInvites.length
+          + pendingFileNotes.length
+          + pendingWarnings.length;
+
+        if (badgeOnly) {
+          res.status(200).json({ badgeCount });
+          return;
+        }
+
         res.status(200).json({
           pendingMinutes,
           pendingFileNotes,
@@ -3266,11 +3282,7 @@ function createPeopleCasesApi({
           bumpPrompts: prompts,
           documents,
           pendingHearingInvites,
-          badgeCount: pendingMinutes.length
-            + prompts.length
-            + pendingHearingInvites.length
-            + pendingFileNotes.length
-            + pendingWarnings.length,
+          badgeCount,
         });
       } catch (error) {
         console.error('getEmployeeCaseActions failed', error);
