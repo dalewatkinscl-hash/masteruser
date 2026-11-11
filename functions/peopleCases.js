@@ -15,6 +15,7 @@ const PROCESS_FAMILIES = new Set([
   'grievance',
   'vehicle_accident',
   'samsara_coaching',
+  'return_to_work',
   'record',
 ]);
 
@@ -47,6 +48,11 @@ const SAMSARA_STAGES = [
   'closed',
 ];
 
+const RETURN_TO_WORK_STAGES = [
+  'interview',
+  'closed',
+];
+
 /** Neutral personnel record — documents / interviews without disciplinary or grievance process. */
 const RECORD_STAGES = [
   'open',
@@ -61,6 +67,9 @@ function toTrimmedString(value) {
 /** Map legacy stage names onto the current wizard. */
 function normalizeStage(processFamily, stage) {
   const raw = toTrimmedString(stage).toLowerCase() || '';
+  if (processFamily === 'return_to_work') {
+    return RETURN_TO_WORK_STAGES.includes(raw) ? raw : 'interview';
+  }
   if (processFamily === 'grievance') {
     if (raw === 'intake' || raw === 'minutes_signoff') return raw === 'minutes_signoff' ? 'meeting' : 'acknowledged';
     return GRIEVANCE_STAGES.includes(raw) ? raw : 'acknowledged';
@@ -123,6 +132,7 @@ const CASE_TYPES = new Set([
   'grievance',
   'vehicle_accident',
   'samsara_coaching',
+  'return_to_work',
   'record',
   'other',
 ]);
@@ -373,6 +383,29 @@ const STAGE_GUIDES = {
       checklist: ['processed_on_samsara'],
     },
   },
+  return_to_work: {
+    interview: {
+      title: 'Return to Work Interview',
+      howTo: [
+        'Conduct the return to work interview with the employee and two managers present.',
+        'Review the answers provided to the 8 return to work questions.',
+        'The interview document has been issued to the employee portal for digital signature.',
+      ],
+      doNext: 'Awaiting employee digital signature via Employee Portal.',
+      acasTip: 'Return to work interviews help identify any required adjustments, check employee well-being, and ensure a smooth return.',
+      checklist: ['return_to_work_interview_complete'],
+    },
+    closed: {
+      title: 'Signed & Completed',
+      howTo: [
+        'The Return to Work Interview has been digitally signed by both the conducting manager and the employee.',
+        'The signed document is permanently stored on the employee’s personnel record and synced to SharePoint.',
+      ],
+      doNext: 'Record complete. Follow up on any agreed check-in intervals.',
+      acasTip: null,
+      checklist: [],
+    },
+  },
   record: {
     open: {
       title: 'Personnel record',
@@ -405,6 +438,46 @@ function getCasesRole(profile, getEffectivePortalRole) {
   return '';
 }
 
+/** Only these people may mark a personnel record as HR-only, and only they can see those records. */
+const HR_ONLY_RECORD_EMAILS = new Set([
+  'dalewatkins@countrylion.co.uk',
+  'michellecox@countrylion.co.uk',
+  'michelle.cox@countrylion.co.uk',
+]);
+const HR_ONLY_RECORD_NAMES = new Set([
+  'dale watkins',
+  'michelle cox',
+]);
+
+function normalizeHrOnlyPersonKey(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9@._+\-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function canManageHrOnlyRecords(profile) {
+  const email = normalizeHrOnlyPersonKey(profile?.email);
+  const workEmail = normalizeHrOnlyPersonKey(profile?.workEmail || profile?.companyEmail);
+  const name = normalizeHrOnlyPersonKey(profile?.fullName);
+  if (email && HR_ONLY_RECORD_EMAILS.has(email)) return true;
+  if (workEmail && HR_ONLY_RECORD_EMAILS.has(workEmail)) return true;
+  if (name && HR_ONLY_RECORD_NAMES.has(name)) return true;
+  return false;
+}
+
+function isHrOnlyRecord(caseData = {}) {
+  return Boolean(caseData?.hrOnly) && (caseData?.processFamily || '') === 'record';
+}
+
+/** Managers who are not Dale/Michelle must not see HR-only records. */
+function canViewHrOnlyRecord(profile, caseData = {}) {
+  if (!isHrOnlyRecord(caseData)) return true;
+  return canManageHrOnlyRecords(profile);
+}
+
 function canManageCases(profile, getEffectivePortalRole) {
   const role = getCasesRole(profile, getEffectivePortalRole);
   return role === 'manager' || role === 'admin' || role === 'hr';
@@ -419,6 +492,7 @@ function stagesForFamily(processFamily) {
   if (processFamily === 'grievance') return GRIEVANCE_STAGES;
   if (processFamily === 'vehicle_accident') return ACCIDENT_STAGES;
   if (processFamily === 'samsara_coaching') return SAMSARA_STAGES;
+  if (processFamily === 'return_to_work') return RETURN_TO_WORK_STAGES;
   if (processFamily === 'record') return RECORD_STAGES;
   return DISCIPLINARY_STAGES;
 }
@@ -427,6 +501,7 @@ function defaultCaseTypeForFamily(processFamily) {
   if (processFamily === 'grievance') return 'grievance';
   if (processFamily === 'vehicle_accident') return 'vehicle_accident';
   if (processFamily === 'samsara_coaching') return 'samsara_coaching';
+  if (processFamily === 'return_to_work') return 'return_to_work';
   if (processFamily === 'record') return 'record';
   return 'other';
 }
@@ -509,10 +584,20 @@ function sanitizeCaseCreateInput(input = {}) {
     incidentAt,
     vehicleReg,
     vehicleId,
+    secondManagerUid: toTrimmedString(input.secondManagerUid),
+    interviewDate: toTrimmedString(input.interviewDate || eventDate),
+    interviewTime: toTrimmedString(input.interviewTime),
+    returnToWorkAnswers: (input.returnToWorkAnswers && typeof input.returnToWorkAnswers === 'object') ? input.returnToWorkAnswers : {},
+    additionalNotes: toTrimmedString(input.additionalNotes),
     // Explicit only — null means leave default create visibility.
     publishToEmployee: input.publishToEmployee === true
       ? true
       : (input.publishToEmployee === false || input.hideFromEmployee === true)
+        ? false
+        : null,
+    hrOnly: input.hrOnly === true || input.hrOnly === 'true'
+      ? true
+      : input.hrOnly === false || input.hrOnly === 'false'
         ? false
         : null,
   };
@@ -911,6 +996,10 @@ function serializeCase(doc) {
     informalActionTakenAt: serializeTimestamp(data.informalActionTakenAt) || data.informalActionTakenAt || null,
     fileNoteIssuedAt: serializeTimestamp(data.fileNoteIssuedAt) || data.fileNoteIssuedAt || null,
     warningClearedAt: serializeTimestamp(data.warningClearedAt) || data.warningClearedAt || null,
+    hrOnly: Boolean(data.hrOnly) && (data.processFamily || '') === 'record',
+    hrOnlyAt: serializeTimestamp(data.hrOnlyAt) || data.hrOnlyAt || null,
+    hrOnlyByUid: data.hrOnlyByUid || '',
+    hrOnlyByName: data.hrOnlyByName || '',
     stage: normalizeStage(data.processFamily || 'disciplinary', data.stage),
     guide: guideFor(data.processFamily || 'disciplinary', normalizeStage(data.processFamily || 'disciplinary', data.stage)),
   };
@@ -936,6 +1025,9 @@ module.exports = {
   getCasesRole,
   canManageCases,
   canHrOverseeCases,
+  canManageHrOnlyRecords,
+  isHrOnlyRecord,
+  canViewHrOnlyRecord,
   stagesForFamily,
   normalizeStage,
   mapStageForFamilyChange,

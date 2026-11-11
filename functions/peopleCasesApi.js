@@ -12,6 +12,9 @@ const {
   getCasesRole,
   canManageCases,
   canHrOverseeCases,
+  canManageHrOnlyRecords,
+  isHrOnlyRecord,
+  canViewHrOnlyRecord,
   stagesForFamily,
   normalizeStage,
   mapStageForFamilyChange,
@@ -49,6 +52,7 @@ const {
   CASE_DOCUMENT_TEMPLATES,
 } = require('./caseDocumentTemplates');
 const { buildFileNoteForImprovementHtml, formatUkDateTime } = require('./fileNoteForImprovement');
+const { buildReturnToWorkHtml } = require('./returnToWorkInterview');
 const {
   resolveEmployeeSharePointPaths,
   listTemplateLibraryFiles,
@@ -157,7 +161,30 @@ function createPeopleCasesApi({
       });
       return false;
     }
+    if (!canViewHrOnlyRecord(session.profile, caseData)) {
+      res.status(403).json({
+        error: 'This record is marked HR only and is not available to your account.',
+      });
+      return false;
+    }
     return true;
+  }
+
+  function applyHrOnlyFlag(patch, session, { hrOnly }) {
+    const now = admin.firestore.FieldValue.serverTimestamp();
+    if (hrOnly) {
+      patch.hrOnly = true;
+      patch.hrOnlyAt = now;
+      patch.hrOnlyByUid = session.profile.uid;
+      patch.hrOnlyByName = session.profile.fullName || session.profile.email || '';
+      // HR-only records must never surface on the employee portal.
+      applyPublishToEmployee(patch, session, { publish: false });
+    } else {
+      patch.hrOnly = false;
+      patch.hrOnlyAt = null;
+      patch.hrOnlyByUid = '';
+      patch.hrOnlyByName = '';
+    }
   }
 
   async function resolveGrievanceSubjects(uids) {
@@ -367,6 +394,7 @@ function createPeopleCasesApi({
 
   /** Whether the case should appear on the employee's My cases list. */
   function caseIsVisibleToEmployee(caseData = {}) {
+    if (isHrOnlyRecord(caseData)) return false;
     if (caseData.unpublishedFromEmployeeAt) return false;
     if (caseData.publishedToEmployeeAt) return true;
     // Auto / legacy: already shared via invite, notes, file note, or outcome.
@@ -396,6 +424,7 @@ function createPeopleCasesApi({
 
   /** Soft-publish when issuing materials, unless the case was explicitly unpublished. */
   function ensurePublishedToEmployee(patch, existing, session) {
+    if (isHrOnlyRecord({ ...existing, ...patch })) return;
     if (existing.unpublishedFromEmployeeAt && !patch.publishedToEmployeeAt) return;
     if (existing.publishedToEmployeeAt || patch.publishedToEmployeeAt) return;
     applyPublishToEmployee(patch, session, { publish: true });
@@ -637,15 +666,31 @@ function createPeopleCasesApi({
     const sharePointCleanup = await deleteCaseSharePointArtifacts(caseId, caseData, related);
     await clearCaseLinks(caseId, caseData);
 
-    const bumpSnap = await db.collection('bump_cards').where('caseId', '==', caseId).get();
+    const vehiclesAccidentId = toTrimmedString(caseData.vehiclesAccidentId);
+    const [bumpSnap, promptSnap, promptVehSnap] = await Promise.all([
+      db.collection('bump_cards').where('caseId', '==', caseId).get(),
+      db.collection('bump_card_prompts').where('caseId', '==', caseId).get(),
+      vehiclesAccidentId
+        ? db.collection('bump_card_prompts').where('vehiclesAccidentId', '==', vehiclesAccidentId).get()
+        : Promise.resolve({ docs: [] }),
+    ]);
+
+    const seenRefPaths = new Set();
     const refs = [
       ...related.eventRefs,
       ...related.documentRefs,
       ...related.minuteRefs,
       ...related.reviewRefs,
       ...bumpSnap.docs.map((doc) => doc.ref),
+      ...promptSnap.docs.map((doc) => doc.ref),
+      ...promptVehSnap.docs.map((doc) => doc.ref),
       db.collection('disciplinary_cases').doc(caseId),
-    ];
+    ].filter((ref) => {
+      if (!ref || !ref.path || seenRefPaths.has(ref.path)) return false;
+      seenRefPaths.add(ref.path);
+      return true;
+    });
+
     for (let index = 0; index < refs.length; index += 400) {
       const batch = db.batch();
       refs.slice(index, index + 400).forEach((ref) => batch.delete(ref));
@@ -712,6 +757,7 @@ function createPeopleCasesApi({
         if (viewerUid) {
           cases = cases.filter((item) => !grievanceSubjectUidsOf(item).includes(viewerUid));
         }
+        cases = cases.filter((item) => canViewHrOnlyRecord(session.profile, item));
         if (processFamily) {
           cases = cases.filter((item) => (item.processFamily || 'disciplinary') === processFamily);
         }
@@ -1136,6 +1182,24 @@ function createPeopleCasesApi({
           input.issue = `Vehicle accident — ${input.vehicleReg}`;
         }
       }
+      if (input.processFamily === 'return_to_work') {
+        if (!input.secondManagerUid) {
+          res.status(400).json({ error: 'A second manager present is required for return to work interviews.' });
+          return;
+        }
+        const ownerManagerUid = input.ownerManagerUid || session.profile.uid;
+        if (input.secondManagerUid === ownerManagerUid) {
+          res.status(400).json({ error: 'Please select two different managers (lead manager and second manager).' });
+          return;
+        }
+        if (input.secondManagerUid === input.employeeUid) {
+          res.status(400).json({ error: 'The second manager cannot be the employee returning to work.' });
+          return;
+        }
+        if (!input.issue) {
+          input.issue = 'Return to work interview';
+        }
+      }
       if (!input.issue) {
         res.status(400).json({
           error: input.processFamily === 'samsara_coaching'
@@ -1188,20 +1252,47 @@ function createPeopleCasesApi({
 
         const ownerManagerUid = input.ownerManagerUid || session.profile.uid;
         const ownerProfile = await getUserProfile(ownerManagerUid);
+        const isReturnToWork = input.processFamily === 'return_to_work';
+        let secondManagerProfile = null;
+        if (isReturnToWork && input.secondManagerUid) {
+          secondManagerProfile = await getUserProfile(input.secondManagerUid);
+          if (!secondManagerProfile) {
+            res.status(400).json({ error: 'Second manager profile not found.' });
+            return;
+          }
+        }
+        const secondManagerName = secondManagerProfile?.fullName || secondManagerProfile?.email || '';
+
         const now = admin.firestore.FieldValue.serverTimestamp();
+        const nowDate = new Date();
         const slaDueAt = addWorkingDays(new Date(), 5);
         const employeeName = employee.fullName || employee.email || 'Employee';
         const isSamsara = input.processFamily === 'samsara_coaching';
         const isAccident = input.processFamily === 'vehicle_accident';
         const isRecord = input.processFamily === 'record';
-        const hideFromEmployee = isRecord && input.publishToEmployee === false;
+        const markHrOnly = isRecord && input.hrOnly === true;
+        if (markHrOnly && !canManageHrOnlyRecords(session.profile)) {
+          res.status(403).json({ error: 'Only authorised HR users can mark a record as HR only.' });
+          return;
+        }
+        if (input.hrOnly === true && !isRecord) {
+          res.status(400).json({ error: 'HR only can only be set on personnel records.' });
+          return;
+        }
+        const hideFromEmployee = isRecord && (markHrOnly || input.publishToEmployee === false);
         const issue = input.issue;
+        const interviewDate = input.interviewDate || input.eventDate || nowDate.toISOString().slice(0, 10);
+        const formattedDate = interviewDate.includes('-')
+          ? interviewDate.split('-').reverse().join('/')
+          : interviewDate;
         const title = input.title
           || (isSamsara
             ? `${employeeName} - ${issue} Samsara Coaching`
             : isAccident
               ? `${employeeName} — Vehicle accident — ${input.vehicleReg}`
-              : `${employeeName} - ${issue}`);
+              : isReturnToWork
+                ? `${employeeName} — Return to Work Interview — ${formattedDate}`
+                : `${employeeName} - ${issue}`);
         const closeNotes = isSamsara
           ? 'Processed on the Samsara system. No portal interview required.'
           : '';
@@ -1231,8 +1322,8 @@ function createPeopleCasesApi({
           issue,
           title,
           summary: input.summary || (isSamsara ? closeNotes : ''),
-          status: isSamsara ? 'closed' : 'open',
-          stage: isSamsara ? 'closed' : (isAccident ? accidentStage : input.stage),
+          status: isSamsara ? 'closed' : (isReturnToWork ? 'pending_employee' : 'open'),
+          stage: isSamsara ? 'closed' : (isAccident ? accidentStage : (isReturnToWork ? 'interview' : input.stage)),
           origin: input.sourceIncidentId ? 'attendance_auto' : (isSamsara ? 'samsara' : 'manual'),
           sourceIncidentId: input.sourceIncidentId || '',
           dueAt: input.dueAt || '',
@@ -1248,6 +1339,21 @@ function createPeopleCasesApi({
           grievanceSubjectUids: grievanceSubjects.grievanceSubjectUids,
           grievanceSubjectNamesSnapshot: grievanceSubjects.grievanceSubjectNamesSnapshot,
           eventDate: input.eventDate || '',
+          secondManagerUid: isReturnToWork ? (input.secondManagerUid || '') : '',
+          secondManagerNameSnapshot: isReturnToWork ? secondManagerName : '',
+          interviewDate: isReturnToWork ? interviewDate : '',
+          interviewTime: isReturnToWork ? (input.interviewTime || '') : '',
+          returnToWorkAnswers: isReturnToWork ? (input.returnToWorkAnswers || {}) : {},
+          additionalNotes: isReturnToWork ? (input.additionalNotes || '') : '',
+          managersPresent: isReturnToWork
+            ? [
+                { uid: ownerManagerUid, name: ownerProfile?.fullName || session.profile.fullName || '' },
+                { uid: input.secondManagerUid, name: secondManagerName },
+              ]
+            : [],
+          managersPresentUids: isReturnToWork ? [ownerManagerUid, input.secondManagerUid] : [],
+          returnToWorkManagerSignedAt: isReturnToWork ? nowDate.toISOString() : null,
+          returnToWorkEmployeeSignStatus: isReturnToWork ? 'pending' : '',
           incidentAt: isAccident ? input.incidentAt : '',
           vehicleReg: isAccident ? input.vehicleReg : '',
           vehicleId: isAccident ? input.vehicleId : '',
@@ -1283,10 +1389,14 @@ function createPeopleCasesApi({
           suspensionTo: '',
           suspensionReason: '',
           dismissalPossible: false,
-          publishedToEmployeeAt: null,
-          publishedToEmployeeByUid: '',
+          publishedToEmployeeAt: isReturnToWork ? now : null,
+          publishedToEmployeeByUid: isReturnToWork ? session.profile.uid : '',
           unpublishedFromEmployeeAt: hideFromEmployee ? now : null,
           unpublishedFromEmployeeByUid: hideFromEmployee ? session.profile.uid : '',
+          hrOnly: markHrOnly,
+          hrOnlyAt: markHrOnly ? now : null,
+          hrOnlyByUid: markHrOnly ? session.profile.uid : '',
+          hrOnlyByName: markHrOnly ? (session.profile.fullName || session.profile.email || '') : '',
           outcomePreset: isSamsara ? 'samsara_coaching' : '',
           outcomePackSteps: [],
           warningEffectiveAt: '',
@@ -1316,6 +1426,130 @@ function createPeopleCasesApi({
             offPortalRaiseDate: input.offPortalRaiseDate,
             incidentAt: isAccident ? input.incidentAt : '',
           });
+        }
+
+        if (isReturnToWork) {
+          const managerSignature = {
+            signedByUid: session.profile.uid,
+            signedByName: session.profile.fullName || session.profile.email || ownerProfile?.fullName || 'Manager',
+            signedAt: nowDate.toISOString(),
+            signedAtLabel: formatUkDateTime(nowDate),
+            method: 'portal_issue',
+          };
+          const initialHtml = buildReturnToWorkHtml({
+            employeeName,
+            department: employee.employeeProfile?.department || '',
+            managerName: managerSignature.signedByName,
+            secondManagerName,
+            interviewDate,
+            interviewTime: input.interviewTime || '',
+            answers: input.returnToWorkAnswers || {},
+            additionalNotes: input.additionalNotes || '',
+            issuedAtLabel: nowDate.toLocaleDateString('en-GB'),
+            managerSignature,
+            employeeSignature: null,
+          });
+
+          const docFileName = `Return to Work Interview - ${employeeName} - ${formattedDate.replace(/\//g, '-')}.html`;
+
+          let sharePointWebUrl = '';
+          let sharePointItemId = '';
+          let sharePointFolderPath = '';
+          let storageProvider = 'portal';
+
+          if (typeof uploadDisciplinaryDocument === 'function' && isSharePointConfigured(getSharePointConfig())) {
+            try {
+              const uploadResult = await uploadDisciplinaryDocument(getSharePointConfig(), {
+                fullName: employeeName,
+                isActive: employee.isActive !== false,
+                sharePointFolderName: employee.sharePointFolderName || '',
+                employeeRoot: employee.sharePointEmployeeRoot || '',
+                caseFolderName: await stampSharePointCaseFolderName(caseDoc, {
+                  title,
+                  openedAt: nowDate,
+                }),
+                fileName: docFileName,
+                fileBuffer: Buffer.from(initialHtml, 'utf8'),
+                mimeType: 'text/html',
+              });
+              sharePointWebUrl = uploadResult.sharePointWebUrl || '';
+              sharePointItemId = uploadResult.sharePointItemId || '';
+              sharePointFolderPath = uploadResult.folderPath || '';
+              storageProvider = 'sharepoint';
+            } catch (spError) {
+              console.error('Return to work document SharePoint upload failed; keeping portal copy', spError);
+            }
+          }
+
+          const docRef = await db.collection('disciplinary_documents').add({
+            caseId: caseDoc.id,
+            employeeUid: input.employeeUid,
+            documentType: 'return_to_work',
+            title: 'Return to Work Interview',
+            fileName: docFileName,
+            portalHtml: initialHtml,
+            mimeType: 'text/html',
+            employeeSignStatus: 'pending',
+            requiresEmployeeSignature: true,
+            managerSignature,
+            employeeSignature: null,
+            secondManagerUid: input.secondManagerUid,
+            secondManagerName,
+            interviewDate,
+            interviewTime: input.interviewTime || '',
+            returnToWorkAnswers: input.returnToWorkAnswers || {},
+            additionalNotes: input.additionalNotes || '',
+            sharePointWebUrl,
+            sharePointItemId,
+            sharePointFolderPath,
+            storageProvider,
+            issuedToEmployeeAt: now,
+            createdAt: now,
+            updatedAt: now,
+          });
+
+          await db.collection('case_minutes').add({
+            caseId: caseDoc.id,
+            employeeUid: input.employeeUid,
+            caseEmployeeUid: input.employeeUid,
+            intervieweeNameSnapshot: employeeName,
+            meetingType: 'return_to_work',
+            stageKey: 'interview',
+            interviewAt: interviewDate,
+            interviewTime: input.interviewTime || '',
+            recordType: 'interview',
+            content: `Return to work interview conducted by ${managerSignature.signedByName} and ${secondManagerName}.`,
+            documentId: docRef.id,
+            fileName: docFileName,
+            sharePointWebUrl,
+            managersPresent: [
+              { uid: ownerManagerUid, name: managerSignature.signedByName },
+              { uid: input.secondManagerUid, name: secondManagerName },
+            ],
+            managersPresentUids: [ownerManagerUid, input.secondManagerUid],
+            status: 'issued',
+            amendmentRequests: [],
+            signedOffAt: null,
+            signedOffByUid: '',
+            disputed: false,
+            issuedAt: now,
+            createdByUid: session.profile.uid,
+            createdAt: now,
+            updatedAt: now,
+          });
+
+          await caseDoc.update({
+            returnToWorkDocumentId: docRef.id,
+            returnToWorkManagerSignedAt: managerSignature.signedAt,
+          });
+
+          await appendEvent(caseDoc.id, 'return_to_work_issued', {
+            documentId: docRef.id,
+            interviewDate,
+            secondManagerUid: input.secondManagerUid,
+            secondManagerName,
+            managerSignature,
+          }, session.profile);
         }
 
         let vehiclesAccidentId = '';
@@ -1394,6 +1628,12 @@ function createPeopleCasesApi({
         if (hideFromEmployee) {
           await appendEvent(caseDoc.id, 'unpublished_from_employee', {
             atCreate: true,
+            hrOnly: markHrOnly,
+          }, session.profile);
+        }
+        if (markHrOnly) {
+          await appendEvent(caseDoc.id, 'marked_hr_only', {
+            atCreate: true,
           }, session.profile);
         }
 
@@ -1404,9 +1644,13 @@ function createPeopleCasesApi({
             ? 'Samsara coaching logged and closed.'
             : isAccident
               ? 'Accident recorded. Driver has been prompted to complete the bump card.'
-              : hideFromEmployee
-                ? 'Record created and hidden from the employee.'
-                : 'Case created.',
+              : isReturnToWork
+                ? 'Return to work interview recorded and sent to employee for signature.'
+              : markHrOnly
+                ? 'Record created as HR only (Dale Watkins and Michelle Cox).'
+                : hideFromEmployee
+                  ? 'Record created and hidden from the employee.'
+                  : 'Case created.',
         });
       } catch (error) {
         console.error('createPeopleCase failed', error);
@@ -1487,9 +1731,32 @@ function createPeopleCasesApi({
         }
 
         if (body.publishToEmployee === true || body.publishToEmployee === false) {
+          if (body.publishToEmployee === true && isHrOnlyRecord({ ...existing, ...patch })) {
+            res.status(400).json({ error: 'HR-only records cannot be published to the employee.' });
+            return;
+          }
           applyPublishToEmployee(patch, session, { publish: body.publishToEmployee === true });
           events.push([
             body.publishToEmployee === true ? 'published_to_employee' : 'unpublished_from_employee',
+            {
+              byUid: session.profile.uid,
+              byName: session.profile.fullName || session.profile.email || '',
+            },
+          ]);
+        }
+
+        if (body.hrOnly === true || body.hrOnly === false) {
+          if ((existing.processFamily || '') !== 'record' && (patch.processFamily || existing.processFamily || '') !== 'record') {
+            res.status(400).json({ error: 'HR only can only be set on personnel records.' });
+            return;
+          }
+          if (!canManageHrOnlyRecords(session.profile)) {
+            res.status(403).json({ error: 'Only authorised HR users can change HR-only visibility.' });
+            return;
+          }
+          applyHrOnlyFlag(patch, session, { hrOnly: body.hrOnly === true });
+          events.push([
+            body.hrOnly === true ? 'marked_hr_only' : 'cleared_hr_only',
             {
               byUid: session.profile.uid,
               byName: session.profile.fullName || session.profile.email || '',
@@ -2850,7 +3117,11 @@ function createPeopleCasesApi({
         if (caseData.status !== 'closed' && normalizeStage(caseData.processFamily || 'disciplinary', caseData.stage) !== 'closed') {
           casePatch.status = 'open';
         }
-        if (!caseData.unpublishedFromEmployeeAt && !caseData.publishedToEmployeeAt) {
+        if (
+          !isHrOnlyRecord(caseData)
+          && !caseData.unpublishedFromEmployeeAt
+          && !caseData.publishedToEmployeeAt
+        ) {
           casePatch.publishedToEmployeeAt = now;
           casePatch.publishedToEmployeeByUid = session.profile.uid;
           casePatch.unpublishedFromEmployeeAt = null;
@@ -3161,7 +3432,24 @@ function createPeopleCasesApi({
           .map((doc) => ({ id: doc.id, ...doc.data(), createdAt: serializeTimestamp(doc.data().createdAt) }))
           .filter((item) => item.status === 'issued' && visibleCaseIds.has(item.caseId));
 
-        const prompts = promptsSnap.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+        const prompts = [];
+        for (const promptDoc of promptsSnap.docs) {
+          const promptData = promptDoc.data() || {};
+          const promptCaseId = toTrimmedString(promptData.caseId);
+          if (promptCaseId) {
+            let caseDoc = casesById[promptCaseId];
+            if (!caseDoc) {
+              // eslint-disable-next-line no-await-in-loop
+              const directCaseSnap = await db.collection('disciplinary_cases').doc(promptCaseId).get();
+              if (!directCaseSnap.exists) {
+                // eslint-disable-next-line no-await-in-loop
+                await promptDoc.ref.delete().catch(() => {});
+                continue;
+              }
+            }
+          }
+          prompts.push({ id: promptDoc.id, ...promptData });
+        }
         const allEmployeeDocs = docsSnap.docs.map((doc) => ({
           id: doc.id,
           ...doc.data(),
@@ -3179,6 +3467,7 @@ function createPeopleCasesApi({
           const caseHasHearingInvite = Boolean(caseData.hearingInviteIssuedAt);
           const include = (
             (item.documentType === 'file_note_for_improvement' && item.issuedToEmployeeAt)
+            || (item.documentType === 'return_to_work' && item.issuedToEmployeeAt)
             || (['invite', 'letter', 'warning', 'outcome', 'suspension_letter', 'training_outline', 'pip_plan'].includes(item.documentType)
               && Boolean(item.issuedToEmployeeAt || item.documentType === 'invite'))
             || (Boolean(item.issuedToEmployeeAt) && ['minutes', 'evidence', 'other'].includes(item.documentType))
@@ -3225,6 +3514,10 @@ function createPeopleCasesApi({
           (item) => item.documentType === 'file_note_for_improvement'
             && item.employeeSignStatus === 'pending',
         );
+        const pendingReturnToWork = documents.filter(
+          (item) => item.documentType === 'return_to_work'
+            && item.employeeSignStatus === 'pending',
+        );
         const pendingWarnings = documents.filter(
           (item) => item.employeeSignStatus === 'pending'
             && (
@@ -3261,6 +3554,7 @@ function createPeopleCasesApi({
         res.status(200).json({
           pendingMinutes,
           pendingFileNotes,
+          pendingReturnToWork,
           pendingWarnings,
           cases,
           bumpPrompts: prompts,
@@ -3270,6 +3564,7 @@ function createPeopleCasesApi({
             + prompts.length
             + pendingHearingInvites.length
             + pendingFileNotes.length
+            + pendingReturnToWork.length
             + pendingWarnings.length,
         });
       } catch (error) {
@@ -3404,7 +3699,8 @@ function createPeopleCasesApi({
         const isOutcomeWarning = docData.documentType === 'outcome'
           && (docData.requiresEmployeeSignature || docData.employeeSignStatus === 'pending' || docData.employeeSignStatus === 'signed');
         const isWarningSignable = isLegacyWarning || isOutcomeWarning;
-        if (!isFileNote && !isWarningSignable) {
+        const isReturnToWork = docData.documentType === 'return_to_work';
+        if (!isFileNote && !isWarningSignable && !isReturnToWork) {
           res.status(400).json({ error: 'This document cannot be digitally signed here.' });
           return;
         }
@@ -3438,7 +3734,24 @@ function createPeopleCasesApi({
 
         let finalHtml = '';
         let signedFileName = docData.fileName || '';
-        if (isFileNote) {
+        if (isReturnToWork) {
+          finalHtml = buildReturnToWorkHtml({
+            employeeName: employeeName || employeeSignature.signedByName,
+            department: caseData.departmentSnapshot || '',
+            managerName: managerSignature?.signedByName || caseData.managerNameSnapshot || 'Manager',
+            secondManagerName: docData.secondManagerName || caseData.secondManagerNameSnapshot || '',
+            interviewDate: docData.interviewDate || caseData.interviewDate || '',
+            interviewTime: docData.interviewTime || caseData.interviewTime || '',
+            answers: docData.returnToWorkAnswers || caseData.returnToWorkAnswers || {},
+            additionalNotes: docData.additionalNotes || caseData.additionalNotes || '',
+            issuedAtLabel: caseData.openedAt?.toDate
+              ? caseData.openedAt.toDate().toLocaleDateString('en-GB')
+              : new Date().toLocaleDateString('en-GB'),
+            managerSignature,
+            employeeSignature,
+          });
+          signedFileName = `Return to Work Interview - ${employeeName || 'Employee'} - signed ${signedAt.toISOString().slice(0, 10)}.html`;
+        } else if (isFileNote) {
           finalHtml = buildFileNoteForImprovementHtml({
             employeeName: employeeName || employeeSignature.signedByName,
             managerName: managerSignature?.signedByName || '',
@@ -3562,7 +3875,17 @@ function createPeopleCasesApi({
             status: 'closed',
             updatedAt: now,
           };
-          if (isFileNote) {
+          if (isReturnToWork) {
+            casePatch.stage = 'closed';
+            casePatch.status = 'closed';
+            casePatch.closedAt = now;
+            casePatch.closedByUid = session.profile.uid;
+            casePatch.closedByName = employeeSignature.signedByName;
+            casePatch.returnToWorkEmployeeSignStatus = 'signed';
+            casePatch.returnToWorkEmployeeSignedAt = employeeSignature.signedAt;
+            casePatch.returnToWorkSignedDocumentId = documentId;
+            casePatch.returnToWorkSignedAt = now;
+          } else if (isFileNote) {
             casePatch.fileNoteEmployeeSignStatus = 'signed';
             casePatch.fileNoteEmployeeSignedAt = employeeSignature.signedAt;
             casePatch.fileNoteSignedDocumentId = documentId;
@@ -3574,7 +3897,7 @@ function createPeopleCasesApi({
             casePatch.warningSignedAt = now;
           }
           await caseSnap.ref.update(casePatch);
-          await appendEvent(docData.caseId, isFileNote ? 'file_note_employee_signed' : 'warning_employee_signed', {
+          await appendEvent(docData.caseId, isReturnToWork ? 'return_to_work_employee_signed' : (isFileNote ? 'file_note_employee_signed' : 'warning_employee_signed'), {
             documentId,
             signedAt: employeeSignature.signedAt,
             signedByUid: session.profile.uid,
@@ -3583,7 +3906,7 @@ function createPeopleCasesApi({
         }
 
         res.status(200).json({
-          message: isFileNote ? 'File note digitally signed.' : 'Outcome letter digitally signed.',
+          message: isReturnToWork ? 'Return to work interview digitally signed.' : (isFileNote ? 'File note digitally signed.' : 'Outcome letter digitally signed.'),
           documentId,
           portalHtml: finalHtml,
           employeeSignature,
@@ -3643,14 +3966,30 @@ function createPeopleCasesApi({
             }
           }
         }
+        if (prompt && prompt.caseId && !caseData) {
+          await db.collection('bump_card_prompts').doc(prompt.id).delete().catch(() => {});
+          prompt = null;
+        }
         if (!prompt && !caseData && !promptId && !caseId) {
           const openPrompt = await db.collection('bump_card_prompts')
             .where('employeeUid', '==', session.profile.uid)
             .where('status', '==', 'open')
-            .limit(1)
+            .limit(5)
             .get();
-          if (!openPrompt.empty) {
-            prompt = { id: openPrompt.docs[0].id, ...openPrompt.docs[0].data() };
+          for (const doc of openPrompt.docs) {
+            const data = doc.data() || {};
+            const pCaseId = toTrimmedString(data.caseId);
+            if (pCaseId) {
+              // eslint-disable-next-line no-await-in-loop
+              const cSnap = await db.collection('disciplinary_cases').doc(pCaseId).get();
+              if (!cSnap.exists) {
+                // eslint-disable-next-line no-await-in-loop
+                await doc.ref.delete().catch(() => {});
+                continue;
+              }
+            }
+            prompt = { id: doc.id, ...data };
+            break;
           }
         }
         res.status(200).json({
@@ -5535,6 +5874,7 @@ function createPeopleCasesApi({
 
         const items = snap.docs
           .map((doc) => serializeCase(doc))
+          .filter((item) => canViewHrOnlyRecord(session.profile, item))
           .filter((item) => {
             const isSamsara = (item.processFamily || '') === 'samsara_coaching'
               || item.outcomePreset === 'samsara_coaching';

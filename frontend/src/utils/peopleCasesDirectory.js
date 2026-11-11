@@ -119,7 +119,11 @@ export function caseDateSortKey(item) {
 }
 
 export function familyLabel(item) {
-  return String(item?.processFamily || 'disciplinary').replace(/_/g, ' ');
+  const family = String(item?.processFamily || 'disciplinary');
+  if (family === 'return_to_work') return 'Return to Work';
+  if (family === 'samsara_coaching') return 'Samsara Coaching';
+  if (family === 'vehicle_accident') return 'Vehicle accident';
+  return family.replace(/_/g, ' ');
 }
 
 function sanitizeVisibleColumnIds(columnIds) {

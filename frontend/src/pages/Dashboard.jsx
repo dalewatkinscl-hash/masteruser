@@ -146,6 +146,7 @@ export default function Dashboard() {
   const isProfileActive = location.pathname.includes('/profile');
   const isHrPortalActive = location.pathname.includes('/dashboard/hr');
   const isReportsActive = location.pathname.includes('/dashboard/reports');
+  const isCoachManagerActive = location.pathname.includes('/dashboard/coach-manager');
   const showHrPortal = canAccessHrPortal(user);
   const showReports = canAccessFinanceReports(user);
   const mentoringRole = user?.portalsAccess?.mentoring_app || user?.portalsAccess?.mentor;
@@ -247,10 +248,16 @@ export default function Dashboard() {
         )}
 
         {showReports && (
-          <button type="button" onClick={() => go('/dashboard/reports')} className={navClass(isReportsActive)}>
-            <ChartIcon className="w-5 h-5 flex-shrink-0" />
-            {showLabels && <span>{t('nav.reports')}</span>}
-          </button>
+          <>
+            <button type="button" onClick={() => go('/dashboard/reports')} className={navClass(isReportsActive)}>
+              <ChartIcon className="w-5 h-5 flex-shrink-0" />
+              {showLabels && <span>{t('nav.reports')}</span>}
+            </button>
+            <button type="button" onClick={() => go('/dashboard/coach-manager')} className={navClass(isCoachManagerActive)}>
+              <ChartIcon className="w-5 h-5 flex-shrink-0" />
+              {showLabels && <span>Coach Manager Replica</span>}
+            </button>
+          </>
         )}
 
         {portalLinks.map((portal) => (

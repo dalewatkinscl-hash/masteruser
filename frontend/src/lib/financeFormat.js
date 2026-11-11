@@ -30,10 +30,21 @@ export function formatInt(value) {
 }
 
 export function formatUkDate(iso) {
-  if (!iso) return '';
-  const [y, m, d] = iso.split('-');
-  if (!y || !m || !d) return iso;
-  return `${d}/${m}/${y}`;
+  if (iso == null || iso === '') return '';
+  const s = String(iso).trim();
+  if (!s) return '';
+  if (/^\d{8}$/.test(s)) {
+    const y = s.slice(0, 4);
+    const m = s.slice(4, 6);
+    const d = s.slice(6, 8);
+    return `${d}/${m}/${y}`;
+  }
+  if (s.includes('-')) {
+    const [y, m, d] = s.split('-');
+    if (!y || !m || !d) return s;
+    return `${d.slice(0, 2)}/${m}/${y}`;
+  }
+  return s;
 }
 
 export const FILTER_PERIODS = [

@@ -575,6 +575,41 @@
         "region": "europe-west2"
       },
       {
+        "source": "/api/listMultiplayerGames",
+        "function": "listMultiplayerGames",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/listMultiplayerLobbies",
+        "function": "listMultiplayerLobbies",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/createMultiplayerMatch",
+        "function": "createMultiplayerMatch",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/joinMultiplayerMatch",
+        "function": "joinMultiplayerMatch",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/leaveMultiplayerMatch",
+        "function": "leaveMultiplayerMatch",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getMultiplayerMatch",
+        "function": "getMultiplayerMatch",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/multiplayerMove",
+        "function": "multiplayerMove",
+        "region": "europe-west2"
+      },
+      {
         "source": "/api/getCoachDepot",
         "function": "getCoachDepot",
         "region": "europe-west2"
@@ -727,6 +762,26 @@
       {
         "source": "/api/coachCapitalistHeartbeat",
         "function": "coachCapitalistHeartbeat",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/buyCoachCapitalistPlayBoost",
+        "function": "buyCoachCapitalistPlayBoost",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/contributeCoachCapitalistSyndicate",
+        "function": "contributeCoachCapitalistSyndicate",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/claimCoachCapitalistSyndicateReward",
+        "function": "claimCoachCapitalistSyndicateReward",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/adminAdvanceCoachCapitalistSyndicate",
+        "function": "adminAdvanceCoachCapitalistSyndicate",
         "region": "europe-west2"
       },
       {
@@ -890,8 +945,63 @@
         "region": "europe-west2"
       },
       {
+        "source": "/api/distributeRollCallList",
+        "function": "distributeRollCallList",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/setRollCallMemberStatus",
+        "function": "setRollCallMemberStatus",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getMyPendingRollCalls",
+        "function": "getMyPendingRollCalls",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/markRollCallSeen",
+        "function": "markRollCallSeen",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/respondRollCall",
+        "function": "respondRollCall",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getMyManagedStaff",
+        "function": "getMyManagedStaff",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/setManagerCover",
+        "function": "setManagerCover",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/cancelManagerCover",
+        "function": "cancelManagerCover",
+        "region": "europe-west2"
+      },
+      {
         "source": "/api/getFinanceReports",
         "function": "getFinanceReports",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getDragRacePaddock",
+        "function": "getDragRacePaddock",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/saveDragRaceRun",
+        "function": "saveDragRaceRun",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/createDragRaceChallenge",
+        "function": "createDragRaceChallenge",
         "region": "europe-west2"
       },
       {

@@ -126,8 +126,36 @@ function sanitizeEmployeeProfile(input = {}, { partial = false } = {}) {
   assignBool('emergencyPhoneCover');
   assignBool('canIssueKudos');
   assignBool('doesNotPayBonus');
+  assignBool('isManager');
+  assignBool('isManagement');
+
+  if (profile.isManager !== undefined || profile.isManagement !== undefined) {
+    const isMgr = Boolean(profile.isManager || profile.isManagement);
+    profile.isManager = isMgr;
+    profile.isManagement = isMgr;
+  }
+
   assignString('department');
+  assignString('lineManagerId');
+  assignString('lineManagerName');
+  assignString('managerUid');
   assignString('managerName');
+  assignString('manager');
+
+  // Keep lineManagerId and managerUid in sync
+  const managerId = profile.lineManagerId || profile.managerUid || '';
+  if (managerId) {
+    profile.lineManagerId = managerId;
+    profile.managerUid = managerId;
+  }
+
+  // Keep lineManagerName, managerName, and manager in sync for complete interoperability
+  const resolvedManagerName = profile.lineManagerName || profile.managerName || profile.manager || '';
+  if (resolvedManagerName) {
+    profile.lineManagerName = resolvedManagerName;
+    profile.managerName = resolvedManagerName;
+    profile.manager = resolvedManagerName;
+  }
   assignString('contractType');
   assignString('jobRole');
   assignString('phoneNumber');
@@ -197,8 +225,14 @@ function createEmptyEmployeeProfile() {
     emergencyPhoneCover: false,
     canIssueKudos: false,
     doesNotPayBonus: false,
+    isManager: false,
+    isManagement: false,
     department: '',
+    lineManagerId: '',
+    lineManagerName: '',
+    managerUid: '',
     managerName: '',
+    manager: '',
     contractType: '',
     bonusHoursMode: '',
     proRataBase: '',

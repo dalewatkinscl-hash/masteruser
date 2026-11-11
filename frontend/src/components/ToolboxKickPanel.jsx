@@ -1,4 +1,4 @@
-﻿import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import FunDayPicker, { getLondonDayKey } from './FunDayPicker';
 import FunLeaderboardRow from './FunLeaderboardRow';
 import { TOOLBOX_KICK_LIVE_FROM } from '../lib/funRotation';
@@ -11,7 +11,51 @@ import {
   windProfileForAttempt,
 } from '../utils/toolboxKickV2';
 import { createToolboxKickGfx, TOOLBOX_KICK_GFX_ENABLED } from '../utils/toolboxKickGfx';
+import {
+  playHalloweenSfx,
+  drawHalloweenWorldBackground,
+  drawHalloweenStormWeather,
+  drawHalloweenToolbox,
+  drawHalloweenCoach,
+  drawHalloweenSack,
+  drawHalloweenCone,
+  drawHalloweenDrum,
+  drawHalloweenOilSpill,
+  drawHalloweenBird,
+  drawHalloweenBalloon,
+  drawHalloweenMacan,
+  drawHalloweenFlightCoin,
+  drawHalloweenMechanicOverlay,
+  drawHalloweenSmokerOverlay,
+  drawHalloweenChelleOverlay,
+  drawHalloweenDickOverlay,
+} from '../utils/toolboxKickHalloween';
+import {
+  playChristmasSfx,
+  drawChristmasWorldBackground,
+  drawChristmasStormWeather,
+  drawChristmasToolbox,
+  drawChristmasCoach,
+  drawChristmasSack,
+  drawChristmasCone,
+  drawChristmasDrum,
+  drawChristmasOilSpill,
+  drawChristmasBird,
+  drawChristmasBalloon,
+  drawChristmasMacan,
+  drawChristmasFlightCoin,
+  drawChristmasMechanicOverlay,
+  drawChristmasSmokerOverlay,
+  drawChristmasChelleOverlay,
+  drawChristmasDickOverlay,
+} from '../utils/toolboxKickChristmas';
 import { GameUiBadge, GameUiButton, GameUiPanel } from './gameUi';
+
+/**
+ * Seasonal theme activation dates on normal daily Fun (London day keys).
+ */
+export const TOOLBOX_HALLOWEEN_LIVE_FROM = '2026-10-20';
+export const TOOLBOX_CHRISTMAS_LIVE_FROM = '2026-11-11';
 
 const GUI_FONT = '"Kenney Future Narrow", "Kenney Future", Kenney Future Narrow, Kenney Future, system-ui, Segoe UI, sans-serif';
 const GUI_FONT_DISPLAY = '"Kenney Future", "Kenney Future Narrow", Kenney Future Narrow, Kenney Future, system-ui, Segoe UI, sans-serif';
@@ -385,6 +429,36 @@ const HIT_TALLY_LABELS = {
   flightCoin: 'Coin',
 };
 
+const HIT_TALLY_LABELS_HALLOWEEN = {
+  coach: 'Ghost Coach',
+  sack: 'Pumpkin',
+  cone: 'Witch Hat',
+  drum: 'Cauldron',
+  bird: 'Vampire Bat',
+  balloon: 'Dirigible',
+  smoker: 'Grave Break',
+  macan: 'Bat-Macan',
+  chelle: 'Witch Chelle',
+  littleDick: 'Count Dickula',
+  oilSpill: 'Slime',
+  flightCoin: 'Candy',
+};
+
+const HIT_TALLY_LABELS_CHRISTMAS = {
+  coach: 'Holiday Coach',
+  sack: 'Toy Sack',
+  cone: 'Xmas Tree',
+  drum: 'Nog Barrel',
+  bird: 'Reindeer',
+  balloon: 'Bauble',
+  smoker: 'Festive Break',
+  macan: 'Sleigh-Macan',
+  chelle: 'Elf Chelle',
+  littleDick: 'Santa Dick',
+  oilSpill: 'Black Ice',
+  flightCoin: 'Gold Star',
+};
+
 function bumpHitTally(st, type) {
   if (!st.hitTally) st.hitTally = {};
   st.hitTally[type] = (st.hitTally[type] || 0) + 1;
@@ -612,11 +686,16 @@ function drawToolboxOffscreenArrow(ctx, screenX, frame = 0) {
   ctx.restore();
 }
 
-function drawHitTally(ctx, st) {
+function drawHitTally(ctx, st, halloween = false, christmas = false) {
   const tally = st.hitTally || {};
+  const labels = christmas
+    ? HIT_TALLY_LABELS_CHRISTMAS
+    : halloween
+      ? HIT_TALLY_LABELS_HALLOWEEN
+      : HIT_TALLY_LABELS;
   const rows = HIT_TALLY_ORDER
     .filter((k) => (tally[k] || 0) > 0)
-    .map((k) => `${HIT_TALLY_LABELS[k]} ×${tally[k]}`);
+    .map((k) => `${labels[k]} ×${tally[k]}`);
   const lineH = 18;
   const x = W - 14;
   const startY = H - 14 - Math.max(1, rows.length) * lineH;
@@ -870,20 +949,28 @@ function applyDickQteBoost(box, speedFactor = 1) {
   box.onGround = false;
 }
 
-function dickQteSuccessGrade() {
+function dickQteSuccessGrade(halloween = false, christmas = false) {
   return {
-    label: 'DODGED!',
-    sub: 'Little Dick misfires — forward boost!',
+    label: christmas ? 'CHIMNEY DODGE!' : halloween ? 'GARLIC DODGE!' : 'DODGED!',
+    sub: christmas
+      ? 'Santa Dick misfires — festive forward boost!'
+      : halloween
+        ? 'Count Dickula misfires — forward boost!'
+        : 'Little Dick misfires — forward boost!',
     gold: true,
     color: '#fbbf24',
     glow: '#f59e0b',
   };
 }
 
-function flightCoinGrade(amount) {
+function flightCoinGrade(amount, halloween = false, christmas = false) {
   return {
-    label: `+${amount} COINS`,
-    sub: 'Flight pickup → wallet',
+    label: christmas ? `+${amount} GOLD STARS` : halloween ? `+${amount} CANDY` : `+${amount} COINS`,
+    sub: christmas
+      ? 'Festive stocking pickup → wallet'
+      : halloween
+        ? 'Trick-or-Treat pickup → wallet'
+        : 'Flight pickup → wallet',
     gold: true,
     color: '#fde68a',
     glow: '#f59e0b',
@@ -2405,7 +2492,25 @@ function applyChelleBoost(box, speedFactor = 1) {
   box.onGround = false;
 }
 
-function smokerBoostGrade(cheat = false) {
+function smokerBoostGrade(cheat = false, halloween = false, christmas = false) {
+  if (christmas) {
+    return {
+      label: cheat ? 'CHEAT · FESTIVE BREAK!' : 'FESTIVE BREAK!',
+      sub: cheat ? 'Y · simulated snowman boost' : 'Warm mulled cider break — sent flying!',
+      gold: true,
+      color: '#fef08a',
+      glow: '#22c55e',
+    };
+  }
+  if (halloween) {
+    return {
+      label: cheat ? 'CHEAT · GRAVE BREAK!' : 'GRAVE BREAK!',
+      sub: cheat ? 'Y · simulated tombstone boost' : 'Undead smoke break — sent flying!',
+      gold: true,
+      color: '#4ade80',
+      glow: '#22c55e',
+    };
+  }
   return {
     label: cheat ? 'CHEAT · SMOKE BREAK!' : 'SMOKE BREAK!',
     sub: cheat ? 'Y · simulated ciggy hit' : 'Sent flying!',
@@ -2415,7 +2520,27 @@ function smokerBoostGrade(cheat = false) {
   };
 }
 
-function macanBoostGrade() {
+function macanBoostGrade(halloween = false, christmas = false) {
+  if (christmas) {
+    return {
+      label: 'SLEIGH-MACAN!',
+      sub: '2× festive break — Turbo Santa Sleigh rocket!',
+      gold: true,
+      epic: true,
+      color: '#fef08a',
+      glow: '#ef4444',
+    };
+  }
+  if (halloween) {
+    return {
+      label: 'BAT-MACAN!',
+      sub: '2× grave break — Gothic hearse rocket!',
+      gold: true,
+      epic: true,
+      color: '#e9d5ff',
+      glow: '#a855f7',
+    };
+  }
   return {
     label: 'JULIES CAR!',
     sub: '2× smoke break — absolute rocket',
@@ -2426,7 +2551,27 @@ function macanBoostGrade() {
   };
 }
 
-function chelleStartledGrade() {
+function chelleStartledGrade(halloween = false, christmas = false) {
+  if (christmas) {
+    return {
+      label: "I'm wrapping gifts!",
+      sub: 'Elf Chelle drops her ribbon…',
+      gold: true,
+      epic: true,
+      color: '#bbf7d0',
+      glow: '#16a34a',
+    };
+  }
+  if (halloween) {
+    return {
+      label: "I'm casting a hex!",
+      sub: 'Witch Chelle stirs her cauldron…',
+      gold: true,
+      epic: true,
+      color: '#f0abfc',
+      glow: '#c026d3',
+    };
+  }
   return {
     label: "I'm trying to read!",
     sub: 'Chelle stands up startled…',
@@ -2437,7 +2582,27 @@ function chelleStartledGrade() {
   };
 }
 
-function chelleBoostGrade() {
+function chelleBoostGrade(halloween = false, christmas = false) {
+  if (christmas) {
+    return {
+      label: 'ELF CHELLE!',
+      sub: '3× Sleigh-Macan — North Pole Express Launch!',
+      gold: true,
+      epic: true,
+      color: '#bbf7d0',
+      glow: '#22c55e',
+    };
+  }
+  if (halloween) {
+    return {
+      label: 'WITCH CHELLE!',
+      sub: '3× Bat-Macan — Broomstick Hex Launch!',
+      gold: true,
+      epic: true,
+      color: '#f0abfc',
+      glow: '#a855f7',
+    };
+  }
   return {
     label: 'CHELLE!',
     sub: '3× Julies Car — startled launch!',
@@ -2448,7 +2613,27 @@ function chelleBoostGrade() {
   };
 }
 
-function littleDickRebootGrade() {
+function littleDickRebootGrade(halloween = false, christmas = false) {
+  if (christmas) {
+    return {
+      label: 'SANTA DICK!',
+      sub: 'Caught the present — Ho-Ho-Ho boot-back!',
+      gold: true,
+      epic: true,
+      color: '#fef08a',
+      glow: '#dc2626',
+    };
+  }
+  if (halloween) {
+    return {
+      label: 'COUNT DICKULA!',
+      sub: 'Caught the pumpkin — vampire boot-back!',
+      gold: true,
+      epic: true,
+      color: '#fca5a5',
+      glow: '#dc2626',
+    };
+  }
   return {
     label: 'LITTLE DICK!',
     sub: 'Caught it — boots it BACK!',
@@ -2470,7 +2655,25 @@ function littleDickMach2Grade() {
   };
 }
 
-function oilSpillGrade() {
+function oilSpillGrade(halloween = false, christmas = false) {
+  if (christmas) {
+    return {
+      label: 'BLACK ICE!',
+      sub: 'Frozen depot glaze — ultra-slick ice slide',
+      gold: false,
+      color: '#bae6fd',
+      glow: '#0284c7',
+    };
+  }
+  if (halloween) {
+    return {
+      label: 'ECTOPLASM SLIME!',
+      sub: 'Cursed cauldron spill — low-friction slide',
+      gold: false,
+      color: '#86efac',
+      glow: '#22c55e',
+    };
+  }
   return {
     label: 'OIL SPILL!',
     sub: 'Toolbox coated — low friction slide',
@@ -2480,7 +2683,25 @@ function oilSpillGrade() {
   };
 }
 
-function birdHitGrade() {
+function birdHitGrade(halloween = false, christmas = false) {
+  if (christmas) {
+    return {
+      label: 'Flying Reindeer!',
+      sub: 'Antlers & sleigh bells — slight slowdown',
+      gold: false,
+      color: '#fde047',
+      glow: '#dc2626',
+    };
+  }
+  if (halloween) {
+    return {
+      label: 'Vampire Bat!',
+      sub: 'Leathery wings everywhere — slight slowdown',
+      gold: false,
+      color: '#fca5a5',
+      glow: '#991b1b',
+    };
+  }
   return {
     label: 'Bird strike!',
     sub: 'Feathers everywhere — slight slowdown',
@@ -2490,7 +2711,25 @@ function birdHitGrade() {
   };
 }
 
-function balloonHitGrade() {
+function balloonHitGrade(halloween = false, christmas = false) {
+  if (christmas) {
+    return {
+      label: 'Giant Bauble!',
+      sub: 'Festive ornament shattered — big slowdown',
+      gold: false,
+      color: '#fca5a5',
+      glow: '#dc2626',
+    };
+  }
+  if (halloween) {
+    return {
+      label: 'Pumpkin Dirigible!',
+      sub: 'Haunted balloon burst — big slowdown',
+      gold: false,
+      color: '#fdba74',
+      glow: '#ea580c',
+    };
+  }
   return {
     label: 'Balloon!',
     sub: 'Envelope burst — big slowdown',
@@ -2632,6 +2871,10 @@ function ToolboxKickGame({
   dayKey = null,
   recordMarkers = null,
   onFlightCoin = null,
+  /** Halloween theme ("Nightmare on Lion Way") — sandbox / seasonal mode. */
+  halloween = false,
+  /** Christmas theme ("Miracle on Lion Way") — sandbox / seasonal mode. */
+  christmas = false,
 }) {
   const canvasRef = useRef(null);
   const stageRef = useRef(null);
@@ -2650,6 +2893,8 @@ function ToolboxKickGame({
   const competitiveRef = useRef(competitive);
   const devCheatsRef = useRef(devCheats);
   const v2Ref = useRef(Boolean(TOOLBOX_V2_LIVE || (TOOLBOX_V2_DEV && (devCheats || forceV2))));
+  const halloweenRef = useRef(Boolean(halloween));
+  const christmasRef = useRef(Boolean(christmas));
   const dayKeyRef = useRef(dayKey || getLondonDayKey());
   const markersRef = useRef(Array.isArray(recordMarkers) ? recordMarkers : []);
   const onFlightCoinRef = useRef(onFlightCoin);
@@ -2698,6 +2943,7 @@ function ToolboxKickGame({
       return false;
     }
   });
+  const sfxMutedRef = useRef(sfxMuted);
   const [gfxReady, setGfxReady] = useState(false);
   /** Pre-kick: choice | rolling | result | null (hidden once power starts). */
   const [fortuneUi, setFortuneUi] = useState({ mode: 'choice', d1: 1, d2: 1, rolling: false });
@@ -2705,6 +2951,14 @@ function ToolboxKickGame({
   const fortuneSpinRef = useRef(null);
   /** Ignore Space/tap briefly after dice dismiss so that click doesn't lock power. */
   const powerInputIgnoreUntilRef = useRef(0);
+
+  useEffect(() => {
+    halloweenRef.current = Boolean(halloween);
+  }, [halloween]);
+
+  useEffect(() => {
+    christmasRef.current = Boolean(christmas);
+  }, [christmas]);
 
   useEffect(() => {
     const gfx = gfxRef.current;
@@ -2720,6 +2974,7 @@ function ToolboxKickGame({
   }, []);
 
   useEffect(() => {
+    sfxMutedRef.current = Boolean(sfxMuted);
     gfxRef.current?.setMuted(sfxMuted);
     try {
       localStorage.setItem('toolbox-kick-sfx-muted', sfxMuted ? '1' : '0');
@@ -3128,10 +3383,14 @@ function ToolboxKickGame({
       if (f >= DICK_QTE_OPEN && f <= DICK_QTE_CLOSE) {
         st.dickCatch.qteResolved = true;
         st.dickCatch.qteSuccess = true;
-        st.message = 'Nice! You broke free — boost incoming…';
+        st.message = christmasRef.current
+          ? 'Chimney dodge! You broke free from Santa Dick — festive boost incoming…'
+          : halloweenRef.current
+            ? 'Garlic dodge! You broke free from Count Dickula — boost incoming…'
+            : 'Nice! You broke free — boost incoming…';
         setQteFlash(null);
         gfx?.play('qteOk');
-        showRpgPopup(dickQteSuccessGrade(), 1600);
+        showRpgPopup(dickQteSuccessGrade(halloweenRef.current, christmasRef.current), 1600);
         setHud((h) => ({ ...h, message: st.message }));
         return;
       }
@@ -3233,8 +3492,12 @@ function ToolboxKickGame({
     if (st.phase === PHASE.FLIGHT) {
       if (st.dickCatch || st.chelleReact) return;
       applySmokerBoost(st.box, (st.caughtCheating || st.punished) ? CAUGHT_CHEAT_SPEED_FACTOR : 1);
-      st.message = 'CHEAT · smoke break boost!';
-      showRpgPopup(smokerBoostGrade(true), 1600);
+      st.message = christmasRef.current
+        ? 'CHEAT · festive snowman break boost!'
+        : halloweenRef.current
+          ? 'CHEAT · grave break boost!'
+          : 'CHEAT · smoke break boost!';
+      showRpgPopup(smokerBoostGrade(true, halloweenRef.current, christmasRef.current), 1600);
       setHud((h) => ({
         ...h,
         phase: st.phase,
@@ -3430,20 +3693,46 @@ function ToolboxKickGame({
           if (st.punished) spawnPunishmentCoachSwarm(st);
           if (st.qtePractice) {
             spawnQtePracticeDicks(st);
-            st.message = 'QTE PRACTICE — land on Little Dick, then TAP NOW!';
+            st.message = christmasRef.current
+              ? 'QTE PRACTICE — land on Santa Dick, then TAP NOW!'
+              : halloweenRef.current
+                ? 'QTE PRACTICE — land on Count Dickula, then TAP NOW!'
+                : 'QTE PRACTICE — land on Little Dick, then TAP NOW!';
           }
           st.phase = PHASE.FLIGHT;
           if (!st.qtePractice) {
             st.message = st.punished
-              ? 'Punishment — coaches everywhere!'
+              ? (christmasRef.current
+                ? 'Punishment — Holiday coaches everywhere!'
+                : halloweenRef.current
+                  ? 'Punishment — ghost coaches everywhere!'
+                  : 'Punishment — coaches everywhere!')
               : st.caughtCheating
                 ? 'Caught cheating — toolbox is sluggish…'
                 : st.perfectLaunch
-                  ? 'Perfect launch!!! Fly, toolbox, fly…'
-                  : 'Fly, toolbox, fly…';
+                  ? (christmasRef.current
+                    ? 'Perfect launch!!! Fly, festive present, fly…'
+                    : halloweenRef.current
+                      ? 'Perfect launch!!! Fly, cursed pumpkin, fly…'
+                      : 'Perfect launch!!! Fly, toolbox, fly…')
+                  : (christmasRef.current
+                    ? 'Fly, festive present, fly…'
+                    : halloweenRef.current
+                      ? 'Fly, cursed pumpkin, fly…'
+                      : 'Fly, toolbox, fly…');
           }
           gfx?.play('kick', { vol: 0.9 });
-          gfx?.burst(st.box.x, st.box.y, { count: 14, color: '#fbbf24', speed: 4.5, life: 22 });
+          if (christmasRef.current) {
+            playChristmasSfx('launch', sfxMutedRef.current);
+          } else if (halloweenRef.current) {
+            playHalloweenSfx('launch', sfxMutedRef.current);
+          }
+          gfx?.burst(st.box.x, st.box.y, {
+            count: 14,
+            color: christmasRef.current ? '#facc15' : halloweenRef.current ? '#f97316' : '#fbbf24',
+            speed: 4.5,
+            life: 22,
+          });
           gfx?.dust(st.box.x, GROUND_Y, 1);
           gfx?.addShake(st.perfectLaunch ? 9 : 5);
           syncHud(st);
@@ -3465,18 +3754,35 @@ function ToolboxKickGame({
         box.spin = 0;
 
         if (f === 1) {
+          if (christmasRef.current) {
+            playChristmasSfx('santa', sfxMutedRef.current);
+          } else if (halloweenRef.current) {
+            playHalloweenSfx('vampire', sfxMutedRef.current);
+          }
           if (returnRescue) {
             catchSt.facing = 1;
             catchSt.qteResolved = true;
             catchSt.qteSuccess = true;
-            st.message = 'Little Dick grabs it again — sending you FORWARD!';
+            st.message = christmasRef.current
+              ? 'Santa Dick grabs it again — sending you FORWARD!'
+              : halloweenRef.current
+                ? 'Count Dickula grabs it again — sending you FORWARD!'
+                : 'Little Dick grabs it again — sending you FORWARD!';
             popupFnRef.current?.(dickReturnRescueGrade(), 1800);
           } else {
             st.message = qteOn
-              ? 'Little Dick caught the toolbox — get ready to TAP!'
-              : 'Little Dick caught the toolbox!';
+              ? (christmasRef.current
+                ? 'Santa Dick caught the present — get ready to TAP!'
+                : halloweenRef.current
+                  ? 'Count Dickula caught the pumpkin — get ready to TAP!'
+                  : 'Little Dick caught the toolbox — get ready to TAP!')
+              : (christmasRef.current
+                ? 'Santa Dick caught the present!'
+                : halloweenRef.current
+                  ? 'Count Dickula caught the pumpkin!'
+                  : 'Little Dick caught the toolbox!');
             // Short popup so it doesn’t cover the whole QTE window
-            popupFnRef.current?.(littleDickRebootGrade(), qteOn ? 900 : 2000);
+            popupFnRef.current?.(littleDickRebootGrade(halloweenRef.current, christmasRef.current), qteOn ? 900 : 2000);
             if (qteOn) setQteFlash('ready');
           }
           syncHud(st);
@@ -3529,9 +3835,17 @@ function ToolboxKickGame({
             gfx?.burst(box.x, box.y, { count: 18, color: '#f59e0b', speed: 5.5, life: 26 });
             gfx?.addShake(8);
             st.message = returnRescue
-              ? 'COMEBACK! Little Dick boots you forward!'
-              : 'QTE! Little Dick whiffs — toolbox rockets onward!';
-            if (!returnRescue) popupFnRef.current?.(dickQteSuccessGrade(), 1800);
+              ? (christmasRef.current
+                ? 'COMEBACK! Santa Dick boots you forward!'
+                : halloweenRef.current
+                  ? 'COMEBACK! Count Dickula boots you forward!'
+                  : 'COMEBACK! Little Dick boots you forward!')
+              : (christmasRef.current
+                ? 'QTE! Santa Dick whiffs — present rockets onward!'
+                : halloweenRef.current
+                  ? 'QTE! Count Dickula whiffs — pumpkin rockets onward!'
+                  : 'QTE! Little Dick whiffs — toolbox rockets onward!');
+            if (!returnRescue) popupFnRef.current?.(dickQteSuccessGrade(halloweenRef.current, christmasRef.current), 1800);
             syncHud(st);
           } else {
             box.x = catchSt.x - 12;
@@ -3548,7 +3862,11 @@ function ToolboxKickGame({
             seedReturnRescueProps(st, box.x);
             gfx?.play('metalHeavy', { vol: 0.85 });
             gfx?.addShake(10);
-            st.message = 'Little Dick sent it BACK — catch him again to rebound!';
+            st.message = christmasRef.current
+              ? 'Santa Dick sent it BACK — catch him again to rebound!'
+              : halloweenRef.current
+                ? 'Count Dickula sent it BACK — catch him again to rebound!'
+                : 'Little Dick sent it BACK — catch him again to rebound!';
             syncHud(st);
           }
         }
@@ -3570,13 +3888,26 @@ function ToolboxKickGame({
         box.spin = 0;
 
         if (f === 1) {
-          st.message = "Chelle: I'm trying to read!";
-          popupFnRef.current?.(chelleStartledGrade(), 1800);
+          st.message = christmasRef.current
+            ? "Elf Chelle: I'm wrapping gifts!"
+            : halloweenRef.current
+              ? "Witch Chelle: I'm casting a hex!"
+              : "Chelle: I'm trying to read!";
+          popupFnRef.current?.(chelleStartledGrade(halloweenRef.current, christmasRef.current), 1800);
           syncHud(st);
         }
         if (f === 18) {
-          st.message = 'Chelle recovers and launches the toolbox!';
-          popupFnRef.current?.(chelleBoostGrade(), 2200);
+          if (christmasRef.current) {
+            playChristmasSfx('elf', sfxMutedRef.current);
+          } else if (halloweenRef.current) {
+            playHalloweenSfx('witch', sfxMutedRef.current);
+          }
+          st.message = christmasRef.current
+            ? 'Elf Chelle jingles and sleigh-launches the present!'
+            : halloweenRef.current
+              ? 'Witch Chelle cackles and hex-launches the pumpkin!'
+              : 'Chelle recovers and launches the toolbox!';
+          popupFnRef.current?.(chelleBoostGrade(halloweenRef.current, christmasRef.current), 2200);
           syncHud(st);
         }
         if (f === 28) {
@@ -3595,7 +3926,11 @@ function ToolboxKickGame({
           gfx?.addShake(12);
           st.message = st.caughtCheating
             ? 'CHELLE! (but you’re sluggish…)'
-            : 'CHELLE! 3× Julies Car!';
+            : (christmasRef.current
+              ? 'ELF CHELLE! 3× Sleigh-Macan!'
+              : halloweenRef.current
+                ? 'WITCH CHELLE! 3× Bat-Macan!'
+                : 'CHELLE! 3× Julies Car!');
           syncHud(st);
         }
         st.distance = (box.x - BOX_REST_X) / PX_PER_METRE;
@@ -3673,7 +4008,11 @@ function ToolboxKickGame({
                   box.y = top - 2;
                   box.vy = Math.min(box.vy, 2);
                 }
-                st.message = 'Hit a coach — slowed down!';
+                st.message = christmasRef.current
+                  ? 'Hit a Holiday Express Coach — slowed down!'
+                  : halloweenRef.current
+                    ? 'Hit a Phantom Ghost Coach — slowed down!'
+                    : 'Hit a coach — slowed down!';
                 gfx?.play('coach');
                 gfx?.dust(box.x, GROUND_Y, box.vx >= 0 ? 1 : -1);
                 gfx?.addShake(3);
@@ -3695,10 +4034,18 @@ function ToolboxKickGame({
                 if (st.returningFromBoot) {
                   box.vx = Math.max(Math.abs(box.vx) * tun.sackBoost, 14);
                   st.returningFromBoot = false;
-                  st.message = 'Sack trampoline — back downrange!';
+                  st.message = christmasRef.current
+                    ? 'Santa Toy Sack bounce — back downrange!'
+                    : halloweenRef.current
+                      ? 'Giant pumpkin bounce — back downrange!'
+                      : 'Sack trampoline — back downrange!';
                 } else {
                   box.vx *= tun.sackBoost;
-                  st.message = 'Rubbish sack trampoline!';
+                  st.message = christmasRef.current
+                    ? "Santa's Toy Sack trampoline!"
+                    : halloweenRef.current
+                      ? 'Giant Jack-o\'-Lantern bounce!'
+                      : 'Rubbish sack trampoline!';
                 }
                 box.spin = -box.spin * 1.15;
                 syncHud(st);
@@ -3716,13 +4063,26 @@ function ToolboxKickGame({
                 const rescue = Boolean(it.returnRescue) || Boolean(st.returningFromBoot);
                 st.returningFromBoot = false;
                 st.message = rescue
-                  ? 'Smoke break save — back downrange!'
-                  : 'Driver on a ciggy break — sent flying!';
+                  ? (christmasRef.current
+                    ? 'Festive break save — back downrange!'
+                    : halloweenRef.current
+                      ? 'Graveyard break save — back downrange!'
+                      : 'Smoke break save — back downrange!')
+                  : (christmasRef.current
+                    ? 'Warm mulled cider break — sent flying!'
+                    : halloweenRef.current
+                      ? 'Graveyard shift break — sent flying!'
+                      : 'Driver on a ciggy break — sent flying!');
                 gfx?.play('boost');
                 gfx?.play('rare', { vol: 0.55 });
-                gfx?.burst(box.x, box.y, { count: 16, color: '#fb923c', speed: 5, life: 24 });
+                gfx?.burst(box.x, box.y, {
+                  count: 16,
+                  color: christmasRef.current ? '#fef08a' : halloweenRef.current ? '#4ade80' : '#fb923c',
+                  speed: 5,
+                  life: 24,
+                });
                 gfx?.addShake(7);
-                popupFnRef.current?.(smokerBoostGrade(false), 1600);
+                popupFnRef.current?.(smokerBoostGrade(false, halloweenRef.current, christmasRef.current), 1600);
                 syncHud(st);
               }
             }
@@ -3736,12 +4096,21 @@ function ToolboxKickGame({
                 registerAirCombo(st, box, popupFnRef.current);
                 applyMacanBoost(box, (st.caughtCheating || st.punished) ? CAUGHT_CHEAT_SPEED_FACTOR : 1);
                 st.returningFromBoot = false;
-                st.message = 'JULIES CAR!';
+                st.message = christmasRef.current
+                  ? 'SLEIGH-MACAN!'
+                  : halloweenRef.current
+                    ? 'BAT-MACAN!'
+                    : 'JULIES CAR!';
                 gfx?.play('rare');
                 gfx?.play('jingleHit', { vol: 0.8 });
-                gfx?.burst(box.x, box.y, { count: 22, color: '#e2e8f0', speed: 6.5, life: 28 });
+                gfx?.burst(box.x, box.y, {
+                  count: 22,
+                  color: christmasRef.current ? '#facc15' : halloweenRef.current ? '#c084fc' : '#e2e8f0',
+                  speed: 6.5,
+                  life: 28,
+                });
                 gfx?.addShake(9);
-                popupFnRef.current?.(macanBoostGrade(), 2000);
+                popupFnRef.current?.(macanBoostGrade(halloweenRef.current, christmasRef.current), 2000);
                 syncHud(st);
               }
             }
@@ -3758,7 +4127,11 @@ function ToolboxKickGame({
               box.vy = 0;
               box.x = it.x + 6;
               box.y = GROUND_Y - 22;
-              st.message = "Chelle: I'm trying to read!";
+              st.message = christmasRef.current
+                ? "Elf Chelle: I'm wrapping gifts!"
+                : halloweenRef.current
+                  ? "Witch Chelle: I'm casting a hex!"
+                  : "Chelle: I'm trying to read!";
               syncHud(st);
             }
           } else if (it.type === 'littleDick') {
@@ -3782,8 +4155,16 @@ function ToolboxKickGame({
               box.x = it.x;
               box.y = GROUND_Y - 28;
               st.message = returnRescue
-                ? 'Little Dick again — comeback catch!'
-                : 'Landed on Little Dick!';
+                ? (christmasRef.current
+                  ? 'Santa Dick again — comeback catch!'
+                  : halloweenRef.current
+                    ? 'Count Dickula again — comeback catch!'
+                    : 'Little Dick again — comeback catch!')
+                : (christmasRef.current
+                  ? 'Landed on Santa Dick!'
+                  : halloweenRef.current
+                    ? 'Landed on Count Dickula!'
+                    : 'Landed on Little Dick!');
               syncHud(st);
             }
           } else if (it.type === 'bird') {
@@ -3798,8 +4179,17 @@ function ToolboxKickGame({
               box.vx *= tun.birdSlow;
               box.vy *= 0.96;
               box.spin *= -0.8;
-              st.message = 'Bird strike — feathers everywhere!';
-              popupFnRef.current?.(birdHitGrade(), 900);
+              if (christmasRef.current) {
+                playChristmasSfx('reindeer', sfxMutedRef.current);
+              } else if (halloweenRef.current) {
+                playHalloweenSfx('bat', sfxMutedRef.current);
+              }
+              st.message = christmasRef.current
+                ? 'Flying reindeer strike — sleigh bells everywhere!'
+                : halloweenRef.current
+                  ? 'Vampire bat strike — wings everywhere!'
+                  : 'Bird strike — feathers everywhere!';
+              popupFnRef.current?.(birdHitGrade(halloweenRef.current, christmasRef.current), 900);
               syncHud(st);
             }
           } else if (it.type === 'balloon') {
@@ -3816,8 +4206,12 @@ function ToolboxKickGame({
               box.vx *= tun.balloonSlow ?? 0.68;
               box.vy *= tun.balloonVyDamp ?? 0.55;
               box.spin *= -0.7;
-              st.message = 'Hot-air balloon — slowed right down!';
-              popupFnRef.current?.(balloonHitGrade(), 1100);
+              st.message = christmasRef.current
+                ? 'Giant Christmas bauble — slowed right down!'
+                : halloweenRef.current
+                  ? 'Jack-o\'-Lantern dirigible — slowed right down!'
+                  : 'Hot-air balloon — slowed right down!';
+              popupFnRef.current?.(balloonHitGrade(halloweenRef.current, christmasRef.current), 1100);
               syncHud(st);
             }
           } else if (it.type === 'oilSpill') {
@@ -3826,8 +4220,17 @@ function ToolboxKickGame({
             if (Math.abs(dx) < 40 && Math.abs(dy) < 18 && !box.oiled) {
               box.oiled = true;
               bumpHitTally(st, 'oilSpill');
-              st.message = 'Drove through the oil spill — coated!';
-              popupFnRef.current?.(oilSpillGrade(), 1100);
+              if (christmasRef.current) {
+                playChristmasSfx('ice', sfxMutedRef.current);
+              } else if (halloweenRef.current) {
+                playHalloweenSfx('slime', sfxMutedRef.current);
+              }
+              st.message = christmasRef.current
+                ? 'Skated across black ice — frosted!'
+                : halloweenRef.current
+                  ? 'Drove through ectoplasm slime — coated!'
+                  : 'Drove through the oil spill — coated!';
+              popupFnRef.current?.(oilSpillGrade(halloweenRef.current, christmasRef.current), 1100);
               syncHud(st);
             }
           } else if (it.type === 'cone' || it.type === 'drum') {
@@ -3849,13 +4252,32 @@ function ToolboxKickGame({
                 });
                 box.vy = Math.min(box.vy, -4);
                 box.spin *= -1.1;
-                st.message = 'Oil drum burst — toolbox coated!';
-                popupFnRef.current?.(oilSpillGrade(), 1200);
+                if (christmasRef.current) {
+                  playChristmasSfx('ice', sfxMutedRef.current);
+                } else if (halloweenRef.current) {
+                  playHalloweenSfx('slime', sfxMutedRef.current);
+                }
+                st.message = christmasRef.current
+                  ? 'Festive barrel burst — sheet of black ice!'
+                  : halloweenRef.current
+                    ? 'Witch cauldron burst — ectoplasm slime!'
+                    : 'Oil drum burst — toolbox coated!';
+                popupFnRef.current?.(oilSpillGrade(halloweenRef.current, christmasRef.current), 1200);
               } else {
                 box.vx *= 0.92;
                 box.vy = Math.min(box.vy, -5);
                 box.spin *= -1;
-                st.message = it.type === 'cone' ? 'Traffic cone ping!' : 'Oil drum clang!';
+                st.message = it.type === 'cone'
+                  ? (christmasRef.current
+                    ? 'Mini Christmas tree ping!'
+                    : halloweenRef.current
+                      ? 'Candy-corn witch hat ping!'
+                      : 'Traffic cone ping!')
+                  : (christmasRef.current
+                    ? 'Festive nog barrel clang!'
+                    : halloweenRef.current
+                      ? 'Witch cauldron clang!'
+                      : 'Oil drum clang!');
               }
               syncHud(st);
             }
@@ -3870,8 +4292,12 @@ function ToolboxKickGame({
               st.collectedCoinSlots.add(it.slot);
               st.coinsGrabbed = (st.coinsGrabbed || 0) + 1;
               const amount = it.amount || FLIGHT_COIN_AMOUNT;
-              st.message = `Flight coin! +${amount} to your wallet`;
-              popupFnRef.current?.(flightCoinGrade(amount), 1200);
+              st.message = christmasRef.current
+                ? `Festive Gold Star! +${amount} coins to your wallet`
+                : halloweenRef.current
+                  ? `Trick-or-Treat candy! +${amount} coins to your wallet`
+                  : `Flight coin! +${amount} to your wallet`;
+              popupFnRef.current?.(flightCoinGrade(amount, halloweenRef.current, christmasRef.current), 1200);
               onFlightCoinRef.current?.({
                 slot: it.slot,
                 amount,
@@ -4113,23 +4539,45 @@ function ToolboxKickGame({
       const mechDrawX = pose.mechX;
       // Sub-frame for decorative animation (wings, sock flap) on high-Hz displays
       const animFrame = st.frame + (Number.isFinite(renderAlpha) ? renderAlpha : 0);
+      const isChristmas = Boolean(christmasRef.current);
+      const isHalloween = !isChristmas && Boolean(halloweenRef.current);
       const weatherMode = st.v2 && st.windProfile?.mode === 'storm'
         ? 'storm'
         : (st.v2 && st.windProfile?.mode === 'steady' ? 'steady' : 'calm');
       const wetWorld = weatherMode === 'storm';
-      const usedGfxBg = Boolean(
-        gfx?.drawWorldBackground(ctx, {
+      if (isChristmas) {
+        drawChristmasWorldBackground(ctx, {
           W,
           H,
           groundY: GROUND_Y,
           camX: cam,
           wet: wetWorld,
           frame: animFrame,
-        }),
-      );
-      if (!usedGfxBg) {
-        drawSky(ctx, cam, weatherMode);
-        drawGround(ctx, cam, weatherMode);
+        });
+      } else if (isHalloween) {
+        drawHalloweenWorldBackground(ctx, {
+          W,
+          H,
+          groundY: GROUND_Y,
+          camX: cam,
+          wet: wetWorld,
+          frame: animFrame,
+        });
+      } else {
+        const usedGfxBg = Boolean(
+          gfx?.drawWorldBackground(ctx, {
+            W,
+            H,
+            groundY: GROUND_Y,
+            camX: cam,
+            wet: wetWorld,
+            frame: animFrame,
+          }),
+        );
+        if (!usedGfxBg) {
+          drawSky(ctx, cam, weatherMode);
+          drawGround(ctx, cam, weatherMode);
+        }
       }
 
       const mph = speedMphFromBox(st.box);
@@ -4160,7 +4608,11 @@ function ToolboxKickGame({
       ctx.scale(zoom, zoom);
       ctx.translate(-pivotX, -GROUND_Y);
 
-      ctx.fillStyle = 'rgba(0,0,0,0.25)';
+      ctx.fillStyle = isChristmas
+        ? 'rgba(15, 23, 42, 0.55)'
+        : isHalloween
+          ? 'rgba(233,213,255,0.55)'
+          : 'rgba(0,0,0,0.25)';
       ctx.font = '11px ui-monospace, monospace';
       const markEvery = 50;
       const minMark = Math.floor((visMinSx + cam - BOX_REST_X) / PX_PER_METRE / markEvery) * markEvery - markEvery;
@@ -4168,7 +4620,13 @@ function ToolboxKickGame({
       for (let m = minMark; m <= maxMark; m += markEvery) {
         const sx = BOX_REST_X + m * PX_PER_METRE - cam;
         if (sx < visMinSx || sx > visMaxSx) continue;
-        ctx.fillStyle = m < 0 ? 'rgba(248,113,113,0.45)' : 'rgba(0,0,0,0.25)';
+        ctx.fillStyle = m < 0
+          ? 'rgba(248,113,113,0.55)'
+          : (isChristmas
+            ? 'rgba(15, 23, 42, 0.55)'
+            : isHalloween
+              ? 'rgba(233,213,255,0.55)'
+              : 'rgba(0,0,0,0.25)');
         ctx.fillRect(sx, GROUND_Y, 2, 8);
         ctx.fillText(`${m}m`, sx + 4, GROUND_Y + 18);
       }
@@ -4177,16 +4635,36 @@ function ToolboxKickGame({
         const it = st.items[i];
         const sx = it.x - cam;
         if (sx < visMinSx || sx > visMaxSx) continue;
-        if (it.type === 'coach') drawCoach(ctx, sx, GROUND_Y, it.w, it.h);
-        else if (it.type === 'sack') drawSack(ctx, sx, GROUND_Y, it.r);
-        else if (it.type === 'cone') drawCone(ctx, sx, GROUND_Y);
-        else if (it.type === 'drum') drawDrum(ctx, sx, GROUND_Y, Boolean(it.spilled));
-        else if (it.type === 'oilSpill') drawOilSpill(ctx, sx, GROUND_Y, animFrame);
+        if (it.type === 'coach') {
+          if (isChristmas) drawChristmasCoach(ctx, sx, GROUND_Y, it.w, it.h, animFrame);
+          else if (isHalloween) drawHalloweenCoach(ctx, sx, GROUND_Y, it.w, it.h, animFrame);
+          else drawCoach(ctx, sx, GROUND_Y, it.w, it.h);
+        }
+        else if (it.type === 'sack') {
+          if (isChristmas) drawChristmasSack(ctx, sx, GROUND_Y, it.r);
+          else if (isHalloween) drawHalloweenSack(ctx, sx, GROUND_Y, it.r, animFrame);
+          else drawSack(ctx, sx, GROUND_Y, it.r);
+        }
+        else if (it.type === 'cone') {
+          if (isChristmas) drawChristmasCone(ctx, sx, GROUND_Y);
+          else if (isHalloween) drawHalloweenCone(ctx, sx, GROUND_Y);
+          else drawCone(ctx, sx, GROUND_Y);
+        }
+        else if (it.type === 'drum') {
+          if (isChristmas) drawChristmasDrum(ctx, sx, GROUND_Y, Boolean(it.spilled), animFrame);
+          else if (isHalloween) drawHalloweenDrum(ctx, sx, GROUND_Y, Boolean(it.spilled), animFrame);
+          else drawDrum(ctx, sx, GROUND_Y, Boolean(it.spilled));
+        }
+        else if (it.type === 'oilSpill') {
+          if (isChristmas) drawChristmasOilSpill(ctx, sx, GROUND_Y, animFrame);
+          else if (isHalloween) drawHalloweenOilSpill(ctx, sx, GROUND_Y, animFrame);
+          else drawOilSpill(ctx, sx, GROUND_Y, animFrame);
+        }
         else if (it.type === 'smoker') {
           const bob = Math.sin(animFrame * 0.12) * 1.5;
           if (!gfx?.drawCharSprite(ctx, 'smokerIdle', sx, GROUND_Y, { scale: 1.05, bob })) {
             drawSmoker(ctx, sx, GROUND_Y, animFrame);
-          } else {
+          } else if (!isHalloween && !isChristmas) {
             // Keep the cigarette smoke puff from the procedural drawer
             ctx.save();
             ctx.globalAlpha = 0.55;
@@ -4197,8 +4675,17 @@ function ToolboxKickGame({
             ctx.fill();
             ctx.restore();
           }
+          if (isChristmas) {
+            drawChristmasSmokerOverlay(ctx, sx, GROUND_Y, animFrame);
+          } else if (isHalloween) {
+            drawHalloweenSmokerOverlay(ctx, sx, GROUND_Y, animFrame);
+          }
         }
-        else if (it.type === 'macan') drawMacan(ctx, sx, GROUND_Y, animFrame);
+        else if (it.type === 'macan') {
+          if (isChristmas) drawChristmasMacan(ctx, sx, GROUND_Y, animFrame);
+          else if (isHalloween) drawHalloweenMacan(ctx, sx, GROUND_Y, animFrame);
+          else drawMacan(ctx, sx, GROUND_Y, animFrame);
+        }
         else if (it.type === 'chelle') {
           const reacting = st.chelleReact && st.chelleReact.x === it.x;
           let poseChelle = 'reading';
@@ -4210,7 +4697,11 @@ function ToolboxKickGame({
           if (!gfx?.drawCharSprite(ctx, spr, sx, GROUND_Y, { scale: 1.05 })) {
             drawChelle(ctx, sx, GROUND_Y, animFrame, poseChelle);
           }
-          if (reacting && st.chelleReact.frame < 22) {
+          if (isChristmas) {
+            drawChristmasChelleOverlay(ctx, sx, GROUND_Y, animFrame, Boolean(reacting), st.chelleReact?.frame || 0);
+          } else if (isHalloween) {
+            drawHalloweenChelleOverlay(ctx, sx, GROUND_Y, animFrame, Boolean(reacting), st.chelleReact?.frame || 0);
+          } else if (reacting && st.chelleReact.frame < 22) {
             ctx.save();
             ctx.fillStyle = 'rgba(255,255,255,0.95)';
             ctx.strokeStyle = 'rgba(139,92,246,0.7)';
@@ -4262,7 +4753,11 @@ function ToolboxKickGame({
             drawMechanic(ctx, 0, 0, st.frame, { kicking, running: false });
             ctx.restore();
           }
-          if (!catching) {
+          if (isChristmas) {
+            drawChristmasDickOverlay(ctx, sx, GROUND_Y, animFrame, { face, catching: Boolean(catching) });
+          } else if (isHalloween) {
+            drawHalloweenDickOverlay(ctx, sx, GROUND_Y, animFrame, { face, catching: Boolean(catching) });
+          } else if (!catching) {
             ctx.fillStyle = 'rgba(15, 23, 42, 0.75)';
             ctx.beginPath();
             ctx.roundRect(sx - 40, GROUND_Y - 96, 80, 16, 4);
@@ -4274,19 +4769,41 @@ function ToolboxKickGame({
           }
         }
         else if (it.type === 'bird' && !it.hit) {
-          drawBird(ctx, sx, it.y ?? (GROUND_Y - 80), animFrame, it.dir || 1);
+          if (isChristmas) drawChristmasBird(ctx, sx, it.y ?? (GROUND_Y - 80), animFrame, it.dir || 1);
+          else if (isHalloween) drawHalloweenBird(ctx, sx, it.y ?? (GROUND_Y - 80), animFrame, it.dir || 1);
+          else drawBird(ctx, sx, it.y ?? (GROUND_Y - 80), animFrame, it.dir || 1);
         }
         else if (it.type === 'balloon') {
-          drawHotAirBalloon(ctx, sx, it.y ?? (GROUND_Y - 120), animFrame, {
-            scale: it.scale,
-            color: it.color,
-            colorDark: it.colorDark,
-            bobPhase: it.bobPhase,
-            hit: Boolean(it.hit),
-          });
+          if (isChristmas) {
+            drawChristmasBalloon(ctx, sx, it.y ?? (GROUND_Y - 120), animFrame, {
+              scale: it.scale,
+              color: it.color,
+              colorDark: it.colorDark,
+              bobPhase: it.bobPhase,
+              hit: Boolean(it.hit),
+            });
+          } else if (isHalloween) {
+            drawHalloweenBalloon(ctx, sx, it.y ?? (GROUND_Y - 120), animFrame, {
+              scale: it.scale,
+              color: it.color,
+              colorDark: it.colorDark,
+              bobPhase: it.bobPhase,
+              hit: Boolean(it.hit),
+            });
+          } else {
+            drawHotAirBalloon(ctx, sx, it.y ?? (GROUND_Y - 120), animFrame, {
+              scale: it.scale,
+              color: it.color,
+              colorDark: it.colorDark,
+              bobPhase: it.bobPhase,
+              hit: Boolean(it.hit),
+            });
+          }
         }
         else if (it.type === 'flightCoin' && !it.collected) {
-          drawFlightCoin(ctx, sx, animFrame);
+          if (isChristmas) drawChristmasFlightCoin(ctx, sx, GROUND_Y, animFrame);
+          else if (isHalloween) drawHalloweenFlightCoin(ctx, sx, GROUND_Y, animFrame);
+          else drawFlightCoin(ctx, sx, animFrame);
         }
         else if (it.type === 'recordFlag' && it.marker) {
           drawRecordFlag(ctx, sx, it.marker);
@@ -4301,6 +4818,11 @@ function ToolboxKickGame({
         else if (running) mechSpr = (Math.floor(animFrame / 6) % 2 === 0) ? 'mechWalkA' : 'mechWalkB';
         if (!gfx?.drawCharSprite(ctx, mechSpr, mechDrawX - cam, GROUND_Y, { scale: 1.08 })) {
           drawMechanic(ctx, mechDrawX - cam, GROUND_Y, animFrame, { kicking, running });
+        }
+        if (isChristmas) {
+          drawChristmasMechanicOverlay(ctx, mechDrawX - cam, GROUND_Y, animFrame, { kicking, running });
+        } else if (isHalloween) {
+          drawHalloweenMechanicOverlay(ctx, mechDrawX - cam, GROUND_Y, animFrame, { kicking, running });
         }
       }
 
@@ -4326,6 +4848,17 @@ function ToolboxKickGame({
             running: runningRevenge,
           });
           ctx.restore();
+          if (isChristmas) {
+            drawChristmasDickOverlay(ctx, sx, GROUND_Y, animFrame, {
+              face: pr.facing,
+              catching: true,
+            });
+          } else if (isHalloween) {
+            drawHalloweenDickOverlay(ctx, sx, GROUND_Y, animFrame, {
+              face: pr.facing,
+              catching: true,
+            });
+          }
 
           const shouting = Boolean(pr.shout) || (pr.stage === 'grab' && pr.frame >= 34);
           if (shouting) {
@@ -4355,7 +4888,7 @@ function ToolboxKickGame({
             ctx.fillText(lines[0], sx, by + 13);
             ctx.fillText(lines[1], sx, by + 28);
             ctx.restore();
-          } else {
+          } else if (!isHalloween && !isChristmas) {
             ctx.fillStyle = 'rgba(15, 23, 42, 0.75)';
             ctx.beginPath();
             ctx.roundRect(sx - 40, GROUND_Y - 96, 80, 16, 4);
@@ -4370,6 +4903,14 @@ function ToolboxKickGame({
 
       const oiled = Boolean(st.box.oiled);
       const drawBoxSprite = (sx, sy, rot, flying) => {
+        if (isChristmas) {
+          drawChristmasToolbox(ctx, sx, sy, rot, flying, oiled, animFrame);
+          return;
+        }
+        if (isHalloween) {
+          drawHalloweenToolbox(ctx, sx, sy, rot, flying, oiled, animFrame);
+          return;
+        }
         if (gfx?.drawToolboxSprite(ctx, sx, sy, rot, flying, oiled)) return;
         drawToolbox(ctx, sx, sy, rot, flying, oiled);
       };
@@ -4416,7 +4957,13 @@ function ToolboxKickGame({
       gfx?.drawSpeedLines(ctx, W, H, GROUND_Y, mph > 80 ? clamp((mph - 80) / 220, 0, 1) : 0);
 
       if (weatherMode === 'storm') {
-        drawStormWeather(ctx, animFrame, st.windNow || st.windProfile);
+        if (isChristmas) {
+          drawChristmasStormWeather(ctx, W, H, GROUND_Y, animFrame, st.windNow || st.windProfile);
+        } else if (isHalloween) {
+          drawHalloweenStormWeather(ctx, W, H, GROUND_Y, animFrame, st.windNow || st.windProfile);
+        } else {
+          drawStormWeather(ctx, animFrame, st.windNow || st.windProfile);
+        }
       }
 
       if (st.v2 && (st.phase === PHASE.READY || st.phase === PHASE.POWER || st.phase === PHASE.ANGLE)) {
@@ -4462,7 +5009,7 @@ function ToolboxKickGame({
       }
 
       if (st.phase === PHASE.FLIGHT || st.phase === PHASE.LANDED) {
-        drawHitTally(ctx, st);
+        drawHitTally(ctx, st, isHalloween, isChristmas);
       }
 
       if (st.phase === PHASE.POWER || st.phase === PHASE.ANGLE) {
@@ -4941,9 +5488,55 @@ function ToolboxKickGame({
               New round
             </GameUiButton>
             {devCheats ? (
-              <p className="w-full text-xs text-slate-500">
-                Dev keys: Y perfect/smoker boost · U nudge · M Julies Car · C Chelle · L Little Dick
-              </p>
+              <div className="w-full pt-1 space-y-1.5">
+                <div className="flex flex-wrap gap-1.5 items-center">
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-amber-300/90 mr-1">
+                    Dev Spawns &amp; Cheats:
+                  </span>
+                  <button
+                    type="button"
+                    onClick={doCheatY}
+                    className="px-2.5 py-1 rounded-md text-xs font-medium border border-amber-500/40 bg-amber-500/10 text-amber-100 hover:bg-amber-500/20"
+                  >
+                    Y · {christmas ? 'Perfect / Festive Boost' : halloween ? 'Perfect / Grave Boost' : 'Perfect / Smoker Boost'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={doCheatU}
+                    className="px-2.5 py-1 rounded-md text-xs font-medium border border-sky-500/40 bg-sky-500/10 text-sky-100 hover:bg-sky-500/20"
+                  >
+                    U · Speed Nudge
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => doCheatSpawn('macan')}
+                    className="px-2.5 py-1 rounded-md text-xs font-medium border border-purple-500/40 bg-purple-500/10 text-purple-100 hover:bg-purple-500/20"
+                  >
+                    M · {christmas ? 'Spawn Sleigh-Macan' : halloween ? 'Spawn Bat-Macan' : 'Spawn Julies Car'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => doCheatSpawn('chelle')}
+                    className="px-2.5 py-1 rounded-md text-xs font-medium border border-fuchsia-500/40 bg-fuchsia-500/10 text-fuchsia-100 hover:bg-fuchsia-500/20"
+                  >
+                    C · {christmas ? 'Spawn Elf Chelle' : halloween ? 'Spawn Witch Chelle' : 'Spawn Chelle'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => doCheatSpawn('littleDick')}
+                    className="px-2.5 py-1 rounded-md text-xs font-medium border border-rose-500/40 bg-rose-500/10 text-rose-100 hover:bg-rose-500/20"
+                  >
+                    L · {christmas ? 'Spawn Santa Dick' : halloween ? 'Spawn Count Dickula' : 'Spawn Little Dick'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={doCheatPunish}
+                    className="px-2.5 py-1 rounded-md text-xs font-medium border border-slate-500/40 bg-slate-500/10 text-slate-200 hover:bg-slate-500/20"
+                  >
+                    P · Toggle Punish
+                  </button>
+                </div>
+              </div>
             ) : null}
           </>
         ) : null}
@@ -4980,7 +5573,7 @@ function ToolboxKickGame({
   );
 }
 
-function IntroBubble({ open, onClose }) {
+function IntroBubble({ open, onClose, halloween = false, christmas = false }) {
   const [dontShowAgain, setDontShowAgain] = useState(true);
   if (!open) return null;
   return (
@@ -4991,8 +5584,8 @@ function IntroBubble({ open, onClose }) {
         className="w-full max-w-md"
       >
         <GameUiPanel
-          title="Little Dicks Toolbox"
-          header="yellow"
+          title={christmas ? "🎄 Miracle on Lion Way" : halloween ? "🎃 Nightmare on Lion Way" : "Little Dicks Toolbox"}
+          header={christmas ? "green" : halloween ? "red" : "yellow"}
           dark
           onClose={() => {
             if (dontShowAgain) markIntroSeen();
@@ -5000,25 +5593,51 @@ function IntroBubble({ open, onClose }) {
           }}
         >
           <div className="space-y-3">
-            <h2 id="toolbox-kick-intro-title" className="gui-font text-lg text-amber-100">
-              Little Dick is mad
+            <h2 id="toolbox-kick-intro-title" className={`gui-font text-lg ${christmas ? 'text-emerald-200' : halloween ? 'text-orange-200' : 'text-amber-100'}`}>
+              {christmas ? "🎄 Santa Dick's Christmas Workshop" : halloween ? "🎃 Little Dick's Halloween Nightmare" : "Little Dick is mad"}
             </h2>
             <img
               src="/toolbox-kick/little-dick.png"
               alt="Little Dick in an orange boilersuit, furious, holding a wrench"
               className="w-full rounded-xl border border-slate-600 object-cover object-top max-h-64"
             />
-            <div className="gui-card gui-card--dark px-4 py-3 space-y-2">
-              <p className="text-sm text-slate-200 leading-relaxed">
-                Little Dick is mad. Drivers keep defecting buses, he can&apos;t get the part to fit,
-                and he&apos;s just dropped his 10mm right in the engine bay. He&apos;s about to kick
-                his toolbox — see how far it can go!
-              </p>
-              <p className="text-sm text-rose-200/90 leading-relaxed">
-                Once a week he can chug an energy drink for Super Rage (+80% speed on one kick).
-                Everyone&apos;s fridge refills on Monday.
-              </p>
-            </div>
+            {christmas ? (
+              <div className="gui-card gui-card--dark px-4 py-3 space-y-2 border-emerald-500/40">
+                <p className="text-sm text-emerald-100 leading-relaxed">
+                  It&apos;s Christmas on Lion Way! The Northern Lights are shimmering over the snow-covered yard.
+                  The toolboxes are gift-wrapped in crimson and gold ribbon, Elf Chelle is dashing around wrapping
+                  presents, and drivers are warming up by jolly snowmen with mulled cider. Santa Dick is ready to
+                  boot the gift box into orbit!
+                </p>
+                <p className="text-sm text-amber-200/90 leading-relaxed">
+                  Watch out for candy-striped nog barrels, flying Rudolph reindeer, giant baubles, and Julie&apos;s
+                  Turbo Sleigh-Macan!
+                </p>
+              </div>
+            ) : halloween ? (
+              <div className="gui-card gui-card--dark px-4 py-3 space-y-2 border-orange-500/40">
+                <p className="text-sm text-orange-100 leading-relaxed">
+                  It&apos;s Halloween on Lion Way! A blood moon rises over the yard. The toolboxes have turned into
+                  cursed Jack-o&apos;-Lanterns, Chelle is flying past on a broomstick cackling wildly, and headless
+                  drivers wander the yard. Little Dick has had enough — boot the pumpkin into the fog!
+                </p>
+                <p className="text-sm text-amber-200/90 leading-relaxed">
+                  Super Rage drinks are bubbling with witch&apos;s brew. Spooky ghosts, tombstones and flying bats await.
+                </p>
+              </div>
+            ) : (
+              <div className="gui-card gui-card--dark px-4 py-3 space-y-2">
+                <p className="text-sm text-slate-200 leading-relaxed">
+                  Little Dick is mad. Drivers keep defecting buses, he can&apos;t get the part to fit,
+                  and he&apos;s just dropped his 10mm right in the engine bay. He&apos;s about to kick
+                  his toolbox — see how far it can go!
+                </p>
+                <p className="text-sm text-rose-200/90 leading-relaxed">
+                  Once a week he can chug an energy drink for Super Rage (+80% speed on one kick).
+                  Everyone&apos;s fridge refills on Monday.
+                </p>
+              </div>
+            )}
             <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer select-none">
               <input
                 type="checkbox"
@@ -5036,7 +5655,7 @@ function IntroBubble({ open, onClose }) {
                 onClose();
               }}
             >
-              Let&apos;s kick
+              {christmas ? "🎄 Let's kick (Festive mode)" : halloween ? "🎃 Let's kick (Spooky mode)" : "Let's kick"}
             </GameUiButton>
           </div>
         </GameUiPanel>
@@ -5045,13 +5664,25 @@ function IntroBubble({ open, onClose }) {
   );
 }
 
-function ModeSelect({ onPick, competitive = false, busy = false }) {
+function ModeSelect({ onPick, competitive = false, busy = false, halloween = false, christmas = false }) {
   return (
-    <GameUiPanel title="Pick your kick" header="blue" dark>
+    <GameUiPanel
+      title={christmas ? "🎄 Pick your festive kick" : halloween ? "🎃 Pick your cursed kick" : "Pick your kick"}
+      header={christmas ? "green" : halloween ? "red" : "blue"}
+      dark
+    >
       <p className="text-sm text-slate-200 mb-3">
-        How do you want to boot Dick&apos;s toolbox?
+        {christmas
+          ? 'How do you want to boot the gift-wrapped toolbox?'
+          : halloween
+            ? 'How do you want to boot the cursed Jack-o\'-Lantern?'
+            : 'How do you want to boot Dick\'s toolbox?'}
         {competitive
-          ? ' One competitive round per day — pick a mode, then your best distance hits today’s leaderboard. One energy drink per week (refills Monday).'
+          ? christmas
+            ? ' One competitive round per day — best distance tops Santa’s leaderboard. One festive energy drink per week (refills Monday).'
+            : halloween
+              ? ' One competitive round per day — best distance haunts today’s leaderboard. One witch’s brew per week (refills Monday).'
+              : ' One competitive round per day — pick a mode, then your best distance hits today’s leaderboard. One energy drink per week (refills Monday).'
           : ''}
       </p>
       <div className="grid sm:grid-cols-2 gap-3">
@@ -5083,9 +5714,14 @@ function ModeSelect({ onPick, competitive = false, busy = false }) {
   );
 }
 
-export function ToolboxKickSandbox() {
-  const [introOpen, setIntroOpen] = useState(() => !hasSeenIntro());
-  const [mode, setMode] = useState(null);
+export function ToolboxKickSandbox({ defaultHalloween = false, defaultChristmas = false } = {}) {
+  const [introOpen, setIntroOpen] = useState(() => !defaultHalloween && !defaultChristmas && !hasSeenIntro());
+  const [mode, setMode] = useState((defaultHalloween || defaultChristmas) ? 'careful' : null);
+  const [themeMode, setThemeMode] = useState(() => (
+    defaultChristmas ? 'christmas' : defaultHalloween ? 'halloween' : 'classic'
+  ));
+  const christmasMode = themeMode === 'christmas';
+  const halloweenMode = themeMode === 'halloween';
   /** Preview what staff see in Fun daily (not practice). */
   const [drinkPreview, setDrinkPreview] = useState('ready'); // ready | empty
   const todayKey = getLondonDayKey();
@@ -5127,7 +5763,83 @@ export function ToolboxKickSandbox() {
 
   return (
     <div className="space-y-4">
-      <IntroBubble open={introOpen} onClose={() => setIntroOpen(false)} />
+      <IntroBubble open={introOpen} onClose={() => setIntroOpen(false)} halloween={halloweenMode} christmas={christmasMode} />
+
+      <div className={`rounded-xl border px-4 py-3.5 space-y-2.5 ${
+        christmasMode
+          ? 'border-emerald-500/50 bg-gradient-to-r from-emerald-950/60 via-[#071822] to-red-950/50'
+          : halloweenMode
+            ? 'border-orange-500/50 bg-gradient-to-r from-purple-950/60 via-[#120722] to-orange-950/40'
+            : 'border-purple-500/30 bg-purple-500/5'
+      }`}
+      >
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className={`text-sm font-semibold flex items-center gap-2 ${
+              christmasMode ? 'text-emerald-200' : 'text-orange-200'
+            }`}
+            >
+              <span>
+                {christmasMode
+                  ? '🎄 Miracle on Lion Way · Christmas Theme'
+                  : halloweenMode
+                    ? '🎃 Nightmare on Lion Way · Halloween Theme'
+                    : '🔧 Little Dicks Toolbox · Theme Selector'}
+              </span>
+              <span className={`px-2 py-0.5 rounded-full text-[10px] uppercase tracking-wider font-bold ${
+                christmasMode
+                  ? 'bg-emerald-500/25 text-emerald-200 border border-emerald-400/50'
+                  : halloweenMode
+                    ? 'bg-orange-500/25 text-orange-200 border border-orange-400/50'
+                    : 'bg-slate-700/60 text-slate-300'
+              }`}
+              >
+                {christmasMode ? 'Christmas' : halloweenMode ? 'Halloween' : 'Classic'}
+              </span>
+            </p>
+            <p className="text-xs text-slate-300 mt-0.5">
+              {christmasMode
+                ? 'Northern Lights snowfield backdrop, gift-wrapped toolbox, Holiday Express coaches, Santa toy sacks, decorated mini trees, Rudolph reindeer, giant baubles, Sleigh-Macan, Elf Chelle, and Santa Dick!'
+                : 'Switch between Christmas (Miracle on Lion Way), Halloween (Nightmare on Lion Way), or Classic yard theme.'}
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setThemeMode('christmas')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition ${
+                christmasMode
+                  ? 'border-emerald-400/80 bg-emerald-500/30 text-emerald-100'
+                  : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/20'
+              }`}
+            >
+              🎄 Christmas
+            </button>
+            <button
+              type="button"
+              onClick={() => setThemeMode('halloween')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition ${
+                halloweenMode
+                  ? 'border-orange-400/80 bg-orange-500/30 text-orange-100'
+                  : 'border-orange-500/40 bg-orange-500/10 text-orange-200 hover:bg-orange-500/20'
+              }`}
+            >
+              🎃 Halloween
+            </button>
+            <button
+              type="button"
+              onClick={() => setThemeMode('classic')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition ${
+                themeMode === 'classic'
+                  ? 'border-sky-400/80 bg-sky-500/30 text-sky-100'
+                  : 'border-slate-500/40 bg-slate-500/10 text-slate-200 hover:bg-slate-500/20'
+              }`}
+            >
+              🔧 Classic
+            </button>
+          </div>
+        </div>
+      </div>
 
       {TOOLBOX_V2_DEV ? (
         <div className="rounded-xl border border-amber-500/40 bg-gradient-to-br from-amber-500/15 via-[#0b1220] to-orange-500/10 px-4 py-4 space-y-3">
@@ -5209,14 +5921,16 @@ export function ToolboxKickSandbox() {
       <EnergyDrinkBanner practice={false} superRage={previewRage} />
 
       {!mode ? (
-        <ModeSelect competitive onPick={setMode} />
+        <ModeSelect competitive onPick={setMode} halloween={halloweenMode} christmas={christmasMode} />
       ) : (
         <ToolboxKickGame
-          key={`${mode}-${drinkPreview}-v2`}
+          key={`${mode}-${drinkPreview}-${themeMode}-v2`}
           mode={mode}
           competitive={false}
           devCheats
           forceV2
+          halloween={halloweenMode}
+          christmas={christmasMode}
           dayKey={todayKey}
           recordMarkers={sandboxMarkers()}
           onFlightCoin={claimFlightCoin}
@@ -5226,6 +5940,14 @@ export function ToolboxKickSandbox() {
       )}
     </div>
   );
+}
+
+export function ToolboxKickHalloweenSandbox() {
+  return <ToolboxKickSandbox defaultHalloween />;
+}
+
+export function ToolboxKickChristmasSandbox() {
+  return <ToolboxKickSandbox defaultChristmas />;
 }
 
 export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = null, isAdmin = false }) {
@@ -5578,6 +6300,8 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
   const speedNerfed = punished;
   const modeLabel = game?.mode === 'allOrNothing' || mode === 'allOrNothing' ? 'All or nothing' : '3 goes';
   const rageReady = practice || Boolean(superRage?.available);
+  const isChristmasDaily = (dayKey || todayKey) >= TOOLBOX_CHRISTMAS_LIVE_FROM;
+  const isHalloweenDaily = !isChristmasDaily && (dayKey || todayKey) >= TOOLBOX_HALLOWEEN_LIVE_FROM;
 
   return (
     <div className="space-y-3 w-full max-w-none">
@@ -5589,6 +6313,22 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
         allowFuture={Boolean(isAdmin)}
         gameKey="toolboxkick"
       />
+
+      {isChristmasDaily ? (
+        <div className="rounded-xl border border-emerald-500/50 bg-gradient-to-r from-emerald-950/60 via-[#071822] to-red-950/50 px-4 py-2.5 flex items-center justify-between gap-2 shadow-lg shadow-emerald-950/30">
+          <span className="text-xs font-semibold text-emerald-200 flex items-center gap-2">
+            <span>🎄 Miracle on Lion Way · Christmas Special Active</span>
+          </span>
+          <span className="text-[11px] uppercase tracking-wider text-amber-300/90 font-mono">Festive event</span>
+        </div>
+      ) : isHalloweenDaily ? (
+        <div className="rounded-xl border border-orange-500/50 bg-gradient-to-r from-purple-950/60 via-[#120722] to-orange-950/40 px-4 py-2.5 flex items-center justify-between gap-2 shadow-lg shadow-orange-950/30">
+          <span className="text-xs font-semibold text-orange-200 flex items-center gap-2">
+            <span>🎃 Nightmare on Lion Way · Halloween Special Active</span>
+          </span>
+          <span className="text-[11px] uppercase tracking-wider text-orange-300/80 font-mono">Spooky event</span>
+        </div>
+      ) : null}
 
       {practice ? (
         <GameUiPanel title="Practice day" header="yellow" dark bodyClassName="!py-2">
@@ -5606,7 +6346,12 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
 
       {error ? <p className="gui-font-narrow text-sm text-rose-300">{error}</p> : null}
 
-      <IntroBubble open={introOpen} onClose={() => setIntroOpen(false)} />
+      <IntroBubble
+        open={introOpen}
+        onClose={() => setIntroOpen(false)}
+        halloween={isHalloweenDaily}
+        christmas={isChristmasDaily}
+      />
 
       {!alreadyDone && punished ? (
         <GameUiPanel title="Punishment active" header="red" dark bodyClassName="!py-2">
@@ -5634,7 +6379,18 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
       ) : null}
 
       {alreadyDone && !forfeited ? (
-        <GameUiPanel title="Today's kick logged" header="green" dark bodyClassName="!py-2">
+        <GameUiPanel
+          title={
+            isChristmasDaily
+              ? "Today's kick logged 🎄 Miracle on Lion Way"
+              : isHalloweenDaily
+                ? "Today's kick logged 🎃 Nightmare on Lion Way"
+                : "Today's kick logged"
+          }
+          header={isChristmasDaily ? "green" : isHalloweenDaily ? "yellow" : "green"}
+          dark
+          bodyClassName="!py-2"
+        >
           <p className="gui-font-narrow text-sm text-emerald-100 font-medium">
             {formatDistance(game.distanceM)}
             {punished ? ' · punished (10% speed)' : ''}
@@ -5653,16 +6409,24 @@ export function ToolboxKickDailyPanel({ currentUserUid = null, onAchievements = 
       ) : null}
 
       {!alreadyDone && !mode ? (
-        <ModeSelect competitive={!practice} onPick={startRound} busy={starting} />
+        <ModeSelect
+          competitive={!practice}
+          onPick={startRound}
+          busy={starting}
+          halloween={isHalloweenDaily}
+          christmas={isChristmasDaily}
+        />
       ) : null}
       </div>
 
       {!alreadyDone && mode ? (
         <div className="w-full">
         <ToolboxKickGame
-          key={`${dayKey}-${mode}-${speedNerfed ? 'nerf' : 'clean'}-${punished ? 'pun' : 'free'}-${runCount}`}
+          key={`${dayKey}-${mode}-${speedNerfed ? 'nerf' : 'clean'}-${punished ? 'pun' : 'free'}-${isChristmasDaily ? 'festive' : isHalloweenDaily ? 'spooky' : 'classic'}-${runCount}`}
           mode={mode}
           competitive={!practice}
+          halloween={isHalloweenDaily}
+          christmas={isChristmasDaily}
           onRoundComplete={practice ? null : submitRound}
           superRageAvailable={rageReady}
           onActivateSuperRage={practice ? null : activateSuperRage}

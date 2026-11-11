@@ -16,6 +16,7 @@ export function canManagePeopleCases(user) {
 
 /** Whether the case appears on the employee's My cases list. */
 export function caseIsVisibleToEmployee(caseItem = {}) {
+  if (caseItem.hrOnly && (caseItem.processFamily || '') === 'record') return false;
   if (caseItem.unpublishedFromEmployeeAt) return false;
   if (caseItem.publishedToEmployeeAt) return true;
   return Boolean(
@@ -96,6 +97,7 @@ export const PROCESS_FAMILIES = [
   { id: 'grievance', label: 'Grievance' },
   { id: 'vehicle_accident', label: 'Vehicle accident' },
   { id: 'samsara_coaching', label: 'Samsara Coaching' },
+  { id: 'return_to_work', label: 'Return to Work' },
   { id: 'record', label: 'Record' },
 ];
 
@@ -127,6 +129,11 @@ export const SAMSARA_STAGES = [
   'closed',
 ];
 
+export const RETURN_TO_WORK_STAGES = [
+  'interview',
+  'closed',
+];
+
 export const RECORD_STAGES = [
   'open',
   'closed',
@@ -150,6 +157,7 @@ export function stagesForFamily(processFamily) {
   if (processFamily === 'grievance') return GRIEVANCE_STAGES;
   if (processFamily === 'vehicle_accident') return ACCIDENT_STAGES;
   if (processFamily === 'samsara_coaching') return SAMSARA_STAGES;
+  if (processFamily === 'return_to_work') return RETURN_TO_WORK_STAGES;
   if (processFamily === 'record') return RECORD_STAGES;
   return DISCIPLINARY_STAGES;
 }
@@ -165,6 +173,7 @@ export function isEarlyInformalStyleClose(caseItem = {}) {
     return true;
   }
   if ((caseItem.processFamily || '') === 'samsara_coaching') return true;
+  if ((caseItem.processFamily || '') === 'return_to_work') return true;
   if ((caseItem.processFamily || '') === 'record') return true;
   const closed = caseItem.stage === 'closed' || caseItem.status === 'closed';
   if (!closed) return false;
@@ -189,6 +198,9 @@ export function stagesForCaseDisplay(processFamily, caseItem = {}) {
 /** Map legacy stage names onto the current wizard (matches backend). */
 export function normalizeStage(processFamily, stage) {
   const raw = String(stage || '').trim().toLowerCase();
+  if (processFamily === 'return_to_work') {
+    return RETURN_TO_WORK_STAGES.includes(raw) ? raw : 'interview';
+  }
   if (processFamily === 'grievance') {
     if (raw === 'intake') return 'acknowledged';
     if (raw === 'minutes_signoff') return 'meeting';

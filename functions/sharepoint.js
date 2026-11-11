@@ -234,13 +234,31 @@ async function resolveSharePointSiteUser(config, lookupId) {
   }
 }
 
+/**
+ * SharePoint / Graph date-only fields often arrive as UTC instants of UK local
+ * midnight (e.g. 16/07 BST → 2026-07-15T23:00:00Z). Taking the UTC YYYY-MM-DD
+ * prefix shifts those dates back one day — always resolve in Europe/London.
+ */
 function toIsoDateFromSharePoint(value) {
   if (!value) return '';
   const text = String(value).trim();
-  if (/^\d{4}-\d{2}-\d{2}/.test(text)) return text.slice(0, 10);
+  // Bare calendar date only — do not slice datetimes like 2026-07-15T23:00:00Z.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+
   const parsed = new Date(text);
   if (Number.isNaN(parsed.getTime())) return '';
-  return parsed.toISOString().slice(0, 10);
+
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/London',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(parsed);
+  const year = parts.find((part) => part.type === 'year')?.value;
+  const month = parts.find((part) => part.type === 'month')?.value;
+  const day = parts.find((part) => part.type === 'day')?.value;
+  if (!year || !month || !day) return '';
+  return `${year}-${month}-${day}`;
 }
 
 /**

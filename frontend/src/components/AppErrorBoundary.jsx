@@ -65,6 +65,16 @@ export default class AppErrorBoundary extends Component {
               ? 'This section failed to load. You can try again without leaving the portal, or go back to your profile.'
               : 'The page failed to load. You can try again, or go back to your profile. If this keeps happening, contact IT.'}
           </p>
+          {this.state.error && (
+            <div className="p-3 rounded-lg bg-base-300/80 border border-error/30 text-xs font-mono text-error break-all select-all">
+              <p className="font-bold">{String(this.state.error.name)}: {String(this.state.error.message)}</p>
+              {this.state.error.stack && (
+                <pre className="mt-1 text-[11px] opacity-80 max-h-40 overflow-auto whitespace-pre-wrap font-mono">
+                  {String(this.state.error.stack)}
+                </pre>
+              )}
+            </div>
+          )}
           <div className="flex flex-wrap gap-2">
             <button type="button" className="btn btn-primary btn-sm" onClick={this.handleRetry}>
               Try again

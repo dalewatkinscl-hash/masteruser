@@ -180,6 +180,54 @@ async function upsertAbsenceDeduction(db, record) {
   return id;
 }
 
+/**
+ * Remove bonus deductions for a payment run whose SharePoint source items
+ * are no longer in the live loyalty>0 absence/lateness set for the period.
+ */
+async function pruneMissingSharePointDeductions(db, {
+  paymentRunId = '',
+  paymentDate = '',
+  liveSharePointItemIds,
+} = {}) {
+  const liveIds = liveSharePointItemIds instanceof Set
+    ? liveSharePointItemIds
+    : new Set(
+      [...(liveSharePointItemIds || [])]
+        .map((id) => String(id || '').trim())
+        .filter(Boolean),
+    );
+
+  const existing = await loadAbsenceDeductionsForPaymentRun(db, {
+    paymentRunId,
+    paymentDate,
+  });
+
+  let removed = 0;
+  const removedItems = [];
+  for (const row of existing) {
+    const sharePointItemId = String(row.sharePointItemId || '').trim()
+      || String(row.id || '').replace(/^sp_/, '').trim();
+    if (!sharePointItemId) continue;
+    if (liveIds.has(sharePointItemId)) continue;
+
+    const docId = String(row.id || deductionDocId(sharePointItemId)).trim();
+    if (!docId) continue;
+    await db.collection(DEDUCTION_COLLECTION).doc(docId).delete();
+    removed += 1;
+    removedItems.push({
+      id: docId,
+      sharePointItemId,
+      employeeUid: row.employeeUid || '',
+      employeeNameSnapshot: row.employeeNameSnapshot || '',
+      eventDate: row.givenAt || '',
+      recordType: row.outcomePreset || '',
+      amount: row.amount || 0,
+    });
+  }
+
+  return { removed, removedItems };
+}
+
 async function loadAbsenceDeductionsForPaymentRun(db, { paymentRunId = '', paymentDate = '' } = {}) {
   const runId = String(paymentRunId || '').trim();
   const iso = String(paymentDate || '').slice(0, 10);
@@ -308,6 +356,22 @@ async function syncSharePointDeductionsForRun(db, sharePointConfig, {
     }
   }
 
+  // Prune needs the full live set for the period — not just incrementally modified rows.
+  let liveRows = logResult.rows || [];
+  let liveListResult = logResult;
+  if (effectiveModifiedSince) {
+    liveListResult = await listDisciplinaryProcessLogBonusItems(sharePointConfig, {
+      fromDate: calculationFrom,
+      toDate: calculationTo,
+    });
+    liveRows = liveListResult.rows || [];
+  }
+  const liveSharePointItemIds = new Set(
+    liveRows
+      .map((item) => String(item.sharePointItemId || '').trim())
+      .filter(Boolean),
+  );
+
   const [usersSnap, maps] = await Promise.all([
     db.collection('users').get(),
     loadSharePointEmployeeMaps(db),
@@ -367,6 +431,12 @@ async function syncSharePointDeductionsForRun(db, sharePointConfig, {
     matchedUidSet.add(matched.employeeUid);
   }
 
+  const pruneResult = await pruneMissingSharePointDeductions(db, {
+    paymentRunId: run.id || '',
+    paymentDate,
+    liveSharePointItemIds,
+  });
+
   const unmatched = [...unmatchedByKey.values()]
     .map((entry) => ({
       ...entry,
@@ -389,10 +459,12 @@ async function syncSharePointDeductionsForRun(db, sharePointConfig, {
     ok: true,
     activePeriod: period,
     scanned: logResult.count,
-    skippedZeroLoyalty: logResult.skippedZeroLoyalty,
+    skippedZeroLoyalty: liveListResult.skippedZeroLoyalty ?? logResult.skippedZeroLoyalty,
     applied,
     appliedAbsences,
     appliedLateness,
+    removed: pruneResult.removed,
+    removedItems: pruneResult.removedItems,
     matchedPeople: matchedUidSet.size,
     unmatchedCount: unmatched.length,
     unmatched,
@@ -450,6 +522,7 @@ module.exports = {
   resolveMappedEmployee,
   buildAbsenceDeductionRecord,
   upsertAbsenceDeduction,
+  pruneMissingSharePointDeductions,
   loadAbsenceDeductionsForPaymentDate,
   loadAbsenceDeductionsForPaymentRun,
   syncSharePointDeductionsForRun,

@@ -8,9 +8,10 @@ import ConnectionsPanel from './ConnectionsPanel';
 import { EncloseDailyPanel } from './EnclosePanel';
 import { LetterboxDailyPanel } from './LetterboxPanel';
 import { PipesDailyPanel } from './PipesPanel';
-import { ToolboxKickDailyPanel } from './ToolboxKickPanel';
+import { ToolboxKickDailyPanel, TOOLBOX_HALLOWEEN_LIVE_FROM, TOOLBOX_CHRISTMAS_LIVE_FROM } from './ToolboxKickPanel';
 import { WantedDailyPanel } from './WantedPanel';
 import { StackWalkDailyPanel } from './StackWalkPanel';
+import { CountryHolesDailyPanel } from './CountryHolesPanel';
 import AchievementsPanel from './AchievementsPanel';
 import FunDayPicker, { getLondonDayKey } from './FunDayPicker';
 import FunLeaderboardRow from './FunLeaderboardRow';
@@ -650,7 +651,11 @@ export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
     },
     toolboxkick: {
       id: 'toolboxkick',
-      title: 'Little Dicks Toolbox',
+      title: todayKey >= TOOLBOX_CHRISTMAS_LIVE_FROM
+        ? '🎄 Little Dicks Toolbox · Miracle on Lion Way'
+        : todayKey >= TOOLBOX_HALLOWEEN_LIVE_FROM
+          ? '🎃 Little Dicks Toolbox · Nightmare on Lion Way'
+          : 'Little Dicks Toolbox',
       render: () => (
         <ToolboxKickDailyPanel
           currentUserUid={currentUserUid}
@@ -681,6 +686,13 @@ export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
           onUnavailable={() => markGameUnavailable('stackwalk')}
           onRotationSync={syncRotationFromGame}
         />
+      ),
+    },
+    countryholes: {
+      id: 'countryholes',
+      title: 'Country Holes',
+      render: () => (
+        <CountryHolesDailyPanel />
       ),
     },
   };
@@ -747,6 +759,9 @@ export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
             : ''}
           {rotation.games?.includes('wanted')
             ? ' Wanted: one attempt — Standard then Impossible; fastest combined time wins.'
+            : ''}
+          {rotation.games?.includes('countryholes')
+            ? ' Country Holes: tap to aim, then Swing — stop the meter. Today’s course is new.'
             : ''}
           {rotation.games?.includes('stackwalk')
             ? " O Dell's Amazon Run: deliver parcels on foot — one more every 10 m; furthest wins."

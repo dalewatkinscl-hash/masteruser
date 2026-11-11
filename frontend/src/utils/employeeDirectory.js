@@ -36,6 +36,8 @@ export const GROUP_BY_OPTIONS = [
   { value: '', label: 'No grouping' },
   { value: 'department', label: 'Department' },
   { value: 'jobRole', label: 'Job title' },
+  { value: 'manager', label: 'Line manager' },
+  { value: 'isManager', label: 'Management' },
   { value: 'drivingStaff', label: 'Driving staff' },
   { value: 'status', label: 'Status' },
 ];
@@ -52,6 +54,8 @@ export const CORE_COLUMNS = [
 
 /** Extra columns available from the Columns picker. */
 export const OPTIONAL_COLUMNS = [
+  { id: 'manager', label: 'Line manager', filterPlaceholder: 'Filter manager…' },
+  { id: 'isManager', label: 'Management', filterPlaceholder: 'Yes / No…' },
   { id: 'dateOfBirth', label: 'D.O.B', filterPlaceholder: 'Filter D.O.B…' },
   { id: 'startDate', label: 'Start date', filterPlaceholder: 'Filter start…' },
   { id: 'contract', label: 'Contract', filterPlaceholder: 'Filter contract…' },
@@ -217,6 +221,10 @@ function getSortValue(employee, column) {
       const hours = Number(employee.employeeProfile?.annualContractedHours) || 0;
       return hours > 0 ? String(hours).padStart(6, '0') : EMPTY_SORT_VALUE;
     }
+    case 'manager':
+      return (employee.employeeProfile?.lineManagerName || employee.employeeProfile?.managerName || employee.employeeProfile?.manager || '').toLowerCase();
+    case 'isManager':
+      return (employee.employeeProfile?.isManager || employee.employeeProfile?.isManagement) ? '1' : '0';
     default:
       return '';
   }
@@ -242,12 +250,16 @@ export function getDisplayValue(employee, column) {
       return yesNoLabel(Boolean(employee.employeeProfile?.computerUser));
     case 'emergencyPhoneCover':
       return yesNoLabel(Boolean(employee.employeeProfile?.emergencyPhoneCover));
+    case 'isManager':
+      return yesNoLabel(Boolean(employee.employeeProfile?.isManager || employee.employeeProfile?.isManagement));
     case 'contract':
       return getEmployeeContractLabel(employee);
     case 'contractedHours': {
       const hours = Number(employee.employeeProfile?.annualContractedHours) || 0;
       return hours > 0 ? String(hours) : '—';
     }
+    case 'manager':
+      return employee.employeeProfile?.lineManagerName || employee.employeeProfile?.managerName || employee.employeeProfile?.manager || '—';
     default:
       return '—';
   }
@@ -259,6 +271,10 @@ export function getGroupKey(employee, groupBy) {
       return employee.employeeProfile?.department?.trim() || 'No department';
     case 'jobRole':
       return employee.employeeProfile?.jobRole?.trim() || 'No job title';
+    case 'manager':
+      return employee.employeeProfile?.lineManagerName || employee.employeeProfile?.managerName?.trim() || employee.employeeProfile?.manager?.trim() || 'No line manager';
+    case 'isManager':
+      return (employee.employeeProfile?.isManager || employee.employeeProfile?.isManagement) ? 'Management' : 'Non-management';
     case 'drivingStaff':
       return employee.employeeProfile?.drivingStaff ? 'Driving staff' : 'Non-driving staff';
     case 'status':
@@ -287,6 +303,7 @@ export function filterEmployees(employees, { search, columnFilters }) {
         yesNoLabel(Boolean(employee.employeeProfile?.drivingStaff)),
         yesNoLabel(Boolean(employee.employeeProfile?.computerUser)),
         yesNoLabel(Boolean(employee.employeeProfile?.emergencyPhoneCover)),
+        yesNoLabel(Boolean(employee.employeeProfile?.isManager || employee.employeeProfile?.isManagement)),
         getEmployeeContractLabel(employee),
         employee.employeeProfile?.annualContractedHours,
         getEmployeeStatusLabel(employee),

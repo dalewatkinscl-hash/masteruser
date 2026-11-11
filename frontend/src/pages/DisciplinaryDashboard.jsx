@@ -484,13 +484,22 @@ export default function DisciplinaryDashboard({ accidentsOnly = false }) {
         </div>
         <div className="flex gap-2 flex-wrap w-full sm:w-auto">
           {!accidentsOnly && (
-            <button
-              type="button"
-              onClick={() => navigate('/dashboard/hr/cases/bump-prompt')}
-              className="min-h-11 px-4 py-2.5 rounded-lg border border-[#1a2540] text-slate-200 text-sm hover:bg-[#0b1220]"
-            >
-              Prompt bump card
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={() => navigate('/dashboard/hr/cases/new?processFamily=return_to_work')}
+                className="min-h-11 px-4 py-2.5 rounded-lg border border-[#1a2540] text-slate-200 text-sm hover:bg-[#0b1220]"
+              >
+                Return to work
+              </button>
+              <button
+                type="button"
+                onClick={() => navigate('/dashboard/hr/cases/bump-prompt')}
+                className="min-h-11 px-4 py-2.5 rounded-lg border border-[#1a2540] text-slate-200 text-sm hover:bg-[#0b1220]"
+              >
+                Prompt bump card
+              </button>
+            </>
           )}
           <button
             type="button"

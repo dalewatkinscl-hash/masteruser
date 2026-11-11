@@ -12,6 +12,12 @@ function toYmdInt(isoDate) {
   return Number(String(isoDate).replace(/-/g, ''));
 }
 
+function ymdToIso(ymd) {
+  const s = String(ymd || '');
+  if (!/^\d{8}$/.test(s)) return null;
+  return `${s.slice(0, 4)}-${s.slice(4, 6)}-${s.slice(6, 8)}`;
+}
+
 function startOfMonth(d) {
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
 }
@@ -22,6 +28,22 @@ function endOfDayUtc(d) {
 
 function formatIso(d) {
   return d.toISOString().slice(0, 10);
+}
+
+/** Shift an ISO date by whole calendar years (UTC). */
+function shiftIsoYears(isoDate, years) {
+  if (!isIsoDate(isoDate)) return null;
+  const d = new Date(`${isoDate}T00:00:00Z`);
+  d.setUTCFullYear(d.getUTCFullYear() + years);
+  return formatIso(d);
+}
+
+/** Month-to-date window ending on `asOfIso` (defaults to today UTC). */
+function resolveMtdRange(asOfIso) {
+  const asOf = isIsoDate(asOfIso) ? asOfIso : formatIso(endOfDayUtc(new Date()));
+  const d = new Date(`${asOf}T00:00:00Z`);
+  const from = formatIso(startOfMonth(d));
+  return { from, to: asOf };
 }
 
 function monthsBack(period) {
@@ -68,5 +90,8 @@ function resolveDateRange(filters) {
 module.exports = {
   isIsoDate,
   toYmdInt,
+  ymdToIso,
+  shiftIsoYears,
+  resolveMtdRange,
   resolveDateRange,
 };

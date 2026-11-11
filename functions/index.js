@@ -56,7 +56,14 @@ const {
 } = require('./coins');
 const { createPeopleCasesApi } = require('./peopleCasesApi');
 const { createRollCallListsApi } = require('./rollCallLists');
+const { createMultiplayerHandlers } = require('./multiplayer');
 const { canManageCases } = require('./peopleCases');
+const {
+  getMyManagedStaffData,
+  setManagerCoverRecord,
+  cancelManagerCoverRecord,
+  getActiveCoverForManager,
+} = require('./lineManager');
 const {
   getLondonDayKey,
   getQuestionForDay,
@@ -222,13 +229,23 @@ const {
 } = require('./countryHoles');
 const {
   DEFAULT_DAILY_PLAY_MS: COACH_CAP_DAILY_PLAY_MS,
+  TIME_BOOST_COST: COACH_CAP_TIME_BOOST_COST,
   normalizeSeasonConfig: normalizeCoachCapSeasonConfig,
   loadPlayStatus: loadCoachCapPlayStatus,
   creditPlayHeartbeat: creditCoachCapPlayHeartbeat,
+  purchasePlayTimeBoost: purchaseCoachCapPlayTimeBoost,
   startCoachCapitalistSeason,
   emptyStarterState: emptyCoachCapitalistStarterState,
   getLondonDayKey: getCoachCapPlayDayKey,
+  listAdminPlayStatuses: listCoachCapAdminPlayStatuses,
+  adminAdjustPlayTime: adminAdjustCoachCapPlayTime,
 } = require('./coachCapitalistPlay');
+const {
+  getOrCreateSyndicateContract,
+  advanceSyndicateContract,
+  getSyndicateMultiplier,
+  isSyndicateDirector,
+} = require('./coachCapitalistSyndicate');
 const {
   JOB_TYPES: COACH_DEPOT_JOB_TYPES,
   emptyDepot: emptyCoachDepot,
@@ -290,10 +307,23 @@ const {
 } = require('./funMedals');
 const { assignJointRanks, ordinal } = require('./funLeaderboard');
 const {
+  WORLD_CUP_COLLECTION,
   aggregatePollResults,
+  applyMatchWinnerToBracket,
+  buildInitialMatches,
   canManagePolls,
   displayAnswer,
+  getLondonTimeParts,
+  getNextConfirmationDayKey,
+  getWorldCupMatchPollId,
+  isMatchConfirmationDue,
+  isWorldCupOwner,
+  loadWorldCupMatchVotes,
   normalizeAnswerKey,
+  revertWorldCupStep,
+  sanitizeContenderItem,
+  serializeWorldCup,
+  syncWorldCupProgress,
 } = require('./polls');
 const {
   COLLECTION: EMERGENCY_PHONE_COLLECTION,
@@ -791,7 +821,9 @@ const {
   hasFeatureAccess,
   canAccessFinanceReports,
 } = require('./featureAccess');
-const { getFinanceDashboard } = require('./financeReports/financeService');
+const { getFinanceDashboard, getWalkaroundComplianceReport } = require('./financeReports/financeService');
+const { getComparisonReport } = require('./financeReports/comparisonReportService');
+const { getCoachManagerWorksheet } = require('./financeReports/coachManagerService');
 
 function canAccessBonusAdmin(profile) {
   if (!profile) return false;
@@ -1341,13 +1373,16 @@ async function provisionHolidaysUser({ uid, email, fullName, role, profile }) {
           managerEmail: employeeProfile.managerEmail || '',
           isDriver: employeeProfile.isDriver === true,
           canDrive: employeeProfile.canDrive === true,
+          drivingStaff: employeeProfile.drivingStaff === true || employeeProfile.isDriver === true,
           startDate: employeeProfile.startDate || employeeProfile.hireDate || '',
           contractType: employeeProfile.contractType || '',
           hoursPerWeek: Number(employeeProfile.hoursPerWeek || 0),
+          annualContractedHours: Number(employeeProfile.annualContractedHours || 0),
+          bonusHoursMode: employeeProfile.bonusHoursMode || '',
+          proRataBase: employeeProfile.proRataBase || '',
           fte: Number(employeeProfile.fte || 0),
           termTimeWeeks: Number(employeeProfile.termTimeWeeks || 0),
           holidaySchemeId: employeeProfile.holidaySchemeId || '',
-          loyaltyDays: Number(employeeProfile.loyaltyDays || 0),
           carryOverDays: Number(employeeProfile.carryOverDays || 0),
           bankInLieuBalance: Number(employeeProfile.bankInLieuBalance || 0),
         },
@@ -1535,6 +1570,14 @@ exports.adminCreateUser = onRequest(
       const sanitizedPortalsAccess = sanitizePortalsAccess(portalsAccess);
       const sanitizedFeatureAccess = sanitizeFeatureAccess(featureAccess);
       const sanitizedPortalMappings = sanitizePortalMappings(portalMappings);
+      const employeeProfile = sanitizeEmployeeProfile(req.body.employeeProfile || {});
+      if (req.body.lineManagerId) {
+        employeeProfile.lineManagerId = String(req.body.lineManagerId).trim();
+        employeeProfile.managerUid = employeeProfile.lineManagerId;
+        employeeProfile.lineManagerName = String(req.body.lineManagerName || '').trim();
+        employeeProfile.managerName = employeeProfile.lineManagerName;
+        employeeProfile.manager = employeeProfile.lineManagerName;
+      }
 
       await db.collection('users').doc(userRecord.uid).set({
         email,
@@ -1545,6 +1588,7 @@ exports.adminCreateUser = onRequest(
         portalMappings: sanitizedPortalMappings,
         businessCommsEmail: contactFields.businessCommsEmail,
         contactEmail: contactFields.contactEmail,
+        employeeProfile,
       });
 
       await provisionPortalUsers(
@@ -2250,13 +2294,16 @@ exports.getUsersForHolidaysSync = onRequest(
               managerEmail: employeeProfile.managerEmail || '',
               isDriver: employeeProfile.isDriver === true,
               canDrive: employeeProfile.canDrive === true,
+              drivingStaff: employeeProfile.drivingStaff === true || employeeProfile.isDriver === true,
               startDate: employeeProfile.startDate || employeeProfile.hireDate || '',
               contractType: employeeProfile.contractType || '',
               hoursPerWeek: Number(employeeProfile.hoursPerWeek || 0),
+              annualContractedHours: Number(employeeProfile.annualContractedHours || 0),
+              bonusHoursMode: employeeProfile.bonusHoursMode || '',
+              proRataBase: employeeProfile.proRataBase || '',
               fte: Number(employeeProfile.fte || 0),
               termTimeWeeks: Number(employeeProfile.termTimeWeeks || 0),
               holidaySchemeId: employeeProfile.holidaySchemeId || '',
-              loyaltyDays: Number(employeeProfile.loyaltyDays || 0),
               carryOverDays: Number(employeeProfile.carryOverDays || 0),
               bankInLieuBalance: Number(employeeProfile.bankInLieuBalance || 0),
             },
@@ -3037,13 +3084,18 @@ exports.getEmployeeProfile = onRequest(
       }
 
       const dayKey = getLondonDayKey();
-      const [kudosToday, kudosHistory] = await Promise.all([
+      const lineManagerId = userProfile.employeeProfile?.lineManagerId;
+      const [kudosToday, kudosHistory, lineManagerActiveCover] = await Promise.all([
         loadKudosForRecipient(db, targetUid, dayKey),
         loadKudosHistoryForRecipient(db, targetUid, { limit: 40 }),
+        lineManagerId ? getActiveCoverForManager(db, lineManagerId) : Promise.resolve(null),
       ]);
 
       res.status(200).json({
-        profile: buildEmployeeProfileResponse(userProfile),
+        profile: {
+          ...buildEmployeeProfileResponse(userProfile),
+          lineManagerActiveCover: lineManagerActiveCover || null,
+        },
         kudosToday,
         kudosHistory,
         permissions: {
@@ -3110,6 +3162,27 @@ exports.updateEmployeeProfile = onRequest(
           existing.employeeProfile,
           employeeProfile,
         );
+
+        if (employeeProfile.lineManagerId !== undefined) {
+          const lmid = String(employeeProfile.lineManagerId || '').trim();
+          if (lmid) {
+            const mgrSnap = await db.collection('users').doc(lmid).get();
+            if (mgrSnap.exists) {
+              const mgrData = mgrSnap.data() || {};
+              firestoreUpdate.employeeProfile.lineManagerId = lmid;
+              firestoreUpdate.employeeProfile.managerUid = lmid;
+              firestoreUpdate.employeeProfile.lineManagerName = mgrData.fullName || firestoreUpdate.employeeProfile.lineManagerName || '';
+              firestoreUpdate.employeeProfile.managerName = firestoreUpdate.employeeProfile.lineManagerName;
+              firestoreUpdate.employeeProfile.manager = firestoreUpdate.employeeProfile.lineManagerName;
+            }
+          } else {
+            firestoreUpdate.employeeProfile.lineManagerId = '';
+            firestoreUpdate.employeeProfile.managerUid = '';
+            firestoreUpdate.employeeProfile.lineManagerName = '';
+            firestoreUpdate.employeeProfile.managerName = '';
+            firestoreUpdate.employeeProfile.manager = '';
+          }
+        }
         if (themePreference !== undefined) {
           firestoreUpdate.themePreference = normalizeThemePreference(themePreference);
         }
@@ -3239,6 +3312,189 @@ exports.updateEmployeeProfile = onRequest(
     } catch (error) {
       console.error('updateEmployeeProfile failed', error);
       res.status(500).json({ error: 'Failed to update employee profile.' });
+    }
+  }),
+);
+
+// GET /api/getMyManagedStaff
+// Returns direct staff, staff covered for other managers, outgoing covers, and colleagues.
+exports.getMyManagedStaff = onRequest(
+  { region: 'europe-west2' },
+  withCors(async (req, res) => {
+    if (req.method !== 'GET') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
+
+    const session = await getVerifiedSessionUser(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+
+    try {
+      const requestedManagerUid = typeof req.query.managerUid === 'string' && req.query.managerUid.trim()
+        ? req.query.managerUid.trim()
+        : null;
+
+      // Only admins may query managed staff on behalf of someone else
+      if (requestedManagerUid && requestedManagerUid !== session.profile.uid && !canManagePortalAccess(session.profile)) {
+        res.status(403).json({ error: 'You can only view your own managed staff.' });
+        return;
+      }
+
+      const targetManagerProfile = requestedManagerUid && requestedManagerUid !== session.profile.uid
+        ? (await getUserProfile(requestedManagerUid)) || session.profile
+        : session.profile;
+
+      const data = await getMyManagedStaffData(db, targetManagerProfile, targetManagerProfile.uid);
+
+      if (session.verified?.sessionCookie) {
+        setSharedSessionCookie(res, session.verified.sessionCookie);
+      }
+
+      res.status(200).json(data);
+    } catch (error) {
+      console.error('getMyManagedStaff failed', error);
+      res.status(500).json({ error: 'Failed to load managed staff.' });
+    }
+  }),
+);
+
+// POST /api/setManagerCover
+// Reassigns staff temporarily to a cover manager for a fixed period.
+exports.setManagerCover = onRequest(
+  { region: 'europe-west2' },
+  withCors(async (req, res) => {
+    if (req.method !== 'POST') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
+
+    const session = await getVerifiedSessionUser(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+
+    const {
+      managerUid: rawManagerUid,
+      coverManagerUid,
+      startDate,
+      endDate,
+      reason,
+      notes,
+    } = req.body || {};
+
+    const managerUid = typeof rawManagerUid === 'string' && rawManagerUid.trim()
+      ? rawManagerUid.trim()
+      : session.profile.uid;
+
+    if (managerUid !== session.profile.uid && !canManagePortalAccess(session.profile)) {
+      res.status(403).json({ error: 'Only admins can set temporary cover for another manager.' });
+      return;
+    }
+
+    if (!coverManagerUid || typeof coverManagerUid !== 'string') {
+      res.status(400).json({ error: 'Cover manager is required.' });
+      return;
+    }
+
+    try {
+      const [managerDoc, coverMgrDoc] = await Promise.all([
+        db.collection('users').doc(managerUid).get(),
+        db.collection('users').doc(coverManagerUid.trim()).get(),
+      ]);
+
+      if (!managerDoc.exists) {
+        res.status(404).json({ error: 'Manager not found.' });
+        return;
+      }
+      if (!coverMgrDoc.exists) {
+        res.status(404).json({ error: 'Selected cover manager not found.' });
+        return;
+      }
+
+      const managerData = managerDoc.data() || {};
+      const coverMgrData = coverMgrDoc.data() || {};
+
+      const cover = await setManagerCoverRecord(db, {
+        managerUid,
+        managerName: managerData.fullName || session.profile.fullName || '',
+        coverManagerUid: coverManagerUid.trim(),
+        coverManagerName: coverMgrData.fullName || '',
+        startDate,
+        endDate,
+        reason,
+        notes,
+        createdByUid: session.profile.uid,
+        createdByName: session.profile.fullName || '',
+      });
+
+      if (session.verified?.sessionCookie) {
+        setSharedSessionCookie(res, session.verified.sessionCookie);
+      }
+
+      res.status(200).json({ success: true, cover, message: 'Temporary cover configured successfully.' });
+    } catch (error) {
+      console.error('setManagerCover failed', error);
+      res.status(400).json({ error: error.message || 'Failed to set temporary cover.' });
+    }
+  }),
+);
+
+// POST /api/cancelManagerCover
+// Cancels or ends early an active cover arrangement.
+exports.cancelManagerCover = onRequest(
+  { region: 'europe-west2' },
+  withCors(async (req, res) => {
+    if (req.method !== 'POST') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
+
+    const session = await getVerifiedSessionUser(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+
+    const { coverId } = req.body || {};
+    if (!coverId || typeof coverId !== 'string') {
+      res.status(400).json({ error: 'coverId is required.' });
+      return;
+    }
+
+    try {
+      const coverDoc = await db.collection('line_manager_covers').doc(coverId.trim()).get();
+      if (!coverDoc.exists) {
+        res.status(404).json({ error: 'Cover arrangement not found.' });
+        return;
+      }
+
+      const coverData = coverDoc.data() || {};
+      const isManager = coverData.managerUid === session.profile.uid;
+      const isCover = coverData.coverManagerUid === session.profile.uid;
+      const isAdmin = canManagePortalAccess(session.profile);
+
+      if (!isManager && !isCover && !isAdmin) {
+        res.status(403).json({ error: 'You do not have permission to cancel this cover.' });
+        return;
+      }
+
+      const result = await cancelManagerCoverRecord(db, {
+        coverId: coverId.trim(),
+        cancelledByUid: session.profile.uid,
+      });
+
+      if (session.verified?.sessionCookie) {
+        setSharedSessionCookie(res, session.verified.sessionCookie);
+      }
+
+      res.status(200).json(result);
+    } catch (error) {
+      console.error('cancelManagerCover failed', error);
+      res.status(500).json({ error: error.message || 'Failed to cancel cover.' });
     }
   }),
 );
@@ -4335,14 +4591,39 @@ const rollCallListsApi = createRollCallListsApi({
   getVerifiedSessionUser,
   getEffectivePortalRole,
   canViewAllEmployeeProfiles,
+  gmailSecrets: [gmailUser, gmailPass],
+  getGmailCredentials: () => ({
+    user: gmailUser.value(),
+    pass: gmailPass.value(),
+  }),
 });
 
 exports.getRollCallLists = rollCallListsApi.getRollCallLists;
 exports.getRollCallList = rollCallListsApi.getRollCallList;
 exports.createRollCallList = rollCallListsApi.createRollCallList;
+exports.distributeRollCallList = rollCallListsApi.distributeRollCallList;
 exports.updateRollCallList = rollCallListsApi.updateRollCallList;
 exports.setRollCallMemberTick = rollCallListsApi.setRollCallMemberTick;
+exports.setRollCallMemberStatus = rollCallListsApi.setRollCallMemberStatus;
 exports.deleteRollCallList = rollCallListsApi.deleteRollCallList;
+exports.getMyPendingRollCalls = rollCallListsApi.getMyPendingRollCalls;
+exports.markRollCallSeen = rollCallListsApi.markRollCallSeen;
+exports.respondRollCall = rollCallListsApi.respondRollCall;
+
+const multiplayerApi = createMultiplayerHandlers({
+  db,
+  admin,
+  onRequest,
+  withCors,
+  getVerifiedSessionUser,
+});
+exports.listMultiplayerGames = multiplayerApi.listMultiplayerGames;
+exports.listMultiplayerLobbies = multiplayerApi.listMultiplayerLobbies;
+exports.createMultiplayerMatch = multiplayerApi.createMultiplayerMatch;
+exports.joinMultiplayerMatch = multiplayerApi.joinMultiplayerMatch;
+exports.leaveMultiplayerMatch = multiplayerApi.leaveMultiplayerMatch;
+exports.getMultiplayerMatch = multiplayerApi.getMultiplayerMatch;
+exports.multiplayerMove = multiplayerApi.multiplayerMove;
 
 // GET → verify SharePoint connectivity and return the resolved folder path for an employee.
 exports.getSharePointDisciplinaryPath = onRequest(
@@ -11784,7 +12065,7 @@ exports.adminBackfillFunMedals = onRequest(
 exports.adminClawbackFunWinCoins = onRequest(
   {
     region: 'europe-west2',
-    timeoutSeconds: 120,
+    timeoutSeconds: 300,
     memory: '512MiB',
   },
   withCors(async (req, res) => {
@@ -11921,10 +12202,14 @@ function sanitizeCoachCapitalistSave(raw) {
       progress: Array.isArray(d.progress) ? d.progress.map((n) => Math.max(0, Math.min(1, Number(n) || 0))).slice(0, 16) : [],
       running: Array.isArray(d.running) ? d.running.map(Boolean).slice(0, 16) : [],
       lastTick: Number(d.lastTick) || Date.now(),
+      frenzyUntil: Math.max(0, Number(d.frenzyUntil) || 0),
+      frenzySpeedMult: Number(d.frenzySpeedMult) || 2,
+      underdogBoostUntil: Math.max(0, Number(d.underdogBoostUntil) || 0),
       unlocked: id === 'local' ? true : Boolean(d.unlocked),
+      syndicatesCompleted: Math.max(0, Math.floor(Number(d.syndicatesCompleted ?? raw.syndicatesCompleted) || 0)),
     };
   }
-  const buyMode = raw.buyMode === 10 || raw.buyMode === 100 || raw.buyMode === 'max' ? raw.buyMode : 1;
+  const buyMode = raw.buyMode === 10 || raw.buyMode === 100 || raw.buyMode === 'max' || raw.buyMode === 'next' ? raw.buyMode : 1;
   const activeDepot = COACH_CAP_DEPOT_IDS.includes(raw.activeDepot) ? raw.activeDepot : 'local';
   // Shared wallet (migrate from per-depot piles if account cash missing)
   let cash = Math.max(0, Number(raw.cash) || 0);
@@ -11945,6 +12230,7 @@ function sanitizeCoachCapitalistSave(raw) {
       angelsSpent += Math.max(0, Number(depots[id]?.angelsSpent) || 0);
     }
   }
+  const syndicatesCompleted = Math.max(0, Math.floor(Number(raw.syndicatesCompleted) || 0));
   return {
     version: 1,
     activeDepot,
@@ -11953,24 +12239,73 @@ function sanitizeCoachCapitalistSave(raw) {
     angels,
     angelsSpent,
     depots,
+    syndicatesCompleted,
   };
 }
 
-async function upsertCoachCapitalistScore(uid, profile, lifetimeEarnings, { forceExact = false } = {}) {
+function coachCapitalistClaimedAngels(state) {
+  if (!state || typeof state !== 'object') return 0;
+  return Math.max(0, Number(state.angels) || 0) + Math.max(0, Number(state.angelsSpent) || 0);
+}
+
+function coachCapitalistUnlockedDepots(state) {
+  if (!state || typeof state !== 'object' || !state.depots) return ['local'];
+  const out = ['local'];
+  const localD = state.depots.local || {};
+  const regD = state.depots.regional || {};
+  const natD = state.depots.national || {};
+  const localAngelUps = Array.isArray(localD.angelUpgrades) ? localD.angelUpgrades : [];
+  const regAngelUps = Array.isArray(regD.angelUpgrades) ? regD.angelUpgrades : [];
+  const regUnlocked = Boolean(regD.unlocked)
+    || Math.max(Number(localD.sessionEarnings) || 0, Number(localD.lifetimeEarnings) || 0) >= 1e12
+    || (Number(regD.lifetimeEarnings) || 0) > 0
+    || localAngelUps.includes('angel-early-perm-reg');
+  if (regUnlocked) out.push('regional');
+  const natUnlocked = Boolean(natD.unlocked)
+    || Math.max(Number(regD.sessionEarnings) || 0, Number(regD.lifetimeEarnings) || 0) >= 1e16
+    || (Number(natD.lifetimeEarnings) || 0) > 0
+    || regAngelUps.includes('reg-angel-early-perm-nat');
+  if (natUnlocked) out.push('national');
+  return out;
+}
+
+async function upsertCoachCapitalistScore(
+  uid,
+  profile,
+  lifetimeEarnings,
+  { forceExact = false, claimedAngels = null, unlockedDepots = null } = {},
+) {
   const life = Math.max(0, Number(lifetimeEarnings) || 0);
   const ref = db.collection(COACH_CAPITALIST_SCORES).doc(uid);
   const prev = await ref.get();
-  const previous = prev.exists ? Number(prev.data()?.lifetimeEarnings) || 0 : 0;
+  const prevData = prev.exists ? (prev.data() || {}) : {};
+  const previous = prev.exists ? Number(prevData.lifetimeEarnings) || 0 : 0;
   const next = forceExact ? life : Math.max(previous, life);
+  const resolvedClaimed = claimedAngels != null
+    ? Math.max(0, Number(claimedAngels) || 0)
+    : Math.max(0, Number(prevData.claimedAngels) || 0);
+  const prevDepots = Array.isArray(prevData.unlockedDepots) ? prevData.unlockedDepots : ['local'];
+  const nextDepotsRaw = Array.isArray(unlockedDepots) ? unlockedDepots : prevDepots;
+  const resolvedDepots = COACH_CAP_DEPOT_IDS.filter(
+    (id) => id === 'local' || prevDepots.includes(id) || nextDepotsRaw.includes(id),
+  );
   const payload = {
     uid,
     fullName: profile?.fullName || profile?.email || 'Employee',
     lifetimeEarnings: next,
     lifetimeSort: coachCapitalistLifetimeSortKey(next),
+    claimedAngels: resolvedClaimed,
+    unlockedDepots: resolvedDepots,
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   };
   await ref.set(payload, { merge: true });
-  return { lifetimeEarnings: next, updated: next !== previous, previous };
+  return {
+    lifetimeEarnings: next,
+    claimedAngels: resolvedClaimed,
+    unlockedDepots: resolvedDepots,
+    updated: next !== previous,
+    previous,
+  };
 }
 
 async function loadCoachCapitalistLeaderboard(limit = 100) {
@@ -11987,6 +12322,8 @@ async function loadCoachCapitalistLeaderboard(limit = 100) {
         uid: doc.id,
         fullName: data.fullName || 'Employee',
         lifetimeEarnings: Number(data.lifetimeEarnings) || 0,
+        claimedAngels: data.claimedAngels != null ? Math.max(0, Number(data.claimedAngels) || 0) : null,
+        unlockedDepots: Array.isArray(data.unlockedDepots) ? data.unlockedDepots : null,
         updatedAt: data.updatedAt?.toDate?.()?.toISOString?.() || null,
       };
     });
@@ -11999,6 +12336,8 @@ async function loadCoachCapitalistLeaderboard(limit = 100) {
         uid: doc.id,
         fullName: data.fullName || 'Employee',
         lifetimeEarnings: Number(data.lifetimeEarnings) || 0,
+        claimedAngels: data.claimedAngels != null ? Math.max(0, Number(data.claimedAngels) || 0) : null,
+        unlockedDepots: Array.isArray(data.unlockedDepots) ? data.unlockedDepots : null,
         updatedAt: data.updatedAt?.toDate?.()?.toISOString?.() || null,
       };
     });
@@ -12009,7 +12348,33 @@ async function loadCoachCapitalistLeaderboard(limit = 100) {
     if (b.lifetimeEarnings !== a.lifetimeEarnings) return b.lifetimeEarnings - a.lifetimeEarnings;
     return String(a.fullName || '').localeCompare(String(b.fullName || ''));
   });
-  return rows.slice(0, cap);
+  const topRows = rows.slice(0, cap);
+
+  // Backfill claimedAngels / unlockedDepots from COACH_CAPITALIST_SAVES for older score docs
+  const missingRows = topRows.filter((r) => (r.claimedAngels == null || !Array.isArray(r.unlockedDepots)) && r.uid);
+  if (missingRows.length > 0) {
+    try {
+      const refs = missingRows.map((r) => db.collection(COACH_CAPITALIST_SAVES).doc(r.uid));
+      const snaps = await db.getAll(...refs);
+      snaps.forEach((s, idx) => {
+        const target = missingRows[idx];
+        if (!target) return;
+        const st = s.exists ? s.data()?.state : null;
+        if (target.claimedAngels == null) target.claimedAngels = coachCapitalistClaimedAngels(st);
+        if (!Array.isArray(target.unlockedDepots)) target.unlockedDepots = coachCapitalistUnlockedDepots(st);
+      });
+    } catch {
+      for (const r of missingRows) {
+        if (r.claimedAngels == null) r.claimedAngels = 0;
+        if (!Array.isArray(r.unlockedDepots)) r.unlockedDepots = ['local'];
+      }
+    }
+  }
+  return topRows.map((r) => ({
+    ...r,
+    claimedAngels: Math.max(0, Number(r.claimedAngels) || 0),
+    unlockedDepots: Array.isArray(r.unlockedDepots) && r.unlockedDepots.length > 0 ? r.unlockedDepots : ['local'],
+  }));
 }
 
 async function coachCapitalistRankForUid(uid, lifetimeEarnings) {
@@ -12060,6 +12425,50 @@ async function awardCoachCapitalistMilestones(uid, profile, lifetimeEarnings) {
   return awarded;
 }
 
+const COACH_CAP_UPPER_ACRONYMS = new Set([
+  'XL', 'VIP', 'EV', 'AI', 'CPC', 'OBD', 'ANPR', 'USB', 'PA', 'CCTV', 'IPO', 'FTSE', 'UK', 'EU', 'P+R', 'GT', 'HD',
+]);
+const COACH_CAP_LOWER_WORDS = new Set([
+  'a', 'an', 'and', 'as', 'at', 'by', 'for', 'in', 'of', 'on', 'or', 'the', 'to', 'with',
+]);
+const COACH_CAP_SPECIAL_WORDS = {
+  'wi-fi': 'Wi-Fi',
+  'adblue': 'AdBlue',
+};
+
+function formatCoachCapTitleCase(input) {
+  const raw = String(input || '').trim().replace(/\s+/g, ' ');
+  if (!raw) return '';
+  const words = raw.split(' ');
+  return words
+    .map((word, wIdx) => {
+      const lowerWhole = word.toLowerCase();
+      if (COACH_CAP_SPECIAL_WORDS[lowerWhole]) return COACH_CAP_SPECIAL_WORDS[lowerWhole];
+      if (COACH_CAP_UPPER_ACRONYMS.has(word.toUpperCase())) return word.toUpperCase();
+      if (wIdx > 0 && wIdx < words.length - 1 && COACH_CAP_LOWER_WORDS.has(lowerWhole)) {
+        return lowerWhole;
+      }
+      // Handle hyphenated or slash-separated segments (e.g. tri-axle -> Tri-Axle)
+      return word
+        .split(/([-–/])/)
+        .map((seg) => {
+          if (seg === '-' || seg === '–' || seg === '/') return seg;
+          if (!seg) return seg;
+          const upper = seg.toUpperCase();
+          if (COACH_CAP_UPPER_ACRONYMS.has(upper)) return upper;
+          const lower = seg.toLowerCase();
+          if (COACH_CAP_SPECIAL_WORDS[lower]) return COACH_CAP_SPECIAL_WORDS[lower];
+          // Preserve leading symbols like ×3 or +10
+          if (/^[×+\d]/.test(seg)) {
+            return seg.replace(/[a-zA-Z]+/g, (m) => m.charAt(0).toUpperCase() + m.slice(1).toLowerCase());
+          }
+          return seg.charAt(0).toUpperCase() + seg.slice(1).toLowerCase();
+        })
+        .join('');
+    })
+    .join(' ');
+}
+
 function normalizeCoachCapitalistNameConfig(raw) {
   const out = { depots: {} };
   const src = raw && typeof raw === 'object' ? raw : {};
@@ -12071,20 +12480,28 @@ function normalizeCoachCapitalistNameConfig(raw) {
     const bizSrc = entry.businesses && typeof entry.businesses === 'object' ? entry.businesses : {};
     for (const [id, name] of Object.entries(bizSrc)) {
       const cleanId = String(id || '').trim().slice(0, 80);
-      const cleanName = String(name || '').trim().slice(0, 80);
+      const cleanName = formatCoachCapTitleCase(String(name || '').trim()).slice(0, 80);
       if (cleanId && cleanName) businesses[cleanId] = cleanName;
+    }
+    const art = {};
+    const artSrc = entry.art && typeof entry.art === 'object' ? entry.art : {};
+    for (const [id, artVal] of Object.entries(artSrc)) {
+      const cleanId = String(id || '').trim().slice(0, 80);
+      const cleanArt = String(artVal || '').trim().slice(0, 160);
+      if (cleanId && cleanArt) art[cleanId] = cleanArt;
     }
     const upgrades = {};
     const upSrc = entry.upgrades && typeof entry.upgrades === 'object' ? entry.upgrades : {};
     for (const [id, name] of Object.entries(upSrc)) {
       const cleanId = String(id || '').trim().slice(0, 80);
-      const cleanName = String(name || '').trim().slice(0, 80);
+      const cleanName = formatCoachCapTitleCase(String(name || '').trim()).slice(0, 80);
       if (cleanId && cleanName) upgrades[cleanId] = cleanName;
     }
-    const depotName = String(entry.name || '').trim().slice(0, 80);
+    const depotName = formatCoachCapTitleCase(String(entry.name || '').trim()).slice(0, 80);
     out.depots[depotId] = {
       ...(depotName ? { name: depotName } : {}),
       businesses,
+      art,
       upgrades,
     };
   }
@@ -12105,16 +12522,32 @@ exports.getCoachCapitalistConfig = onRequest(
       return;
     }
     try {
-      const snap = await db.doc(COACH_CAPITALIST_CONFIG_DOC).get();
+      const uid = session.profile.uid;
+      const [snap, syndicateContract, userSaveSnap] = await Promise.all([
+        db.doc(COACH_CAPITALIST_CONFIG_DOC).get(),
+        getOrCreateSyndicateContract(db),
+        db.collection(COACH_CAPITALIST_SAVES).doc(uid).get(),
+      ]);
       const data = snap.exists ? (snap.data() || {}) : {};
+      const userData = userSaveSnap.exists ? (userSaveSnap.data() || {}) : {};
       const season = normalizeCoachCapSeasonConfig(data);
+      const syndicatesCompleted = Math.max(
+        0,
+        Math.floor(Number(userData.syndicatesCompleted ?? userData.state?.syndicatesCompleted ?? 0)),
+      );
       res.status(200).json({
         names: normalizeCoachCapitalistNameConfig(data.names || data),
+        events: Array.isArray(data.events) ? data.events : null,
         seasonId: season.seasonId,
         dailyPlayCapMs: season.dailyPlayCapMs,
         awayEarningsEnabled: season.awayEarningsEnabled,
         forceResetToken: data.forceResetToken ? String(data.forceResetToken) : null,
         previousSeasonWrapup: data.previousSeasonWrapup || null,
+        syndicateContract: syndicateContract || null,
+        pendingSyndicateReward: userData.pendingSyndicateReward || null,
+        syndicatesCompleted,
+        uid,
+        isSyndicateDirector: isSyndicateDirector(session.profile),
       });
     } catch (error) {
       console.error('getCoachCapitalistConfig failed', error);
@@ -12141,14 +12574,60 @@ exports.saveCoachCapitalistConfig = onRequest(
       return;
     }
     try {
-      const names = normalizeCoachCapitalistNameConfig(req.body?.names || req.body || {});
-      await db.doc(COACH_CAPITALIST_CONFIG_DOC).set({
-        names,
+      const action = String(req.body?.action || '').trim();
+      if (action === 'listPlayTime') {
+        const configSnap = await db.doc(COACH_CAPITALIST_CONFIG_DOC).get();
+        const configData = configSnap.exists ? (configSnap.data() || {}) : {};
+        const season = normalizeCoachCapSeasonConfig(configData);
+        const result = await listCoachCapAdminPlayStatuses(db, {
+          seasonId: season.seasonId,
+          dailyPlayCapMs: season.dailyPlayCapMs,
+          dayKey: getCoachCapPlayDayKey(),
+        });
+        res.status(200).json(result);
+        return;
+      }
+      if (action === 'grantPlayTime') {
+        const configSnap = await db.doc(COACH_CAPITALIST_CONFIG_DOC).get();
+        const configData = configSnap.exists ? (configSnap.data() || {}) : {};
+        const season = normalizeCoachCapSeasonConfig(configData);
+        const dayKey = getCoachCapPlayDayKey();
+        const grantRes = await adminAdjustCoachCapPlayTime(db, {
+          uids: req.body?.uids || req.body?.uid,
+          deltaBonusMs: req.body?.deltaBonusMs,
+          mode: req.body?.mode || 'add',
+          resetPlayed: Boolean(req.body?.resetPlayed),
+          resetWeeklyBoosts: Boolean(req.body?.resetWeeklyBoosts),
+          reason: req.body?.reason || '',
+          seasonId: season.seasonId,
+          dailyPlayCapMs: season.dailyPlayCapMs,
+          FieldValue: admin.firestore.FieldValue,
+          adminUid: session.profile.uid,
+          adminName: session.profile.fullName || session.profile.email || 'Admin',
+          dayKey,
+        });
+        const listRes = await listCoachCapAdminPlayStatuses(db, {
+          seasonId: season.seasonId,
+          dailyPlayCapMs: season.dailyPlayCapMs,
+          dayKey,
+        });
+        res.status(200).json({ ...grantRes, ...listRes });
+        return;
+      }
+
+      const updateData = {
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
         updatedByUid: session.profile.uid,
         updatedByName: session.profile.fullName || session.profile.email || '',
-      }, { merge: true });
-      res.status(200).json({ names });
+      };
+      if (req.body?.names !== undefined) {
+        updateData.names = normalizeCoachCapitalistNameConfig(req.body.names);
+      }
+      if (Array.isArray(req.body?.events)) {
+        updateData.events = req.body.events;
+      }
+      await db.doc(COACH_CAPITALIST_CONFIG_DOC).set(updateData, { merge: true });
+      res.status(200).json({ names: updateData.names, events: updateData.events });
     } catch (error) {
       console.error('saveCoachCapitalistConfig failed', error);
       res.status(500).json({ error: error.message || 'Failed to save Coach Capitalist config.' });
@@ -12215,9 +12694,26 @@ exports.getCoachCapitalistLeaderboard = onRequest(
       const leaderboard = await loadCoachCapitalistLeaderboard(limit);
       const uid = session.profile.uid;
       const mineSnap = await db.collection(COACH_CAPITALIST_SCORES).doc(uid).get();
+      const mineData = mineSnap.exists ? (mineSnap.data() || {}) : {};
       const myLife = mineSnap.exists
-        ? Number(mineSnap.data()?.lifetimeEarnings) || 0
+        ? Number(mineData.lifetimeEarnings) || 0
         : 0;
+      let myClaimed = mineData.claimedAngels != null
+        ? Math.max(0, Number(mineData.claimedAngels) || 0)
+        : null;
+      if (myClaimed == null) {
+        const myRow = leaderboard.find((r) => r.uid === uid);
+        if (myRow && myRow.claimedAngels != null) {
+          myClaimed = myRow.claimedAngels;
+        } else {
+          try {
+            const saveSnap = await db.collection(COACH_CAPITALIST_SAVES).doc(uid).get();
+            myClaimed = saveSnap.exists ? coachCapitalistClaimedAngels(saveSnap.data()?.state) : 0;
+          } catch {
+            myClaimed = 0;
+          }
+        }
+      }
       const myRank = myLife > 0 || mineSnap.exists
         ? await coachCapitalistRankForUid(uid, myLife)
         : null;
@@ -12228,6 +12724,7 @@ exports.getCoachCapitalistLeaderboard = onRequest(
           uid,
           fullName: session.profile.fullName || session.profile.email || 'Employee',
           lifetimeEarnings: myLife,
+          claimedAngels: myClaimed,
           rank: myRank,
         },
       });
@@ -12256,9 +12753,10 @@ exports.getCoachCapitalistSave = onRequest(
     }
     try {
       const uid = session.profile.uid;
-      const [snap, configSnap] = await Promise.all([
+      const [snap, configSnap, syndicateContract] = await Promise.all([
         db.collection(COACH_CAPITALIST_SAVES).doc(uid).get(),
         db.doc(COACH_CAPITALIST_CONFIG_DOC).get(),
+        getOrCreateSyndicateContract(db),
       ]);
       const data = snap.exists ? (snap.data() || {}) : {};
       const configData = configSnap.exists ? (configSnap.data() || {}) : {};
@@ -12282,8 +12780,13 @@ exports.getCoachCapitalistSave = onRequest(
         dailyPlayCapMs: season.dailyPlayCapMs,
         dayKey: getCoachCapPlayDayKey(),
       });
+      const syndicatesCompleted = Math.max(
+        0,
+        Math.floor(Number(data.syndicatesCompleted ?? data.state?.syndicatesCompleted ?? 0)),
+      );
       res.status(200).json({
         state,
+        events: Array.isArray(configData.events) ? configData.events : null,
         lifetimeEarnings,
         lifetimeCap: hasCap ? lifetimeCap : null,
         forceResetToken,
@@ -12291,6 +12794,9 @@ exports.getCoachCapitalistSave = onRequest(
         dailyPlayCapMs: season.dailyPlayCapMs,
         awayEarningsEnabled: season.awayEarningsEnabled,
         previousSeasonWrapup: configData.previousSeasonWrapup || null,
+        syndicateContract: syndicateContract || null,
+        syndicatesCompleted,
+        pendingSyndicateReward: data.pendingSyndicateReward || null,
         play,
         updatedAt: data.updatedAt?.toDate?.()?.toISOString?.() || null,
       });
@@ -12376,6 +12882,8 @@ exports.saveCoachCapitalistSave = onRequest(
         nextState = scaleCoachCapitalistLifetimeToTarget(nextState, lifetimeCap);
       }
       const nextLife = coachCapitalistTotalLifetime(nextState);
+      const nextClaimedAngels = coachCapitalistClaimedAngels(nextState);
+      const nextUnlockedDepots = coachCapitalistUnlockedDepots(nextState);
       const shouldWrite = !keepPrev || (hasCap && nextLife < prevLife - 1e-6);
       // Fresh claim/prestige write — stamp a token so other open tabs cannot undo it.
       const postClaimWrite = shouldWrite
@@ -12385,12 +12893,25 @@ exports.saveCoachCapitalistSave = onRequest(
       const nextForceToken = postClaimWrite
         ? `claim-${Date.now().toString(36)}`
         : cloudForceToken;
+      const syndicatesCompleted = Math.max(
+        Number(prevData.syndicatesCompleted) || 0,
+        Number(prevData.state?.syndicatesCompleted) || 0,
+        Number(nextState.syndicatesCompleted) || 0,
+      );
+      nextState.syndicatesCompleted = syndicatesCompleted;
+      for (const id of COACH_CAP_DEPOT_IDS) {
+        if (nextState.depots?.[id]) nextState.depots[id].syndicatesCompleted = syndicatesCompleted;
+      }
+
       if (shouldWrite) {
         const payload = {
           uid,
           state: nextState,
           lifetimeEarnings: nextLife,
           lifetimeSort: coachCapitalistLifetimeSortKey(nextLife),
+          claimedAngels: nextClaimedAngels,
+          unlockedDepots: nextUnlockedDepots,
+          syndicatesCompleted,
           seasonId: season.seasonId,
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
           updatedByName: session.profile.fullName || session.profile.email || '',
@@ -12402,13 +12923,14 @@ exports.saveCoachCapitalistSave = onRequest(
         uid,
         session.profile,
         nextLife,
-        { forceExact: hasCap },
+        { forceExact: hasCap, claimedAngels: nextClaimedAngels, unlockedDepots: nextUnlockedDepots },
       );
       const milestones = await awardCoachCapitalistMilestones(uid, session.profile, score.lifetimeEarnings);
       const rank = await coachCapitalistRankForUid(uid, score.lifetimeEarnings);
       res.status(200).json(withCoinAwards({
         state: nextState,
         lifetimeEarnings: score.lifetimeEarnings,
+        claimedAngels: score.claimedAngels,
         lifetimeCap: hasCap ? lifetimeCap : null,
         forceResetToken: nextForceToken || null,
         seasonId: season.seasonId,
@@ -12419,6 +12941,8 @@ exports.saveCoachCapitalistSave = onRequest(
         playLocked,
         rank,
         milestones,
+        syndicatesCompleted,
+        pendingSyndicateReward: prevData.pendingSyndicateReward || null,
         updatedAt: new Date().toISOString(),
       }, milestones.map((m) => ({ amount: m.coins, reason: 'coach_capitalist_milestone' }))));
     } catch (error) {
@@ -12462,6 +12986,423 @@ exports.coachCapitalistHeartbeat = onRequest(
     } catch (error) {
       console.error('coachCapitalistHeartbeat failed', error);
       res.status(500).json({ error: error.message || 'Failed to record play heartbeat.' });
+    }
+  }),
+);
+
+// POST → spend 100 portal coins for +30 minutes play time (max 2× / London week).
+exports.buyCoachCapitalistPlayBoost = onRequest(
+  { region: 'europe-west2' },
+  withCors(async (req, res) => {
+    if (req.method !== 'POST') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
+    const session = await getVerifiedSessionUser(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+    try {
+      const uid = session.profile.uid;
+      const configSnap = await db.doc(COACH_CAPITALIST_CONFIG_DOC).get();
+      const configData = configSnap.exists ? (configSnap.data() || {}) : {};
+      const season = normalizeCoachCapSeasonConfig(configData);
+      const result = await purchaseCoachCapPlayTimeBoost(db, {
+        uid,
+        seasonId: season.seasonId,
+        dailyPlayCapMs: season.dailyPlayCapMs,
+        FieldValue: admin.firestore.FieldValue,
+        fullName: session.profile.fullName || session.profile.email || '',
+        dayKey: getCoachCapPlayDayKey(),
+      });
+      if (!result.ok) {
+        if (result.error === 'insufficient_funds') {
+          res.status(400).json({
+            error: `Not enough coins — extra time costs ${COACH_CAP_TIME_BOOST_COST}.`,
+            cost: COACH_CAP_TIME_BOOST_COST,
+            walletBalance: result.walletBalance,
+            play: result.play,
+          });
+          return;
+        }
+        if (result.error === 'weekly_limit') {
+          res.status(400).json({
+            error: 'You can buy extra play time twice per week (London time).',
+            cost: COACH_CAP_TIME_BOOST_COST,
+            walletBalance: result.walletBalance,
+            play: result.play,
+          });
+          return;
+        }
+        res.status(400).json({
+          error: 'Could not buy extra play time.',
+          play: result.play,
+        });
+        return;
+      }
+      res.status(200).json({
+        ok: true,
+        spent: !result.duplicate,
+        duplicate: Boolean(result.duplicate),
+        cost: result.cost,
+        bonusMsGranted: result.bonusMsGranted,
+        walletBalance: result.walletBalance,
+        seasonId: season.seasonId,
+        dailyPlayCapMs: season.dailyPlayCapMs,
+        play: result.play,
+      });
+    } catch (error) {
+      console.error('buyCoachCapitalistPlayBoost failed', error);
+      res.status(error.status || 500).json({ error: error.message || 'Failed to buy extra play time.' });
+    }
+  }),
+);
+
+// POST { amount?, vehicleCount?, contributionType?: 'cash'|'vehicle' } → contribute funds or vehicles to the active Syndicate Contract.
+exports.contributeCoachCapitalistSyndicate = onRequest(
+  { region: 'europe-west2' },
+  withCors(async (req, res) => {
+    if (req.method !== 'POST') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
+    const session = await getVerifiedSessionUser(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+    const contributionType = req.body?.contributionType === 'vehicle' ? 'vehicle' : 'cash';
+    const amount = Number(req.body?.amount) || 0;
+    const vehicleCount = Math.max(0, Math.floor(Number(req.body?.vehicleCount) || 0));
+
+    if (contributionType === 'cash' && (!Number.isFinite(amount) || amount <= 0)) {
+      res.status(400).json({ error: 'Cash contribution amount must be greater than zero.' });
+      return;
+    }
+    if (contributionType === 'vehicle' && (!Number.isFinite(vehicleCount) || vehicleCount <= 0)) {
+      res.status(400).json({ error: 'Vehicle donation count must be greater than zero.' });
+      return;
+    }
+
+    try {
+      const uid = session.profile.uid;
+      const userName = session.profile.fullName || session.profile.email || 'Operator';
+      const syndicateRef = db.doc('coach_capitalist/syndicate');
+      const saveRef = db.collection(COACH_CAPITALIST_SAVES).doc(uid);
+
+      const result = await db.runTransaction(async (tx) => {
+        const [syndicateSnap, saveSnap] = await Promise.all([
+          tx.get(syndicateRef),
+          tx.get(saveRef),
+        ]);
+        if (!saveSnap.exists) {
+          throw new Error('Save game not found.');
+        }
+        const saveData = saveSnap.data() || {};
+        const state = saveData.state || {};
+        if (!state.depots) state.depots = {};
+
+        let contract = syndicateSnap.exists ? syndicateSnap.data() : null;
+        if (!contract || contract.status !== 'active') {
+          if (contract && contract.status === 'upcoming') {
+            const openTimeStr = contract.opensAt
+              ? new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit' }).format(new Date(contract.opensAt))
+              : 'later today';
+            throw new Error(`This syndicate tender is scheduled to drop at ${openTimeStr} London time!`);
+          }
+          throw new Error('No active syndicate contract right now.');
+        }
+        if (contract.opensAt && Date.now() < contract.opensAt) {
+          const openTimeStr = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit' }).format(new Date(contract.opensAt));
+          throw new Error(`This syndicate tender has not opened yet. It drops at ${openTimeStr} London time!`);
+        }
+        if (contract.expiresAt && Date.now() > contract.expiresAt) {
+          throw new Error('The syndicate contract tender has closed.');
+        }
+
+        // Eligibility check (e.g. operators who already participated in today's earlier syndicate)
+        if (Array.isArray(contract.excludedUids) && contract.excludedUids.includes(uid)) {
+          throw new Error(contract.eligibilityNote || "You have already participated in a syndicate tender today! This tender is reserved for operators who haven't taken part yet today.");
+        }
+
+        // Fair play cap per operator to prevent 1 player from monopolizing 100%
+        const maxShare = Number(contract.maxContributionShare) || 0;
+        const prevContrib = contract.contributors?.[uid] || { fullName: userName, amount: 0, vehiclesDonated: 0 };
+        const newContribAmount = (Number(prevContrib.amount) || 0) + (contributionType === 'cash' ? amount : 0);
+        const newContribVehicles = (Number(prevContrib.vehiclesDonated) || 0) + (contributionType === 'vehicle' ? vehicleCount : 0);
+
+        if (maxShare > 0) {
+          const cashTarget = Number(contract.targetCash ?? contract.targetAmount) || 0;
+          if (contributionType === 'cash' && cashTarget > 0) {
+            const cashCap = Math.ceil(cashTarget * maxShare);
+            if (newContribAmount > cashCap) {
+              throw new Error(`Collective teamwork limit: You can pledge up to ${Math.round(maxShare * 100)}% of this tender so fellow operators can collaborate!`);
+            }
+          } else if (contributionType === 'vehicle') {
+            const vehTarget = Number(contract.requiredVehicle?.targetCount) || 0;
+            if (vehTarget > 0) {
+              const vehCap = Math.ceil(vehTarget * maxShare);
+              if (newContribVehicles > vehCap) {
+                throw new Error(`Collective teamwork limit: You can donate up to ${Math.round(maxShare * 100)}% of the required fleet (${vehCap} vehicles) so fellow operators can collaborate!`);
+              }
+            }
+          }
+        }
+
+        if (contributionType === 'cash') {
+          const cash = Math.max(0, Number(state.cash) || 0);
+          if (cash < amount) {
+            throw new Error('Insufficient cash in your account.');
+          }
+          state.cash = cash - amount;
+        } else {
+          // Vehicle donation
+          const reqV = contract.requiredVehicle;
+          if (!reqV || !reqV.targetCount) {
+            throw new Error('This contract tender does not accept vehicle donations.');
+          }
+          const dId = reqV.depotId || 'local';
+          const bIdx = Number(reqV.businessIndex) || 0;
+          const depot = state.depots[dId];
+          const owned = Array.isArray(depot?.owned) ? (Number(depot.owned[bIdx]) || 0) : 0;
+          if (owned < vehicleCount) {
+            throw new Error(`Insufficient fleet. You only have ${owned} ${reqV.vehicleName || 'vehicles'} in your ${dId} depot.`);
+          }
+          if (!depot.owned) depot.owned = [];
+          depot.owned[bIdx] = owned - vehicleCount;
+        }
+
+        tx.set(saveRef, { state, updatedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+
+        const newCurrentCash = (Number(contract.currentCash ?? contract.currentAmount) || 0) + (contributionType === 'cash' ? amount : 0);
+        let updatedVehicle = contract.requiredVehicle ? { ...contract.requiredVehicle } : null;
+        if (updatedVehicle && contributionType === 'vehicle') {
+          updatedVehicle.currentCount = (Number(updatedVehicle.currentCount) || 0) + vehicleCount;
+        }
+
+        const cashTarget = Number(contract.targetCash ?? contract.targetAmount) || 0;
+        const cashDone = newCurrentCash >= cashTarget;
+        let vehicleDone = true;
+        if (updatedVehicle && Number(updatedVehicle.targetCount) > 0) {
+          vehicleDone = (Number(updatedVehicle.currentCount) || 0) >= Number(updatedVehicle.targetCount);
+        }
+        const isCompleted = cashDone && vehicleDone;
+
+        const updatedContract = {
+          ...contract,
+          currentAmount: newCurrentCash,
+          currentCash: newCurrentCash,
+          ...(updatedVehicle ? { requiredVehicle: updatedVehicle } : {}),
+          contributors: {
+            ...(contract.contributors || {}),
+            [uid]: {
+              fullName: userName,
+              amount: newContribAmount,
+              vehiclesDonated: newContribVehicles,
+              contributedAt: Date.now(),
+            },
+          },
+          ...(isCompleted ? { status: 'completed', completedAt: Date.now() } : {}),
+        };
+
+        tx.set(syndicateRef, updatedContract, { merge: true });
+        return { updatedContract, nextState: state, isCompleted };
+      });
+
+      if (result.isCompleted) {
+        const contribUids = Object.keys(result.updatedContract.contributors || {});
+        const sponsorReward = result.updatedContract.sponsorReward || null;
+        const cashReturnMult = Number(sponsorReward?.details?.cashReturnMult) || 10;
+
+        for (const cUid of contribUids) {
+          const contrib = result.updatedContract.contributors[cUid];
+          const pledged = Number(contrib?.amount) || 0;
+          const vehiclesDonated = Number(contrib?.vehiclesDonated) || 0;
+          const revenueBonus = pledged * cashReturnMult;
+
+          try {
+            await db.runTransaction(async (sTx) => {
+              const pSaveRef = db.collection(COACH_CAPITALIST_SAVES).doc(cUid);
+              const pSaveSnap = await sTx.get(pSaveRef);
+              if (pSaveSnap.exists) {
+                const pData = pSaveSnap.data() || {};
+                const pState = pData.state || {};
+                if (!pState.depots) pState.depots = {};
+                const prevCount = Math.max(
+                  0,
+                  Math.floor(Number(pData.syndicatesCompleted ?? pState.syndicatesCompleted ?? 0)),
+                );
+                const nextCount = prevCount + 1;
+                const nextMult = getSyndicateMultiplier(nextCount);
+                pState.cash = (Number(pState.cash) || 0) + revenueBonus;
+                pState.syndicatesCompleted = nextCount;
+                for (const id of COACH_CAP_DEPOT_IDS) {
+                  if (pState.depots[id]) pState.depots[id].syndicatesCompleted = nextCount;
+                }
+
+                // Apply Sponsor Reward directly to pState
+                if (sponsorReward) {
+                  if (sponsorReward.type === 'vehicles' && sponsorReward.details) {
+                    const dId = sponsorReward.details.depotId || 'local';
+                    const bIdx = Number(sponsorReward.details.businessIndex) || 0;
+                    const grantCount = Number(sponsorReward.details.count) || 0;
+                    if (pState.depots[dId]) {
+                      if (!Array.isArray(pState.depots[dId].owned)) pState.depots[dId].owned = [];
+                      pState.depots[dId].owned[bIdx] = (Number(pState.depots[dId].owned[bIdx]) || 0) + grantCount;
+                    }
+                  } else if (sponsorReward.type === 'managers' && sponsorReward.details) {
+                    // Auto-hire next available managers in each depot
+                    for (const dId of COACH_CAP_DEPOT_IDS) {
+                      const d = pState.depots[dId];
+                      if (d && Array.isArray(d.managers)) {
+                        for (let m = 0; m < d.managers.length; m++) {
+                          if (!d.managers[m]) {
+                            d.managers[m] = true;
+                            if (Array.isArray(d.running) && (d.owned?.[m] || 0) > 0) d.running[m] = true;
+                            break;
+                          }
+                        }
+                      }
+                    }
+                  } else if (sponsorReward.type === 'perks' && sponsorReward.details) {
+                    const durMs = (Number(sponsorReward.details.durationHours) || 24) * 3600 * 1000;
+                    const spd = Number(sponsorReward.details.speedMult) || 2;
+                    const nowMs = Date.now();
+                    for (const dId of COACH_CAP_DEPOT_IDS) {
+                      if (pState.depots[dId]) {
+                        pState.depots[dId].frenzyUntil = Math.max(Number(pState.depots[dId].frenzyUntil) || 0, nowMs) + durMs;
+                        pState.depots[dId].frenzySpeedMult = spd;
+                      }
+                    }
+                  }
+                }
+
+                sTx.set(pSaveRef, {
+                  state: pState,
+                  syndicatesCompleted: nextCount,
+                  pendingSyndicateReward: {
+                    id: result.updatedContract.instanceId || result.updatedContract.id,
+                    tenderTitle: result.updatedContract.title,
+                    pledged,
+                    vehiclesDonated,
+                    payoutCash: revenueBonus,
+                    cashReturnMult,
+                    coins: result.updatedContract.rewardCoins || 150,
+                    syndicatesCompleted: nextCount,
+                    multiplier: nextMult,
+                    sponsorReward,
+                    completedAt: Date.now(),
+                  },
+                  updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+                }, { merge: true });
+              }
+            });
+          } catch (pErr) {
+            console.error('Failed to credit syndicate reward to save for', cUid, pErr);
+          }
+
+          // 2. Award portal coins if defined
+          if (result.updatedContract.rewardCoins > 0) {
+            try {
+              await awardCoins(db, {
+                uid: cUid,
+                amount: result.updatedContract.rewardCoins,
+                reason: 'coach_capitalist_syndicate_win',
+                idempotencyKey: `syndicate_win:${result.updatedContract.instanceId || result.updatedContract.id}:${cUid}`,
+                FieldValue: admin.firestore.FieldValue,
+                fullName: contrib?.fullName || '',
+              });
+            } catch (e) {
+              console.error('Syndicate coin reward error for', cUid, e);
+            }
+          }
+        }
+      }
+
+      res.status(200).json({
+        ok: true,
+        contract: result.updatedContract,
+        cash: result.nextState.cash,
+        state: result.nextState,
+      });
+    } catch (error) {
+      console.error('contributeCoachCapitalistSyndicate failed', error);
+      res.status(400).json({ error: error.message || 'Contribution failed.' });
+    }
+  }),
+);
+
+// POST { id? } -> Player claims their pending syndicate dividend & multiplier confirmation.
+exports.claimCoachCapitalistSyndicateReward = onRequest(
+  { region: 'europe-west2' },
+  withCors(async (req, res) => {
+    if (req.method !== 'POST') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
+    const session = await getVerifiedSessionUser(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+    const uid = session.profile.uid;
+    try {
+      const pSaveRef = db.collection(COACH_CAPITALIST_SAVES).doc(uid);
+      const snap = await pSaveRef.get();
+      if (!snap.exists) {
+        res.status(404).json({ error: 'Save document not found.' });
+        return;
+      }
+      const data = snap.data() || {};
+      const pending = data.pendingSyndicateReward;
+      if (!pending) {
+        res.status(200).json({ ok: true, alreadyClaimed: true });
+        return;
+      }
+      const syndicatesCompleted = Math.max(
+        Number(data.syndicatesCompleted) || 0,
+        Number(pending.syndicatesCompleted) || 1,
+      );
+      await pSaveRef.update({
+        pendingSyndicateReward: admin.firestore.FieldValue.delete(),
+        syndicatesCompleted,
+        lastClaimedSyndicateAt: Date.now(),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      res.status(200).json({
+        ok: true,
+        claimed: true,
+        reward: pending,
+        syndicatesCompleted,
+        multiplier: getSyndicateMultiplier(syndicatesCompleted),
+      });
+    } catch (err) {
+      console.error('claimCoachCapitalistSyndicateReward error:', err);
+      res.status(500).json({ error: err.message || 'Failed to claim reward.' });
+    }
+  }),
+);
+
+// POST { force? } -> Admin advances the syndicate contract to the next daily tender.
+exports.adminAdvanceCoachCapitalistSyndicate = onRequest(
+  { region: 'europe-west2' },
+  withCors(async (req, res) => {
+    if (req.method !== 'POST') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
+    const session = await getVerifiedSessionUser(req);
+    if (!session || !isSyndicateDirector(session.profile)) {
+      res.status(403).json({ error: 'Only Dale Watkins can trigger or advance syndicate tenders.' });
+      return;
+    }
+    try {
+      const nextContract = await advanceSyndicateContract(db, true);
+      res.status(200).json({ ok: true, contract: nextContract });
+    } catch (err) {
+      console.error('adminAdvanceCoachCapitalistSyndicate error:', err);
+      res.status(500).json({ error: err.message || 'Failed to advance contract.' });
     }
   }),
 );
@@ -12820,7 +13761,91 @@ async function loadPollVotes(pollId) {
   });
 }
 
-// GET → open polls for employees (+ create permission for managers/admins).
+async function loadCurrentWorldCup(todayKey, { uid = '', canManage = false, isOwner = false } = {}) {
+  let docs = [];
+  try {
+    const snap = await db.collection(WORLD_CUP_COLLECTION).orderBy('createdAt', 'desc').limit(15).get();
+    docs = snap.docs;
+  } catch (err) {
+    console.warn('loadCurrentWorldCup orderBy fallback', err?.message || err);
+    const snap = await db.collection(WORLD_CUP_COLLECTION).limit(20).get();
+    docs = snap.docs;
+  }
+
+  if (!docs.length) {
+    return { worldCup: null, worldCupHistory: [] };
+  }
+
+  const sortedDocs = [...docs].sort((a, b) => {
+    const aIso = a.data()?.createdAt?.toDate?.()?.toISOString?.() || '';
+    const bIso = b.data()?.createdAt?.toDate?.()?.toISOString?.() || '';
+    return bIso.localeCompare(aIso);
+  });
+
+  const activeDoc = sortedDocs.find((d) => (d.data()?.status || 'active') === 'active')
+    || sortedDocs.find((d) => d.data()?.status === 'completed')
+    || null;
+
+  let worldCup = null;
+  if (activeDoc) {
+    const synced = await syncWorldCupProgress(db, activeDoc, todayKey, {
+      FieldValue: admin.firestore.FieldValue,
+    });
+    worldCup = await serializeWorldCup(db, synced, { uid, todayKey, canManage, isOwner });
+  }
+
+  const worldCupHistory = sortedDocs
+    .filter((d) => d.id !== activeDoc?.id && d.data()?.status === 'completed')
+    .slice(0, 10)
+    .map((d) => {
+      const data = d.data() || {};
+      return {
+        id: d.id,
+        title: data.title || 'World Cup',
+        description: data.description || '',
+        status: data.status || 'completed',
+        champion: data.champion || null,
+        startDayKey: data.startDayKey || null,
+        createdAt: data.createdAt?.toDate?.()?.toISOString?.() || null,
+      };
+    });
+
+  return { worldCup, worldCupHistory };
+}
+
+function decodeWorldCupImagePayload(base64Input, fallbackMimeType = 'image/jpeg') {
+  const raw = String(base64Input || '').trim();
+  if (!raw) throw new Error('Image data is required.');
+  let mimeType = String(fallbackMimeType || 'image/jpeg').trim().toLowerCase();
+  let b64 = raw;
+  const dataUrlMatch = raw.match(/^data:(image\/[a-z0-9.+-]+);base64,(.+)$/i);
+  if (dataUrlMatch) {
+    mimeType = dataUrlMatch[1].toLowerCase();
+    b64 = dataUrlMatch[2];
+  }
+  const buffer = Buffer.from(b64, 'base64');
+  if (!buffer.length) throw new Error('Invalid image data.');
+  if (buffer.length > 4 * 1024 * 1024) {
+    throw new Error('Each image must be under 4 MB.');
+  }
+  const extMap = {
+    'image/jpeg': 'jpg',
+    'image/jpg': 'jpg',
+    'image/png': 'png',
+    'image/webp': 'webp',
+    'image/gif': 'gif',
+    'image/svg+xml': 'svg',
+  };
+  const ext = extMap[mimeType] || 'jpg';
+  return {
+    buffer,
+    mimeType: extMap[mimeType] ? mimeType : 'image/jpeg',
+    ext,
+    dataUrl: `data:${extMap[mimeType] ? mimeType : 'image/jpeg'};base64,${buffer.toString('base64')}`,
+  };
+}
+
+// GET → open polls + active World Cup tournament for employees (+ create permission for managers/admins).
 exports.getPolls = onRequest(
   { region: 'europe-west2' },
   withCors(async (req, res) => {
@@ -12836,6 +13861,7 @@ exports.getPolls = onRequest(
     }
 
     try {
+      const todayKey = getLondonDayKey();
       const canManage = canManagePolls(
         session.profile,
         canManagePortalAccess,
@@ -12843,15 +13869,22 @@ exports.getPolls = onRequest(
         getEffectivePortalRole,
       );
 
-      // Everyone gets open + recent closed polls so the Polls tab can show history.
+      const isOwner = isWorldCupOwner(session.profile);
+      const { worldCup, worldCupHistory } = await loadCurrentWorldCup(todayKey, {
+        uid: session.profile.uid,
+        canManage,
+        isOwner,
+      });
+
+      // Everyone gets open + recent closed polls so legacy polls still work if needed.
       let docs = [];
       try {
-        const allSnap = await db.collection('polls').orderBy('createdAt', 'desc').limit(80).get();
+        const allSnap = await db.collection('polls').orderBy('createdAt', 'desc').limit(40).get();
         docs = allSnap.docs;
       } catch (queryError) {
         console.warn('getPolls orderBy fallback', queryError?.message || queryError);
-        const openSnap = await db.collection('polls').where('status', '==', 'open').limit(50).get();
-        const closedSnap = await db.collection('polls').where('status', '==', 'closed').limit(50).get();
+        const openSnap = await db.collection('polls').where('status', '==', 'open').limit(25).get();
+        const closedSnap = await db.collection('polls').where('status', '==', 'closed').limit(25).get();
         docs = [...openSnap.docs, ...closedSnap.docs];
       }
 
@@ -12868,7 +13901,6 @@ exports.getPolls = onRequest(
           : null;
 
         const isClosed = (data.status || 'open') !== 'open';
-        // Closed polls always show results; open polls respect public/voted/manager rules.
         const showResults = isClosed
           || canManage
           || Boolean(data.resultsPublic)
@@ -12886,12 +13918,14 @@ exports.getPolls = onRequest(
         }));
       }
 
-      // Keep newest first
       polls.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
 
       res.status(200).json({
-        polls,
+        worldCup,
+        worldCupHistory,
+        polls: worldCup?.activePoll ? [worldCup.activePoll, ...polls] : polls,
         canManage,
+        todayKey,
       });
     } catch (error) {
       console.error('getPolls failed', error);
@@ -12900,7 +13934,7 @@ exports.getPolls = onRequest(
   }),
 );
 
-// POST → create poll (managers / admins).
+// POST → create/manage World Cup tournament or legacy poll (managers / admins).
 exports.createPoll = onRequest(
   { region: 'europe-west2' },
   withCors(async (req, res) => {
@@ -12921,10 +13955,189 @@ exports.createPoll = onRequest(
       canViewAllEmployeeProfiles,
       getEffectivePortalRole,
     )) {
-      res.status(403).json({ error: 'Only managers and admins can create polls.' });
+      res.status(403).json({ error: 'Only managers and admins can manage World Cup polls.' });
       return;
     }
 
+    const action = String(req.body?.action || '').trim();
+    const mode = String(req.body?.mode || '').trim();
+    const todayKey = getLondonDayKey();
+
+    // 1. Upload contender image to Firebase Storage (with dataUrl fallback)
+    if (action === 'upload_world_cup_image') {
+      try {
+        const decoded = decodeWorldCupImagePayload(
+          req.body?.imageBase64 || req.body?.contentBase64,
+          req.body?.mimeType || 'image/jpeg',
+        );
+        let imageUrl = decoded.dataUrl;
+        try {
+          const bucket = admin.storage().bucket();
+          const token = crypto.randomUUID();
+          const objectPath = `world_cup/${todayKey}/${session.profile.uid}/${Date.now()}-${crypto.randomBytes(4).toString('hex')}.${decoded.ext}`;
+          const file = bucket.file(objectPath);
+          await file.save(decoded.buffer, {
+            resumable: false,
+            metadata: {
+              contentType: decoded.mimeType,
+              metadata: {
+                firebaseStorageDownloadTokens: token,
+                uploadedByUid: session.profile.uid,
+                dayKey: todayKey,
+              },
+            },
+          });
+          imageUrl = `https://firebasestorage.googleapis.com/v0/b/${bucket.name}/o/${encodeURIComponent(objectPath)}?alt=media&token=${token}`;
+        } catch (storageErr) {
+          console.warn('upload_world_cup_image storage fallback to dataUrl', storageErr?.message || storageErr);
+        }
+        res.status(200).json({ imageUrl });
+        return;
+      } catch (err) {
+        res.status(400).json({ error: err.message || 'Failed to upload image.' });
+        return;
+      }
+    }
+
+    // 2. Update a single contender item's name / image in an existing World Cup
+    if (action === 'update_world_cup_item') {
+      const worldCupId = String(req.body?.worldCupId || '').trim();
+      const seed = Number(req.body?.seed);
+      if (!worldCupId || !Number.isInteger(seed) || seed < 1 || seed > 32) {
+        res.status(400).json({ error: 'Valid worldCupId and seed (1–32) are required.' });
+        return;
+      }
+      try {
+        const wcRef = db.collection(WORLD_CUP_COLLECTION).doc(worldCupId);
+        const wcSnap = await wcRef.get();
+        if (!wcSnap.exists) {
+          res.status(404).json({ error: 'World Cup tournament not found.' });
+          return;
+        }
+        const wcData = wcSnap.data() || {};
+        const items = Array.isArray(wcData.items) ? wcData.items.map((it) => ({ ...it })) : [];
+        const targetIdx = items.findIndex((it) => Number(it.seed) === seed);
+        if (targetIdx === -1) {
+          res.status(404).json({ error: 'Contender slot not found.' });
+          return;
+        }
+        const updatedItem = sanitizeContenderItem(
+          {
+            name: req.body?.name !== undefined ? req.body.name : items[targetIdx].name,
+            imageUrl: req.body?.imageUrl !== undefined ? req.body.imageUrl : items[targetIdx].imageUrl,
+          },
+          seed - 1,
+        );
+        items[targetIdx] = updatedItem;
+
+        const matches = (Array.isArray(wcData.matches) ? wcData.matches : []).map((m) => {
+          const next = { ...m };
+          if (next.slotA?.itemId === updatedItem.id || Number(next.slotA?.seed) === seed) {
+            next.slotA = { ...updatedItem };
+          }
+          if (next.slotB?.itemId === updatedItem.id || Number(next.slotB?.seed) === seed) {
+            next.slotB = { ...updatedItem };
+          }
+          if (next.winner?.itemId === updatedItem.id || Number(next.winner?.seed) === seed) {
+            next.winner = { ...updatedItem };
+          }
+          return next;
+        });
+
+        let champion = wcData.champion || null;
+        if (champion && (champion.itemId === updatedItem.id || Number(champion.seed) === seed)) {
+          champion = { ...updatedItem };
+        }
+
+        await wcRef.update({
+          items,
+          matches,
+          champion,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
+
+        const freshSnap = await wcRef.get();
+        const serialized = await serializeWorldCup(
+          db,
+          { id: freshSnap.id, ...freshSnap.data() },
+          { uid: session.profile.uid, todayKey, canManage: true, isOwner: isWorldCupOwner(session.profile) },
+        );
+        res.status(200).json({ worldCup: serialized });
+        return;
+      } catch (err) {
+        console.error('update_world_cup_item failed', err);
+        res.status(500).json({ error: err.message || 'Failed to update contender.' });
+        return;
+      }
+    }
+
+    // 3. Create a new 32-contender World Cup tournament
+    if (mode === 'world_cup' || action === 'create_world_cup') {
+      const title = String(req.body?.title || '').trim();
+      const description = String(req.body?.description || '').trim().slice(0, 500);
+      const categoryLabel = String(req.body?.categoryLabel || '').trim().slice(0, 60);
+      const rawItems = Array.isArray(req.body?.items) ? req.body.items : [];
+
+      if (title.length < 3 || title.length > 120) {
+        res.status(400).json({ error: 'World Cup title must be 3–120 characters.' });
+        return;
+      }
+      if (rawItems.length !== 32) {
+        res.status(400).json({ error: 'Please provide all 32 contenders for the World Cup.' });
+        return;
+      }
+      const missingNameIdx = rawItems.findIndex((it) => !String(it?.name || '').trim());
+      if (missingNameIdx !== -1) {
+        res.status(400).json({ error: `Contender #${missingNameIdx + 1} needs a name.` });
+        return;
+      }
+
+      try {
+        // Archive any existing active World Cup tournaments so the new one takes center stage
+        const activeSnap = await db.collection(WORLD_CUP_COLLECTION).where('status', '==', 'active').get();
+        const now = admin.firestore.FieldValue.serverTimestamp();
+        if (!activeSnap.empty) {
+          const batch = db.batch();
+          activeSnap.docs.forEach((doc) => {
+            batch.update(doc.ref, { status: 'archived', updatedAt: now });
+          });
+          await batch.commit();
+        }
+
+        const { items, matches } = buildInitialMatches(rawItems, todayKey);
+        const ref = await db.collection(WORLD_CUP_COLLECTION).add({
+          title,
+          description,
+          categoryLabel,
+          status: 'active',
+          startDayKey: todayKey,
+          currentMatchNumber: 1,
+          champion: null,
+          lastResolvedMatch: null,
+          items,
+          matches,
+          createdByUid: session.profile.uid,
+          createdByName: session.profile.fullName || session.profile.email || 'Manager',
+          createdAt: now,
+          updatedAt: now,
+        });
+
+        const snap = await ref.get();
+        const worldCup = await serializeWorldCup(
+          db,
+          { id: snap.id, ...snap.data() },
+          { uid: session.profile.uid, todayKey, canManage: true, isOwner: isWorldCupOwner(session.profile) },
+        );
+        res.status(201).json({ worldCup });
+        return;
+      } catch (error) {
+        console.error('createPoll world_cup failed', error);
+        res.status(500).json({ error: error.message || 'Failed to create World Cup tournament.' });
+        return;
+      }
+    }
+
+    // Legacy poll creation fallback
     const title = String(req.body?.title || '').trim();
     const description = String(req.body?.description || '').trim().slice(0, 500);
     const type = String(req.body?.type || '').trim();
@@ -12972,7 +14185,7 @@ exports.createPoll = onRequest(
   }),
 );
 
-// POST { pollId, optionKey?, optionLabel? } → cast / change vote.
+// POST { worldCupId?, matchNumber?, pollId?, optionKey?, optionLabel? } → cast / change vote (or win Sudden Death tie-breaker).
 exports.submitPollVote = onRequest(
   { region: 'europe-west2' },
   withCors(async (req, res) => {
@@ -12987,7 +14200,298 @@ exports.submitPollVote = onRequest(
       return;
     }
 
-    const pollId = String(req.body?.pollId || '').trim();
+    const rawPollId = String(req.body?.pollId || '').trim();
+    let worldCupId = String(req.body?.worldCupId || '').trim();
+    let requestedMatchNumber = Number(req.body?.matchNumber) || null;
+
+    // Parse wc_<tournamentId>_m<matchNumber>[_tb] if submitted via generic pollId (e.g. from ProfileWidgets)
+    if (!worldCupId && rawPollId.startsWith('wc_')) {
+      const wcMatch = rawPollId.match(/^wc_(.+)_m(\d+)(?:_tb)?$/);
+      if (wcMatch) {
+        worldCupId = wcMatch[1];
+        requestedMatchNumber = Number(wcMatch[2]);
+      }
+    }
+
+    // World Cup voting path
+    if (worldCupId) {
+      const optionKey = String(req.body?.optionKey || '').trim().toLowerCase();
+      if (optionKey !== 'a' && optionKey !== 'b') {
+        res.status(400).json({ error: 'Please vote for contender A or B.' });
+        return;
+      }
+
+      try {
+        const todayKey = getLondonDayKey();
+        const canManage = canManagePolls(
+          session.profile,
+          canManagePortalAccess,
+          canViewAllEmployeeProfiles,
+          getEffectivePortalRole,
+        );
+
+        const wcRef = db.collection(WORLD_CUP_COLLECTION).doc(worldCupId);
+        const wcSnap = await wcRef.get();
+        if (!wcSnap.exists) {
+          res.status(404).json({ error: 'World Cup tournament not found.' });
+          return;
+        }
+
+        // First sync daily progress if needed
+        const syncedData = await syncWorldCupProgress(db, wcSnap, todayKey, {
+          FieldValue: admin.firestore.FieldValue,
+        });
+
+        const matches = Array.isArray(syncedData.matches) ? syncedData.matches : [];
+        const activeMatch = requestedMatchNumber
+          ? matches.find((m) => Number(m.matchNumber) === Number(requestedMatchNumber))
+          : matches.find((m) => m.status === 'open' || m.status === 'tiebreaker');
+
+        if (!activeMatch || (activeMatch.status !== 'open' && activeMatch.status !== 'tiebreaker')) {
+          res.status(400).json({ error: 'This matchup has already concluded.' });
+          return;
+        }
+
+        const londonNow = getLondonTimeParts();
+        if (londonNow.isWeekend && activeMatch.status !== 'tiebreaker') {
+          res.status(400).json({ error: 'World Cup matchups run Monday to Friday. Voting reopens on Monday!' });
+          return;
+        }
+
+        const matchNumber = Number(activeMatch.matchNumber);
+        const voterName = session.profile.fullName || session.profile.email || 'Colleague';
+        const optionLabel = optionKey === 'a'
+          ? (activeMatch.slotA?.name || 'Option A')
+          : (activeMatch.slotB?.name || 'Option B');
+
+        let tiebreakerResolved = false;
+
+        if (activeMatch.status === 'tiebreaker') {
+          // SUDDEN DEATH TIE-BREAKER: Everyone gets another vote, and the FIRST additional vote wins immediately!
+          const tbPollId = getWorldCupMatchPollId(worldCupId, matchNumber, true);
+          const tbVoteRef = db.collection('poll_votes').doc(`${tbPollId}_${session.profile.uid}`);
+          const nowIso = new Date().toISOString();
+
+          // Load existing regular votes outside transaction so we have exact voter lists
+          const { regularVotes } = await loadWorldCupMatchVotes(db, worldCupId, matchNumber);
+
+          await db.runTransaction(async (tx) => {
+            const freshWcSnap = await tx.get(wcRef);
+            if (!freshWcSnap.exists) {
+              throw new Error('World Cup tournament not found.');
+            }
+            const freshData = freshWcSnap.data() || {};
+            const freshMatches = Array.isArray(freshData.matches)
+              ? freshData.matches.map((m) => ({ ...m }))
+              : [];
+            const matchIdx = freshMatches.findIndex((m) => Number(m.matchNumber) === matchNumber);
+            if (matchIdx === -1) {
+              throw new Error('Match not found.');
+            }
+            const currentMatch = freshMatches[matchIdx];
+            if (currentMatch.status !== 'tiebreaker') {
+              const winnerName = currentMatch.winner?.name || 'the winner';
+              const byWho = currentMatch.tiebreakerVotedBy?.fullName || 'Another colleague';
+              const conflictErr = new Error(
+                `Just missed it! ${byWho} already cast the sudden-death winning vote for ${winnerName}!`,
+              );
+              conflictErr.status = 409;
+              throw conflictErr;
+            }
+
+            const combinedVotes = [
+              ...regularVotes,
+              {
+                uid: session.profile.uid,
+                fullName: voterName,
+                email: session.profile.email || '',
+                optionKey,
+                optionLabel,
+                isTiebreaker: true,
+              },
+            ];
+            const agg = aggregatePollResults(
+              {
+                type: 'ab',
+                optionA: currentMatch.slotA?.name || 'Option A',
+                optionB: currentMatch.slotB?.name || 'Option B',
+              },
+              combinedVotes,
+            );
+            const optA = agg.options.find((o) => o.key === 'a') || { votes: 0, voters: [] };
+            const optB = agg.options.find((o) => o.key === 'b') || { votes: 0, voters: [] };
+
+            const tiebreakerVotedBy = {
+              uid: session.profile.uid,
+              fullName: voterName,
+              optionKey,
+              optionLabel,
+              votedAt: nowIso,
+            };
+
+            const applied = applyMatchWinnerToBracket(freshMatches, matchIdx, optionKey, {
+              nowIso,
+              votesA: optA.votes,
+              votesB: optB.votes,
+              votersA: optA.voters || [],
+              votersB: optB.voters || [],
+              tiebreakerWinnerKey: optionKey,
+              tiebreakerVotedBy,
+            });
+
+            const updatedMatches = applied.matches;
+            let nextStatus = 'active';
+            let champion = freshData.champion || null;
+            let nextCurrentMatchNumber = matchNumber;
+
+            if (matchNumber === 31) {
+              nextStatus = 'completed';
+              champion = applied.winnerItem;
+            } else {
+              const nextSequentialIdx = updatedMatches.findIndex(
+                (m) => Number(m.matchNumber) === matchNumber + 1,
+              );
+              if (nextSequentialIdx !== -1) {
+                const nextConfirmDayKey = getNextConfirmationDayKey(getLondonTimeParts()) || todayKey;
+                updatedMatches[nextSequentialIdx] = {
+                  ...updatedMatches[nextSequentialIdx],
+                  status: 'open',
+                  dayKey: nextConfirmDayKey,
+                };
+                nextCurrentMatchNumber = updatedMatches[nextSequentialIdx].matchNumber;
+              }
+            }
+
+            const lastResolvedMatch = {
+              matchNumber,
+              roundName: currentMatch.roundName,
+              slotA: currentMatch.slotA,
+              slotB: currentMatch.slotB,
+              votesA: optA.votes,
+              votesB: optB.votes,
+              winnerKey: optionKey,
+              winner: applied.winnerItem,
+              tiebreaker: true,
+              tiebreakerTiedScore: currentMatch.tiebreakerTiedScore ?? optA.votes - (optionKey === 'a' ? 1 : 0),
+              tiebreakerVotedBy,
+              completedAt: nowIso,
+            };
+
+            tx.set(tbVoteRef, {
+              pollId: tbPollId,
+              worldCupId,
+              matchNumber,
+              isTiebreaker: true,
+              uid: session.profile.uid,
+              fullName: voterName,
+              email: session.profile.email || '',
+              optionKey,
+              optionLabel,
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+              createdAt: admin.firestore.FieldValue.serverTimestamp(),
+            });
+
+            tx.update(wcRef, {
+              matches: updatedMatches,
+              status: nextStatus,
+              champion,
+              currentMatchNumber: nextCurrentMatchNumber,
+              lastResolvedMatch,
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            });
+          });
+
+          tiebreakerResolved = true;
+        } else {
+          // Regular daily match vote
+          const regPollId = getWorldCupMatchPollId(worldCupId, matchNumber, false);
+          const voteId = `${regPollId}_${session.profile.uid}`;
+          const now = admin.firestore.FieldValue.serverTimestamp();
+
+          await db.collection('poll_votes').doc(voteId).set({
+            pollId: regPollId,
+            worldCupId,
+            matchNumber,
+            isTiebreaker: false,
+            uid: session.profile.uid,
+            fullName: voterName,
+            email: session.profile.email || '',
+            optionKey,
+            optionLabel,
+            updatedAt: now,
+            createdAt: now,
+          }, { merge: true });
+
+          // Update cached tally on match object
+          const { regularVotes } = await loadWorldCupMatchVotes(db, worldCupId, matchNumber);
+          const agg = aggregatePollResults(
+            {
+              type: 'ab',
+              optionA: activeMatch.slotA?.name || 'Option A',
+              optionB: activeMatch.slotB?.name || 'Option B',
+            },
+            regularVotes,
+          );
+          const optA = agg.options.find((o) => o.key === 'a') || { votes: 0, voters: [] };
+          const optB = agg.options.find((o) => o.key === 'b') || { votes: 0, voters: [] };
+
+          const freshSnap = await wcRef.get();
+          const freshData = freshSnap.data() || {};
+          const updatedMatches = (Array.isArray(freshData.matches) ? freshData.matches : []).map((m) => {
+            if (Number(m.matchNumber) !== matchNumber) return m;
+            return {
+              ...m,
+              votesA: optA.votes,
+              votesB: optB.votes,
+              votersA: optA.voters || [],
+              votersB: optB.voters || [],
+            };
+          });
+          await wcRef.update({
+            matches: updatedMatches,
+            updatedAt: now,
+          });
+        }
+
+        let coinsAwarded = [];
+        try {
+          const result = await awardCoins(db, {
+            uid: session.profile.uid,
+            amount: COIN_AMOUNTS.poll_vote,
+            reason: 'poll_vote',
+            idempotencyKey: `poll_vote:${todayKey}:${session.profile.uid}`,
+            FieldValue: admin.firestore.FieldValue,
+            fullName: voterName,
+            meta: { refType: 'world_cup', refId: `${worldCupId}_m${matchNumber}`, dayKey: todayKey },
+          });
+          const award = toCoinAward(result);
+          if (award) coinsAwarded = [award];
+        } catch (coinError) {
+          console.warn('submitPollVote world_cup coin award failed', coinError?.message || coinError);
+        }
+
+        const updatedWcSnap = await wcRef.get();
+        const worldCup = await serializeWorldCup(
+          db,
+          { id: updatedWcSnap.id, ...updatedWcSnap.data() },
+          { uid: session.profile.uid, todayKey, canManage, isOwner: isWorldCupOwner(session.profile) },
+        );
+
+        res.status(200).json(withCoinAwards({
+          worldCup,
+          poll: worldCup?.activePoll || null,
+          tiebreakerResolved,
+          lastResolvedMatch: worldCup?.lastResolvedMatch || null,
+        }, coinsAwarded));
+        return;
+      } catch (err) {
+        console.error('submitPollVote world_cup failed', err);
+        res.status(err.status || 500).json({ error: err.message || 'Failed to submit World Cup vote.' });
+        return;
+      }
+    }
+
+    const pollId = rawPollId;
     if (!pollId) {
       res.status(400).json({ error: 'pollId is required.' });
       return;
@@ -13066,9 +14570,7 @@ exports.submitPollVote = onRequest(
         getEffectivePortalRole,
       );
       const votes = await loadPollVotes(pollId);
-      const results = (canManage || poll.resultsPublic)
-        ? aggregatePollResults(poll, votes)
-        : aggregatePollResults(poll, votes); // voter can see results after voting
+      const results = aggregatePollResults(poll, votes);
 
       res.status(200).json(withCoinAwards({
         poll: serializePoll(pollSnap, {
@@ -13084,7 +14586,7 @@ exports.submitPollVote = onRequest(
   }),
 );
 
-// POST { pollId } → close poll.
+// POST { worldCupId?, action?, pollId? } → advance World Cup match / force tiebreaker / archive World Cup / close legacy poll.
 exports.closePoll = onRequest(
   { region: 'europe-west2' },
   withCors(async (req, res) => {
@@ -13105,8 +14607,71 @@ exports.closePoll = onRequest(
       canViewAllEmployeeProfiles,
       getEffectivePortalRole,
     )) {
-      res.status(403).json({ error: 'Only managers and admins can close polls.' });
+      res.status(403).json({ error: 'Only managers and admins can manage polls.' });
       return;
+    }
+
+    const worldCupId = String(req.body?.worldCupId || '').trim();
+    const action = String(req.body?.action || 'advance_match').trim();
+
+    if (worldCupId) {
+      if (!isWorldCupOwner(session.profile)) {
+        res.status(403).json({ error: 'Only Dale Watkins can manually progress or revert World Cup matches.' });
+        return;
+      }
+      try {
+        const todayKey = getLondonDayKey();
+        const wcRef = db.collection(WORLD_CUP_COLLECTION).doc(worldCupId);
+        const wcSnap = await wcRef.get();
+        if (!wcSnap.exists) {
+          res.status(404).json({ error: 'World Cup tournament not found.' });
+          return;
+        }
+
+        if (action === 'archive_world_cup') {
+          await wcRef.update({
+            status: 'archived',
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          });
+          res.status(200).json({ worldCup: null, archived: true });
+          return;
+        }
+
+        if (action === 'revert_step' || action === 'revert_match') {
+          const targetMatchNumber = req.body?.targetMatchNumber;
+          const reverted = await revertWorldCupStep(db, wcSnap, targetMatchNumber, {
+            todayKey,
+            FieldValue: admin.firestore.FieldValue,
+          });
+          const worldCup = await serializeWorldCup(db, reverted, {
+            uid: session.profile.uid,
+            todayKey,
+            canManage: true,
+            isOwner: true,
+          });
+          res.status(200).json({ worldCup });
+          return;
+        }
+
+        const synced = await syncWorldCupProgress(db, wcSnap, todayKey, {
+          forceAdvance: action === 'advance_match',
+          forceTiebreaker: action === 'force_tiebreaker',
+          FieldValue: admin.firestore.FieldValue,
+        });
+
+        const worldCup = await serializeWorldCup(db, synced, {
+          uid: session.profile.uid,
+          todayKey,
+          canManage: true,
+          isOwner: true,
+        });
+        res.status(200).json({ worldCup });
+        return;
+      } catch (err) {
+        console.error('closePoll world_cup action failed', err);
+        res.status(500).json({ error: err.message || 'Failed to update World Cup.' });
+        return;
+      }
     }
 
     const pollId = String(req.body?.pollId || '').trim();
@@ -13143,7 +14708,7 @@ exports.closePoll = onRequest(
   }),
 );
 
-// GET → My Profile widgets (public polls + trivia/wordle/nonogram leaderboards).
+// GET → My Profile widgets (World Cup poll + trivia/wordle/nonogram leaderboards).
 exports.getProfileWidgets = onRequest(
   { region: 'europe-west2' },
   withCors(async (req, res) => {
@@ -13161,8 +14726,15 @@ exports.getProfileWidgets = onRequest(
     try {
       const dayKey = getLondonDayKey();
       await loadFunRotationSettings(db);
+      const canManage = canManagePolls(
+        session.profile,
+        canManagePortalAccess,
+        canViewAllEmployeeProfiles,
+        getEffectivePortalRole,
+      );
 
-      const [pollSnap, triviaLeaderboard, wordleLeaderboard, nonogramLeaderboard, sokobanLeaderboard, boggleLeaderboard, connectionsLeaderboard, letterboxLeaderboard] = await Promise.all([
+      const [{ worldCup }, pollSnap, triviaLeaderboard, wordleLeaderboard, nonogramLeaderboard, sokobanLeaderboard, boggleLeaderboard, connectionsLeaderboard, letterboxLeaderboard] = await Promise.all([
+        loadCurrentWorldCup(dayKey, { uid: session.profile.uid, canManage, isOwner: isWorldCupOwner(session.profile) }),
         db.collection('polls')
           .where('resultsPublic', '==', true)
           .where('status', '==', 'open')
@@ -13179,24 +14751,28 @@ exports.getProfileWidgets = onRequest(
       ]);
 
       const publicPolls = [];
-      for (const doc of pollSnap.docs) {
-        const data = doc.data() || {};
-        if (data.status && data.status !== 'open') continue;
-        const votes = await loadPollVotes(doc.id);
-        const voteId = `${doc.id}_${session.profile.uid}`;
-        const myVoteSnap = await db.collection('poll_votes').doc(voteId).get();
-        const myVote = myVoteSnap.exists
-          ? {
-              optionKey: myVoteSnap.data().optionKey || '',
-              optionLabel: myVoteSnap.data().optionLabel || '',
-            }
-          : null;
-        publicPolls.push(serializePoll(doc, {
-          myVote,
-          results: aggregatePollResults(data, votes),
-        }));
+      if (worldCup?.activePoll) {
+        publicPolls.push(worldCup.activePoll);
+      } else {
+        for (const doc of pollSnap.docs) {
+          const data = doc.data() || {};
+          if (data.status && data.status !== 'open') continue;
+          const votes = await loadPollVotes(doc.id);
+          const voteId = `${doc.id}_${session.profile.uid}`;
+          const myVoteSnap = await db.collection('poll_votes').doc(voteId).get();
+          const myVote = myVoteSnap.exists
+            ? {
+                optionKey: myVoteSnap.data().optionKey || '',
+                optionLabel: myVoteSnap.data().optionLabel || '',
+              }
+            : null;
+          publicPolls.push(serializePoll(doc, {
+            myVote,
+            results: aggregatePollResults(data, votes),
+          }));
+        }
+        publicPolls.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
       }
-      publicPolls.sort((a, b) => String(b.createdAt || '').localeCompare(String(a.createdAt || '')));
 
       const triviaQuestion = await resolveTriviaQuestion(dayKey);
       const streaks = await loadFunStreaks(db, session.profile.uid, {
@@ -13254,6 +14830,7 @@ exports.getProfileWidgets = onRequest(
       res.status(200).json(withCoinAwards({
         dayKey,
         rotation: getFunRotationForDay(dayKey),
+        worldCup: worldCup || null,
         trivia: {
           prompt: triviaQuestion.prompt,
           leaderboard: triviaLeaderboard.slice(0, 8),
@@ -13641,7 +15218,7 @@ exports.getFinanceReports = onRequest(
   {
     region: 'europe-west2',
     secrets: FINANCE_REPORTS_SECRETS,
-    timeoutSeconds: 60,
+    timeoutSeconds: 300,
     memory: '512MiB',
   },
   withCors(async (req, res) => {
@@ -13665,19 +15242,209 @@ exports.getFinanceReports = onRequest(
 
     try {
       applyRedshiftSecretsToEnv();
+
+      if (req.query.tab === 'walkaround' || req.query.view === 'walkaround') {
+        const walkDate = typeof req.query.date === 'string' ? req.query.date : undefined;
+        const complianceData = await getWalkaroundComplianceReport(walkDate, admin.firestore());
+        res.status(200).json({ ok: true, data: { walkaroundCompliance: complianceData } });
+        return;
+      }
+
+      if (req.query.tab === 'coach-manager' || req.query.view === 'coach-manager') {
+        const sheetDate = typeof req.query.date === 'string' ? req.query.date : undefined;
+        const forceRefresh = req.query.refresh === 'true';
+        const coachManagerData = await getCoachManagerWorksheet(sheetDate, forceRefresh);
+        res.status(200).json({ ok: true, data: { coachManager: coachManagerData } });
+        return;
+      }
+
+      if (req.query.tab === 'comparison' || req.query.view === 'comparison') {
+        const compOptions = {
+          baseFrom: typeof req.query.baseFrom === 'string' ? req.query.baseFrom : undefined,
+          baseTo: typeof req.query.baseTo === 'string' ? req.query.baseTo : undefined,
+          compareFrom: typeof req.query.compareFrom === 'string' ? req.query.compareFrom : undefined,
+          compareTo: typeof req.query.compareTo === 'string' ? req.query.compareTo : undefined,
+          depot: typeof req.query.depot === 'string' ? req.query.depot : 'All',
+          segment: typeof req.query.segment === 'string' ? req.query.segment : 'All',
+        };
+        const comparisonData = await getComparisonReport(compOptions);
+        res.status(200).json({ ok: true, data: { comparison: comparisonData } });
+        return;
+      }
       const filters = {
         period: typeof req.query.period === 'string' ? req.query.period : '12m',
         depot: typeof req.query.depot === 'string' ? req.query.depot : 'All',
         segment: typeof req.query.segment === 'string' ? req.query.segment : 'All',
         fromDate: typeof req.query.from === 'string' ? req.query.from : undefined,
         toDate: typeof req.query.to === 'string' ? req.query.to : undefined,
+        refresh: req.query.refresh === 'true',
       };
-      const data = await getFinanceDashboard(filters);
+      const data = await getFinanceDashboard(filters, admin.firestore());
       res.status(200).json({ ok: true, data });
     } catch (error) {
       console.error('getFinanceReports failed', error);
       const message = error instanceof Error ? error.message : 'Failed to load finance reports';
       res.status(500).json({ ok: false, error: message.slice(0, 240) });
+    }
+  }),
+);
+
+// ============================================================================
+// 2D QUARTER-MILE DRAG RACING ("Quarter-Mile Clash") — Paddock & Multiplayer
+// ============================================================================
+const DRAG_RACE_PROFILES = 'drag_race_profiles';
+const DRAG_RACE_CHALLENGES = 'drag_race_challenges';
+
+exports.getDragRacePaddock = onRequest(
+  { region: 'europe-west2' },
+  withCors(async (req, res) => {
+    if (req.method !== 'GET') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
+    const session = await getVerifiedSessionUser(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+    try {
+      const uid = session.profile.uid;
+      const [mySnap, boardSnap, chalSnap] = await Promise.all([
+        db.collection(DRAG_RACE_PROFILES).doc(uid).get(),
+        db.collection(DRAG_RACE_PROFILES).limit(100).get(),
+        db.collection(DRAG_RACE_CHALLENGES).orderBy('createdAt', 'desc').limit(25).get().catch(() => ({ docs: [] })),
+      ]);
+      const myData = mySnap.exists ? (mySnap.data() || {}) : {};
+      const leaderboard = boardSnap.docs
+        .map((doc) => {
+          const d = doc.data() || {};
+          return {
+            uid: doc.id,
+            fullName: d.fullName || 'Employee',
+            bestEtSec: Number(d.bestEtSec) || null,
+            bestTrapMph: Number(d.bestTrapMph) || 0,
+            carId: d.carId || 'fiesta-mk6',
+            paint: d.paint || 'blue',
+            stripes: Boolean(d.stripes),
+            upgrades: d.upgrades || {},
+            hp: Number(d.hp) || 72,
+            pi: Number(d.pi) || 140,
+          };
+        })
+        .filter((r) => r.bestEtSec && r.bestEtSec > 0)
+        .sort((a, b) => a.bestEtSec - b.bestEtSec)
+        .slice(0, 40);
+
+      const challenges = (chalSnap.docs || []).map((doc) => ({
+        id: doc.id,
+        ...(doc.data() || {}),
+      }));
+
+      res.status(200).json({
+        myState: myData.state || null,
+        leaderboard,
+        challenges,
+      });
+    } catch (error) {
+      console.error('getDragRacePaddock failed', error);
+      res.status(500).json({ error: error.message || 'Failed to load drag race paddock.' });
+    }
+  }),
+);
+
+exports.saveDragRaceRun = onRequest(
+  { region: 'europe-west2' },
+  withCors(async (req, res) => {
+    if (req.method !== 'POST') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
+    const session = await getVerifiedSessionUser(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+    try {
+      const uid = session.profile.uid;
+      const fullName = session.profile.fullName || session.profile.email || 'Employee';
+      const state = req.body?.state && typeof req.body.state === 'object' ? req.body.state : null;
+      const bestRun = req.body?.bestRun && typeof req.body.bestRun === 'object' ? req.body.bestRun : null;
+
+      const ref = db.collection(DRAG_RACE_PROFILES).doc(uid);
+      const prevSnap = await ref.get();
+      const prev = prevSnap.exists ? (prevSnap.data() || {}) : {};
+      const prevBestEt = Number(prev.bestEtSec) > 0 ? Number(prev.bestEtSec) : null;
+      const runEt = Number(bestRun?.etSec) > 0 ? Number(bestRun.etSec) : null;
+      const isFaster = runEt != null && (prevBestEt == null || runEt < prevBestEt);
+
+      const payload = {
+        uid,
+        fullName,
+        ...(state ? { state } : {}),
+        ...(isFaster
+          ? {
+              bestEtSec: runEt,
+              bestTrapMph: Number(bestRun.trapMph) || 0,
+              carId: String(bestRun.carId || 'fiesta-mk6'),
+              paint: String(bestRun.paint || 'blue'),
+              stripes: Boolean(bestRun.stripes),
+              upgrades: bestRun.upgrades || {},
+              hp: Number(bestRun.hp) || 72,
+              pi: Number(bestRun.pi) || 140,
+            }
+          : {}),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+      await ref.set(payload, { merge: true });
+      res.status(200).json({ ok: true, bestEtSec: isFaster ? runEt : prevBestEt });
+    } catch (error) {
+      console.error('saveDragRaceRun failed', error);
+      res.status(500).json({ error: error.message || 'Failed to save drag race run.' });
+    }
+  }),
+);
+
+exports.createDragRaceChallenge = onRequest(
+  { region: 'europe-west2' },
+  withCors(async (req, res) => {
+    if (req.method !== 'POST') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
+    const session = await getVerifiedSessionUser(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+    try {
+      const uid = session.profile.uid;
+      const challengerName = session.profile.fullName || session.profile.email || 'Employee';
+      const stake = Math.max(500, Math.min(100000, Math.floor(Number(req.body?.stake) || 1000)));
+      const targetEtSec = Math.max(5, Number(req.body?.targetEtSec) || 15);
+      const targetTrapMph = Math.max(40, Number(req.body?.targetTrapMph) || 90);
+      const docData = {
+        challengerUid: uid,
+        challengerName,
+        carId: String(req.body?.carId || 'fiesta-mk6'),
+        paint: String(req.body?.paint || 'blue'),
+        stripes: Boolean(req.body?.stripes),
+        upgrades: req.body?.upgrades && typeof req.body.upgrades === 'object' ? req.body.upgrades : {},
+        hp: Number(req.body?.hp) || 72,
+        pi: Number(req.body?.pi) || 140,
+        targetEtSec,
+        targetTrapMph,
+        stake,
+        purse: stake * 2,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+      const docRef = await db.collection(DRAG_RACE_CHALLENGES).add(docData);
+      res.status(200).json({
+        ok: true,
+        challenge: { id: docRef.id, ...docData },
+      });
+    } catch (error) {
+      console.error('createDragRaceChallenge failed', error);
+      res.status(500).json({ error: error.message || 'Failed to create challenge.' });
     }
   }),
 );

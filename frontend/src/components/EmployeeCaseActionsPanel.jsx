@@ -23,6 +23,7 @@ function documentTypeLabel(doc) {
   const type = String(doc?.documentType || '').toLowerCase();
   if (doc?.warningPresetLabel) return doc.warningPresetLabel;
   if (type === 'file_note_for_improvement') return 'File note for improvement';
+  if (type === 'return_to_work') return 'Return to work interview';
   if (type === 'invite') return 'Hearing invite';
   if (type === 'outcome') return 'Outcome letter';
   return type ? type.replace(/_/g, ' ') : 'Document';
@@ -35,6 +36,7 @@ export default function EmployeeCaseActionsPanel() {
   const [data, setData] = useState({
     pendingMinutes: [],
     pendingFileNotes: [],
+    pendingReturnToWork: [],
     pendingWarnings: [],
     cases: [],
     bumpPrompts: [],
@@ -47,6 +49,7 @@ export default function EmployeeCaseActionsPanel() {
   const [showAmendForm, setShowAmendForm] = useState({});
   const [signingId, setSigningId] = useState('');
   const [viewingFileNoteId, setViewingFileNoteId] = useState('');
+  const [viewingReturnToWorkId, setViewingReturnToWorkId] = useState('');
   const [viewingWarningId, setViewingWarningId] = useState('');
   const [downloadingId, setDownloadingId] = useState('');
 
@@ -204,6 +207,7 @@ export default function EmployeeCaseActionsPanel() {
   };
 
   const signFileNote = (documentId) => signIssuedDocument(documentId, 'file note');
+  const signReturnToWork = (documentId) => signIssuedDocument(documentId, 'return to work interview');
   const signWarning = (documentId) => signIssuedDocument(documentId, 'warning');
 
   const selectedCase = useMemo(
@@ -230,12 +234,13 @@ export default function EmployeeCaseActionsPanel() {
         docs: (data.documents || []).filter((doc) => doc.caseId === item.id).length,
         pendingNotes: (data.pendingMinutes || []).filter((note) => note.caseId === item.id).length,
         pendingFileNotes: (data.pendingFileNotes || []).filter((note) => note.caseId === item.id).length,
+        pendingReturnToWork: (data.pendingReturnToWork || []).filter((note) => note.caseId === item.id).length,
         pendingWarnings: (data.pendingWarnings || []).filter((note) => note.caseId === item.id).length,
         hearing: (data.pendingHearingInvites || []).some((invite) => invite.caseId === item.id),
       };
     }
     return counts;
-  }, [data.cases, data.documents, data.pendingMinutes, data.pendingFileNotes, data.pendingWarnings, data.pendingHearingInvites]);
+  }, [data.cases, data.documents, data.pendingMinutes, data.pendingFileNotes, data.pendingReturnToWork, data.pendingWarnings, data.pendingHearingInvites]);
 
   if (loading) return <p className="text-sm text-slate-400">Loading your case actions…</p>;
 
@@ -424,6 +429,7 @@ export default function EmployeeCaseActionsPanel() {
     data.bumpPrompts?.length
     || data.pendingHearingInvites?.length
     || data.pendingFileNotes?.length
+    || data.pendingReturnToWork?.length
     || data.pendingWarnings?.length
     || data.pendingMinutes?.length
     || data.cases?.length,
@@ -577,6 +583,87 @@ export default function EmployeeCaseActionsPanel() {
                     <button
                       type="button"
                       className="px-3 py-1.5 text-sm rounded-lg border border-indigo-500/30 text-indigo-100"
+                      onClick={() => setSelectedCaseId(item.caseId)}
+                    >
+                      View case
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </section>
+      )}
+
+      {data.pendingReturnToWork?.length > 0 && (
+        <section className="rounded-xl border border-teal-500/30 bg-teal-500/10 p-4 space-y-3">
+          <h3 className="text-teal-100 font-medium">Return to work interviews awaiting your digital signature</h3>
+          {data.pendingReturnToWork.map((item) => {
+            const previewCollapsed = viewingReturnToWorkId === item.id;
+            return (
+              <div key={item.id} className="border border-teal-500/20 rounded-lg p-3 space-y-3 bg-[#0b1220]/40">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <p className="text-sm font-medium text-teal-50">Return to Work Interview</p>
+                  {item.portalHtml && (
+                    <button
+                      type="button"
+                      className="text-xs text-teal-300 hover:text-teal-200"
+                      onClick={() => openPortalDocument(item)}
+                    >
+                      Open full document ↗
+                    </button>
+                  )}
+                </div>
+
+                {item.interviewDate && (
+                  <p className="text-xs text-teal-100/90">
+                    Interview date: {item.interviewDate}{item.interviewTime ? ` at ${item.interviewTime}` : ''}
+                  </p>
+                )}
+                {item.managerSignature?.signedByName && (
+                  <p className="text-xs text-emerald-200">
+                    Conducting manager: {item.managerSignature.signedByName}
+                    {item.secondManagerName ? ` · Second manager present: ${item.secondManagerName}` : ''}
+                    {item.managerSignature.signedAtLabel ? ` · ${item.managerSignature.signedAtLabel}` : ''}
+                  </p>
+                )}
+
+                {item.portalHtml && (
+                  <div className="rounded-lg border border-[#1a2540] bg-white overflow-hidden">
+                    <iframe
+                      title="Return to work interview"
+                      srcDoc={item.portalHtml}
+                      className={`w-full bg-white transition-all ${previewCollapsed ? 'max-h-[160px]' : 'min-h-[520px]'}`}
+                      style={{ display: 'block' }}
+                    />
+                    <button
+                      type="button"
+                      className="w-full py-1.5 text-xs text-teal-300 hover:text-teal-200 border-t border-[#1a2540] bg-[#0b1220]"
+                      onClick={() => setViewingReturnToWorkId(previewCollapsed ? '' : item.id)}
+                    >
+                      {previewCollapsed ? 'Show full preview ▼' : 'Collapse preview ▲'}
+                    </button>
+                  </div>
+                )}
+
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    className="px-3 py-1.5 text-sm rounded-lg bg-teal-500 text-slate-900 font-medium hover:bg-teal-400 disabled:opacity-50"
+                    disabled={signingId === item.id}
+                    onClick={() => {
+                      if (!window.confirm('Digitally sign this Return to Work Interview? Your name and the current date/time will be recorded on the official document.')) {
+                        return;
+                      }
+                      signReturnToWork(item.id);
+                    }}
+                  >
+                    {signingId === item.id ? 'Signing…' : 'Sign return to work interview'}
+                  </button>
+                  {item.caseId && (
+                    <button
+                      type="button"
+                      className="px-3 py-1.5 text-sm rounded-lg border border-teal-500/30 text-teal-100"
                       onClick={() => setSelectedCaseId(item.caseId)}
                     >
                       View case

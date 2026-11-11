@@ -55,6 +55,7 @@ const FunAdmin = lazyPage(() => import('./pages/FunAdmin'));
 const RollCallLists = lazyPage(() => import('./pages/RollCallLists'));
 const RollCallListDetail = lazyPage(() => import('./pages/RollCallListDetail'));
 const Reports = lazyPage(() => import('./pages/Reports'));
+const CoachManagerReplica = lazyPage(() => import('./components/CoachManagerReplica'));
 
 function LazyPage({ children }) {
   return (
@@ -108,11 +109,24 @@ export default function App() {
                 >
                   <Route index element={<Navigate to="profile" replace />} />
                   <Route path="profile" element={<Profile />} />
+                  <Route path="managed-staff" element={<Navigate to="/dashboard/profile" state={{ profileTab: 'managed-staff' }} replace />} />
                   <Route
                     path="reports"
                     element={(
                       <ProtectedRoute requireFinanceReports>
                         <LazyPage><Reports /></LazyPage>
+                      </ProtectedRoute>
+                    )}
+                  />
+                  <Route
+                    path="coach-manager"
+                    element={(
+                      <ProtectedRoute requireFinanceReports>
+                        <LazyPage>
+                          <div className="p-2 sm:p-4">
+                            <CoachManagerReplica />
+                          </div>
+                        </LazyPage>
                       </ProtectedRoute>
                     )}
                   />

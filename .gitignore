@@ -67,6 +67,7 @@ node_modules/
 
 # Import / probe script outputs
 functions/tmp/
+scratch/
 
 # dataconnect generated files
 .dataconnect

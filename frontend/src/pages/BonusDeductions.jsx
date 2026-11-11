@@ -888,6 +888,7 @@ export default function BonusDeductions() {
       setSyncMessage(
         `SharePoint synced: ${data.applied || 0} applied`
         + (data.appliedAbsences != null ? ` (${data.appliedAbsences || 0} absence, ${data.appliedLateness || 0} lateness)` : '')
+        + (data.removed ? `, ${data.removed} removed (deleted on SharePoint)` : '')
         + (data.skippedZeroLoyalty ? `, ${data.skippedZeroLoyalty} zero-loyalty skipped` : '')
         + (unmatched.length ? `, ${unmatched.length} people need mapping` : ''),
       );

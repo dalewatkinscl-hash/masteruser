@@ -73,6 +73,7 @@ export default function WorkspaceTabs({ activeProfileTab = null, onProfileTabCha
   const location = useLocation();
   const [newSuggestionCount, setNewSuggestionCount] = useState(0);
   const [caseActionCount, setCaseActionCount] = useState(0);
+  const [openMultiplayerLobbies, setOpenMultiplayerLobbies] = useState(0);
   const notifiedRef = useRef(false);
 
   const isAdmin = user?.portalsAccess?.master_admin === 'admin';
@@ -158,10 +159,82 @@ export default function WorkspaceTabs({ activeProfileTab = null, onProfileTabCha
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    const refreshMultiplayerBadge = async () => {
+      try {
+        const response = await fetch('/api/listMultiplayerGames', { credentials: 'include' });
+        const payload = (await readJsonResponse(response)) || {};
+        if (!cancelled && response.ok && payload.openCounts) {
+          const totalWaiting = Object.values(payload.openCounts).reduce(
+            (sum, count) => sum + (Number(count) || 0),
+            0,
+          );
+          setOpenMultiplayerLobbies(totalWaiting);
+        }
+      } catch {
+        // ignore
+      }
+    };
+    refreshMultiplayerBadge();
+    const timer = window.setInterval(refreshMultiplayerBadge, 15000);
+    const onMultiplayerChanged = () => { refreshMultiplayerBadge(); };
+    window.addEventListener('cl-multiplayer-changed', onMultiplayerChanged);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener('cl-multiplayer-changed', onMultiplayerChanged);
+    };
+  }, []);
+
+  const [managedStaffSummary, setManagedStaffSummary] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const checkManagedStaff = async () => {
+      try {
+        const response = await fetch('/api/getMyManagedStaff', { credentials: 'include' });
+        const payload = (await readJsonResponse(response)) || {};
+        if (!cancelled && response.ok) {
+          setManagedStaffSummary(payload);
+        }
+      } catch {
+        // ignore
+      }
+    };
+    checkManagedStaff();
+    const timer = window.setInterval(checkManagedStaff, BADGE_POLL_MS);
+    const onCoverChanged = () => { checkManagedStaff(); };
+    window.addEventListener('cl-manager-cover-changed', onCoverChanged);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      window.removeEventListener('cl-manager-cover-changed', onCoverChanged);
+    };
+  }, [user?.uid]);
+
+  const hasManagedStaff = Boolean(managedStaffSummary?.hasStaff);
+
   const tabs = [
     { id: 'profile', label: t('tabs.profile'), kind: 'profile', profileTab: 'profile' },
+    hasManagedStaff && {
+      id: 'managed-staff',
+      label: t('tabs.managedStaff') || 'Managed Staff',
+      kind: 'profile',
+      profileTab: 'managed-staff',
+      badgeCount: managedStaffSummary?.totalCount || 0,
+      isCovering: (managedStaffSummary?.activeIncomingCovers?.length || 0) > 0,
+    },
     { id: 'cases-inbox', label: t('tabs.myCases'), kind: 'profile', profileTab: 'cases', showDot: caseActionCount > 0 },
     { id: 'fun', label: t('tabs.fun'), kind: 'profile', profileTab: 'fun' },
+    {
+      id: 'multiplayer',
+      label: t('tabs.multiplayer'),
+      kind: 'profile',
+      profileTab: 'multiplayer',
+      hasWaitingPlayer: openMultiplayerLobbies > 0,
+      waitingCount: openMultiplayerLobbies,
+    },
     { id: 'coachdepot', label: t('tabs.coachDepot'), kind: 'profile', profileTab: 'coachdepot' },
     { id: 'coachcapitalist', label: t('tabs.coachCapitalist'), kind: 'profile', profileTab: 'coachcapitalist' },
     { id: 'countryholes', label: t('tabs.countryHoles'), kind: 'profile', profileTab: 'countryholes' },
@@ -227,8 +300,35 @@ export default function WorkspaceTabs({ activeProfileTab = null, onProfileTabCha
                 active ? 'text-cl-fg' : 'text-cl-muted hover:text-cl-fg'
               }`}
             >
-              <span className="relative inline-flex items-center">
+              <span className="relative inline-flex items-center gap-1.5">
                 {tab.label}
+                {tab.badgeCount !== undefined && tab.badgeCount > 0 && (
+                  <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 leading-none">
+                    {tab.badgeCount}
+                  </span>
+                )}
+                {tab.isCovering && (
+                  <span
+                    className="h-2 w-2 rounded-full bg-amber-400 animate-pulse"
+                    title="Active temporary cover in effect"
+                  />
+                )}
+                {tab.hasWaitingPlayer && (
+                  <span
+                    className="relative inline-flex items-center justify-center ml-0.5 text-amber-400"
+                    title={`${tab.waitingCount} multiplayer game awaiting a 2nd player`}
+                    aria-label={`${tab.waitingCount} multiplayer game awaiting a 2nd player`}
+                  >
+                    <span className="animate-ping absolute inline-flex h-3 w-3 rounded-full bg-amber-400 opacity-60" />
+                    <svg
+                      className="relative h-3.5 w-3.5 text-amber-400 drop-shadow-[0_0_8px_rgba(251,191,36,0.95)]"
+                      viewBox="0 0 20 20"
+                      fill="currentColor"
+                    >
+                      <path d="M10 2a6 6 0 00-6 6v3.586l-.707.707A1 1 0 004 14h12a1 1 0 00.707-1.707L16 11.586V8a6 6 0 00-6-6zM10 18a3 3 0 01-3-3h6a3 3 0 01-3 3z" />
+                    </svg>
+                  </span>
+                )}
                 {tab.showDot && (
                   <span
                     className="absolute -top-0.5 -right-2.5 h-2 w-2 rounded-full bg-rose-500 ring-2 ring-[var(--cl-bg-elevated)]"

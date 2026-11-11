@@ -4,7 +4,8 @@ const { Client } = require('pg');
 const { readRedshiftConfigFromEnv } = require('./redshiftConfig');
 
 const CONNECT_TIMEOUT_MS = 8_000;
-const QUERY_TIMEOUT_MS = 15_000;
+// Full dashboard is sequential; keep under function timeout (120s).
+const QUERY_TIMEOUT_MS = 90_000;
 
 function createClient(config) {
   return new Client({

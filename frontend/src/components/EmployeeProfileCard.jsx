@@ -289,6 +289,7 @@ export default function EmployeeProfileCard({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const [managerCandidates, setManagerCandidates] = useState([]);
   const { t, locale } = useLanguage();
   const location = useLocation();
 
@@ -372,6 +373,28 @@ export default function EmployeeProfileCard({
       cancelled = true;
     };
   }, [uid, t]);
+
+  useEffect(() => {
+    if (!editable.hr) return undefined;
+    let cancelled = false;
+
+    const loadCandidates = async () => {
+      try {
+        const res = await fetch('/api/getEmployeeProfiles', { credentials: 'include' });
+        if (res.ok && !cancelled) {
+          const data = (await readJsonResponse(res)) || {};
+          setManagerCandidates(data.employees || []);
+        }
+      } catch {
+        // non-blocking
+      }
+    };
+
+    loadCandidates();
+    return () => {
+      cancelled = true;
+    };
+  }, [editable.hr]);
 
   useEffect(() => {
     if (loading) return undefined;
@@ -633,15 +656,81 @@ export default function EmployeeProfileCard({
                     <p className="text-sm text-white">{employee.department || '—'}</p>
                   )}
                 </Field>
-                <Field label={t('card.manager')}>
+                <Field label={t('card.manager') || 'Line manager'}>
                   {editable.hr ? (
-                    <input
-                      className={inputClassName(false)}
-                      value={form.managerName}
-                      onChange={(e) => updateField('managerName', e.target.value)}
-                    />
+                    (() => {
+                      const currentVal = form.lineManagerId
+                        || form.managerUid
+                        || (form.managerName || form.manager
+                            ? managerCandidates.find(
+                                (m) =>
+                                  m.fullName &&
+                                  m.fullName.trim().toLowerCase() ===
+                                    String(form.managerName || form.manager).trim().toLowerCase(),
+                              )?.uid || ''
+                            : '');
+                      return (
+                        <select
+                          className={inputClassName(false)}
+                          value={currentVal}
+                          onChange={(e) => {
+                            const selectedUid = e.target.value;
+                            if (!selectedUid) {
+                              updateFields({
+                                lineManagerId: '',
+                                lineManagerName: '',
+                                managerUid: '',
+                                managerName: '',
+                                manager: '',
+                              });
+                              return;
+                            }
+                            const candidate = managerCandidates.find(
+                              (m) => String(m.uid || '').trim() === selectedUid,
+                            );
+                            const candName = candidate?.fullName || candidate?.email || '';
+                            updateFields({
+                              lineManagerId: selectedUid,
+                              lineManagerName: candName,
+                              managerUid: selectedUid,
+                              managerName: candName,
+                              manager: candName,
+                            });
+                          }}
+                        >
+                          <option value="">[ No Line Manager ]</option>
+                          {managerCandidates
+                            .filter((m) => m.uid !== uid && m.isActive !== false)
+                            .map((m) => (
+                              <option key={m.uid} value={m.uid}>
+                                {m.fullName || m.email}
+                                {m.employeeProfile?.department ? ` — ${m.employeeProfile.department}` : ''}
+                                {m.employeeProfile?.jobRole ? ` (${m.employeeProfile.jobRole})` : ''}
+                              </option>
+                            ))}
+                          {(form.managerName || form.manager) && !currentVal && (
+                            <option value="" disabled>
+                              Current (unlinked): {form.managerName || form.manager}
+                            </option>
+                          )}
+                        </select>
+                      );
+                    })()
                   ) : (
-                    <p className="text-sm text-white">{employee.managerName || '—'}</p>
+                    <div className="space-y-1">
+                      <p className="text-sm text-white">
+                        {employee.lineManagerName || employee.managerName || employee.manager || '—'}
+                      </p>
+                      {profile?.lineManagerActiveCover && (
+                        <p className="text-xs text-amber-300 bg-amber-500/10 border border-amber-500/25 px-2 py-0.5 rounded inline-flex items-center gap-1.5 mt-1">
+                          <span>🛡️</span>
+                          <span>
+                            Covered by <strong>{profile.lineManagerActiveCover.coverManagerName}</strong> until{' '}
+                            {formatDisplayDate(profile.lineManagerActiveCover.endDate)}
+                          </span>
+                        </p>
+                      )}
+                    </div>
                   )}
                 </Field>
                 <Field label={t('card.contract')}>
@@ -848,6 +937,24 @@ export default function EmployeeProfileCard({
                       className={inputClassName(false)}
                       value={form.canIssueKudos ? 'yes' : 'no'}
                       onChange={(e) => updateField('canIssueKudos', e.target.value === 'yes')}
+                    >
+                      <option value="yes">{t('card.yes')}</option>
+                      <option value="no">{t('card.no')}</option>
+                    </select>
+                  ) : null}
+                </Field>
+                <Field
+                  label={t('card.isManager') || 'Management staff'}
+                  value={(employee.isManager || employee.isManagement) ? t('card.yes') : t('card.no')}
+                >
+                  {editable.hr ? (
+                    <select
+                      className={inputClassName(false)}
+                      value={(form.isManager || form.isManagement) ? 'yes' : 'no'}
+                      onChange={(e) => {
+                        const isMgr = e.target.value === 'yes';
+                        updateFields({ isManager: isMgr, isManagement: isMgr });
+                      }}
                     >
                       <option value="yes">{t('card.yes')}</option>
                       <option value="no">{t('card.no')}</option>

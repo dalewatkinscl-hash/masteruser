@@ -31,7 +31,8 @@ const TOOLBOX_KICK_GAME = { key: 'toolboxkick', label: 'Little Dicks Toolbox' };
 const WANTED_LIVE_FROM = '2026-09-08';
 const WANTED_GAME = { key: 'wanted', label: 'Daily Wanted' };
 
-/** Always offered on Fun (test build — not counted in weekday rotation). */
+/** Always offered on Fun from this London day (not counted in weekday sit-outs). */
+const COUNTRY_HOLES_LIVE_FROM = '2026-10-14';
 const COUNTRY_HOLES_GAME = { key: 'countryholes', label: 'Country Holes' };
 
 /** Soft launch / secret unlock from this day; joins weekday rotation from LIVE_FROM. */
@@ -186,6 +187,7 @@ function getRosterForDay(dayKey) {
   if (key >= TOOLBOX_KICK_LIVE_FROM) roster.push(TOOLBOX_KICK_GAME);
   if (key >= WANTED_LIVE_FROM) roster.push(WANTED_GAME);
   if (key >= STACK_WALK_LIVE_FROM) roster.push(STACK_WALK_GAME);
+  if (key >= COUNTRY_HOLES_LIVE_FROM) roster.push(COUNTRY_HOLES_GAME);
   return roster;
 }
 
@@ -269,12 +271,21 @@ function pickDailyGames(rosterKeys, ordinal, dailyCount) {
  * Permanent games always on (from PERMANENT_FUN_FROM).
  * Rotated pool contributes `rotatedDailyCount` games via rolling sit-outs.
  */
+function alwaysOnGameKeys(dayKey, rosterKeys) {
+  const keys = [];
+  if (dayKey >= COUNTRY_HOLES_LIVE_FROM && rosterKeys.includes('countryholes')) {
+    keys.push('countryholes');
+  }
+  return keys;
+}
+
 function pickGamesForDay(rosterKeys, ordinal, dayKey, settings = getActiveRotationSettings()) {
   const permanentKeys = (settings.permanentGameKeys || [])
     .filter((k) => rosterKeys.includes(k));
   // Before permanent enforcement date, treat nothing as permanent (all rotate together).
   const usePermanent = dayKey >= PERMANENT_FUN_FROM;
-  const permanent = usePermanent ? permanentKeys : [];
+  const alwaysOn = alwaysOnGameKeys(dayKey, rosterKeys);
+  const permanent = [...new Set([...(usePermanent ? permanentKeys : []), ...alwaysOn])];
   const rotating = rosterKeys.filter((k) => !permanent.includes(k));
 
   let rotatedCount = Number(settings.rotatedDailyCount);
@@ -338,6 +349,7 @@ function getFunRotationForDay(dayKey = getLondonDayKey(), settings = getActiveRo
       toolboxKickLive: key >= TOOLBOX_KICK_LIVE_FROM,
       wantedLive: key >= WANTED_LIVE_FROM,
       stackWalkLive: key >= STACK_WALK_LIVE_FROM,
+      countryHolesLive: key >= COUNTRY_HOLES_LIVE_FROM,
     };
   }
 
@@ -382,6 +394,7 @@ function getFunRotationForDay(dayKey = getLondonDayKey(), settings = getActiveRo
     toolboxKickLive: key >= TOOLBOX_KICK_LIVE_FROM,
     wantedLive: key >= WANTED_LIVE_FROM,
     stackWalkLive: key >= STACK_WALK_LIVE_FROM,
+    countryHolesLive: key >= COUNTRY_HOLES_LIVE_FROM,
   };
 }
 
@@ -460,6 +473,7 @@ module.exports = {
   TOOLBOX_KICK_LIVE_FROM,
   WANTED_GAME,
   WANTED_LIVE_FROM,
+  COUNTRY_HOLES_LIVE_FROM,
   COUNTRY_HOLES_GAME,
   STACK_WALK_GAME,
   STACK_WALK_LIVE_FROM,

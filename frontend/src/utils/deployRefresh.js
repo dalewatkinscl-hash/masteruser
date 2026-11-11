@@ -71,34 +71,10 @@ export async function checkDeployRefresh() {
   }
 }
 
-/** Start polling + check when the tab becomes visible again. */
+/**
+ * Deploy auto-reload is disabled — open portals stay on the tab/game they’re on.
+ * Manual hard-refresh still picks up new deploys.
+ */
 export function startDeployRefreshWatcher() {
-  if (import.meta.env.DEV) return () => {};
-  if (!currentBuildId()) return () => {};
-
-  // One-shot snooze so this deploy doesn't yank open tabs for a day
-  try {
-    if (!localStorage.getItem('cl_deploy_snooze_once_20261009')) {
-      localStorage.setItem('cl_deploy_snooze_once_20261009', '1');
-      snoozeDeployRefresh(DAY_MS);
-    }
-  } catch {
-    /* ignore */
-  }
-
-  const run = () => {
-    checkDeployRefresh().catch(() => {});
-  };
-
-  run();
-  const intervalId = window.setInterval(run, POLL_MS);
-  const onVisible = () => {
-    if (document.visibilityState === 'visible') run();
-  };
-  document.addEventListener('visibilitychange', onVisible);
-
-  return () => {
-    window.clearInterval(intervalId);
-    document.removeEventListener('visibilitychange', onVisible);
-  };
+  return () => {};
 }

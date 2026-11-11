@@ -29,6 +29,7 @@ import {
 import { nameForUid } from '../utils/caseStageHistory';
 import { buildHearingInviteHtml, printHearingInvite } from '../utils/hearingInvitePrint';
 import { buildFileNoteForImprovementHtml, printHtmlDocument } from '../utils/fileNoteForImprovementPrint';
+import { RETURN_TO_WORK_QUESTIONS, buildReturnToWorkHtml } from '../utils/returnToWorkPrint';
 import { ALLOW_DELETE_CASES } from '../utils/featureFlags';
 import { isAmendmentPending } from '../utils/interviewNotes';
 import { buildHearingCalendarOffer, buildReviewCalendarOffer, downloadIcsFromOffer } from '../utils/calendarLinks';
@@ -37,6 +38,7 @@ import {
   computeAccidentPenaltyPoints,
   groupAccidentPenaltyTriggers,
 } from '../utils/accidentPenaltyPoints';
+import { canManageHrOnlyRecords } from '../utils/hrOnlyRecords';
 
 const CASE_TYPES = [
   'attendance',
@@ -46,6 +48,7 @@ const CASE_TYPES = [
   'capability',
   'grievance',
   'vehicle_accident',
+  'return_to_work',
   'other',
 ];
 const DOCUMENT_TYPES = ['evidence', 'letter', 'minutes', 'warning', 'outcome', 'invite', 'suspension_letter', 'training_outline', 'pip_plan', 'other'];
@@ -55,6 +58,7 @@ function defaultCaseTypeForFamily(processFamily) {
   if (processFamily === 'vehicle_accident') return 'vehicle_accident';
   if (processFamily === 'samsara_coaching') return 'samsara_coaching';
   if (processFamily === 'record') return 'record';
+  if (processFamily === 'return_to_work') return 'return_to_work';
   return 'conduct';
 }
 
@@ -68,6 +72,10 @@ function isRecordCreateForm(form = {}) {
 
 function isAccidentCreateForm(form = {}) {
   return form.processFamily === 'vehicle_accident' || form.caseType === 'vehicle_accident';
+}
+
+function isReturnToWorkCreateForm(form = {}) {
+  return form.processFamily === 'return_to_work' || form.caseType === 'return_to_work';
 }
 
 function toDatetimeLocalValue(value) {
@@ -296,6 +304,11 @@ export default function DisciplinaryCase() {
   const [form, setForm] = useState({
     employeeUid: '',
     ownerManagerUid: user?.uid || '',
+    secondManagerUid: '',
+    interviewDate: new Date().toISOString().slice(0, 10),
+    interviewTime: '',
+    returnToWorkAnswers: {},
+    additionalNotes: '',
     processFamily: prefilledFamily,
     caseType: defaultCaseTypeForFamily(prefilledFamily),
     issue: '',
@@ -313,11 +326,14 @@ export default function DisciplinaryCase() {
     vehicleId: '',
     vehicleRegOther: '',
     hideFromEmployee: false,
+    hrOnly: false,
   });
+  const canSetHrOnly = canManageHrOnlyRecords(user);
   const family = caseData?.processFamily || form.processFamily || 'disciplinary';
   const isSamsaraCreate = isNew && isSamsaraCreateForm(form);
   const isRecordCreate = isNew && isRecordCreateForm(form);
   const isAccidentCreate = isNew && isAccidentCreateForm(form);
+  const isReturnToWorkCreate = isNew && isReturnToWorkCreateForm(form);
 
   useEffect(() => {
     if (!isNew || !user?.uid) return;
@@ -500,6 +516,10 @@ export default function DisciplinaryCase() {
     if (isRecordCreateForm(form)) {
       return `${name} - ${issue} - Record`;
     }
+    if (isReturnToWorkCreateForm(form)) {
+      const dateText = formatHistoryDate(form.interviewDate || form.eventDate);
+      return `${name} — Return to Work Interview — ${dateText}`;
+    }
     if (isAccidentCreateForm(form)) {
       const reg = form.vehicleReg === '__other__'
         ? String(form.vehicleRegOther || '').trim().toUpperCase()
@@ -509,7 +529,7 @@ export default function DisciplinaryCase() {
         : `${name} — Vehicle accident`;
     }
     return `${name} - ${issue}`;
-  }, [selectedEmployeeName, form.issue, form.processFamily, form.caseType, form.vehicleReg, form.vehicleRegOther]);
+  }, [selectedEmployeeName, form.issue, form.processFamily, form.caseType, form.vehicleReg, form.vehicleRegOther, form.interviewDate, form.eventDate]);
 
   const todayIso = new Date().toISOString().slice(0, 10);
   const hearingAt = hearingForm.hearingScheduledAt
@@ -627,6 +647,10 @@ export default function DisciplinaryCase() {
         } else if (value === 'record') {
           next.informalResolutionPath = '';
           next.eventDate = '';
+        } else if (value === 'return_to_work') {
+          next.informalResolutionPath = '';
+          if (!next.interviewDate) next.interviewDate = new Date().toISOString().slice(0, 10);
+          next.issue = next.issue || 'Return to work interview';
         } else if (value === 'vehicle_accident') {
           next.informalResolutionPath = '';
           next.issue = next.issue || 'Vehicle accident';
@@ -657,6 +681,12 @@ export default function DisciplinaryCase() {
       if (name === 'caseType' && value === 'record') {
         next.processFamily = 'record';
         next.informalResolutionPath = '';
+      }
+      if (name === 'caseType' && value === 'return_to_work') {
+        next.processFamily = 'return_to_work';
+        next.informalResolutionPath = '';
+        if (!next.interviewDate) next.interviewDate = new Date().toISOString().slice(0, 10);
+        next.issue = next.issue || 'Return to work interview';
       }
       return next;
     });
@@ -934,6 +964,7 @@ export default function DisciplinaryCase() {
     const isSamsara = isSamsaraCreateForm(form);
     const isRecord = isRecordCreateForm(form);
     const isAccident = isAccidentCreateForm(form);
+    const isReturnToWork = isReturnToWorkCreateForm(form);
     const vehicleReg = isAccident
       ? (form.vehicleReg === '__other__'
         ? String(form.vehicleRegOther || '').trim().toUpperCase()
@@ -944,7 +975,9 @@ export default function DisciplinaryCase() {
       : '';
     const issue = isAccident
       ? (vehicleReg ? `Vehicle accident — ${vehicleReg}` : 'Vehicle accident')
-      : String(form.issue || '').trim();
+      : isReturnToWork
+        ? 'Return to work interview'
+        : String(form.issue || '').trim();
     if (!issue) {
       setError(isSamsara
         ? 'Enter the issue before logging coaching.'
@@ -952,6 +985,25 @@ export default function DisciplinaryCase() {
           ? 'Enter a subject before opening the record.'
           : 'Enter the issue before opening the case.');
       return;
+    }
+    if (isReturnToWork) {
+      if (!form.secondManagerUid) {
+        setError('Please select the second manager present for this Return to Work interview.');
+        return;
+      }
+      const leadManagerUid = form.ownerManagerUid || user?.uid;
+      if (form.secondManagerUid === leadManagerUid) {
+        setError('The second manager must be different from the lead manager.');
+        return;
+      }
+      if (form.secondManagerUid === form.employeeUid) {
+        setError('The second manager cannot be the employee returning to work.');
+        return;
+      }
+      if (leadManagerUid === form.employeeUid) {
+        setError('The lead manager cannot be the employee returning to work.');
+        return;
+      }
     }
     if (isAccident) {
       if (!vehicleReg) {
@@ -963,7 +1015,7 @@ export default function DisciplinaryCase() {
         return;
       }
     }
-    if (!isSamsara && !isRecord && !isAccident && (form.processFamily === 'disciplinary' || form.processFamily === 'grievance') && !form.informalResolutionPath) {
+    if (!isSamsara && !isRecord && !isAccident && !isReturnToWork && (form.processFamily === 'disciplinary' || form.processFamily === 'grievance') && !form.informalResolutionPath) {
       setError('Choose how you are starting the case before opening it.');
       return;
     }
@@ -986,17 +1038,25 @@ export default function DisciplinaryCase() {
           issue,
           caseType: isSamsara
             ? 'samsara_coaching'
-            : (isRecord ? 'record' : (isAccident ? 'vehicle_accident' : form.caseType)),
+            : (isRecord ? 'record' : (isAccident ? 'vehicle_accident' : (isReturnToWork ? 'return_to_work' : form.caseType))),
           title: composedCaseTitle,
           informalTried: form.informalResolutionPath === 'proceed_formal',
-          informalResolutionPath: (isSamsara || isRecord || isAccident) ? '' : form.informalResolutionPath,
+          informalResolutionPath: (isSamsara || isRecord || isAccident || isReturnToWork) ? '' : form.informalResolutionPath,
           eventDate,
+          secondManagerUid: isReturnToWork ? form.secondManagerUid : undefined,
+          interviewDate: isReturnToWork ? (form.interviewDate || new Date().toISOString().slice(0, 10)) : undefined,
+          interviewTime: isReturnToWork ? form.interviewTime : undefined,
+          returnToWorkAnswers: isReturnToWork ? form.returnToWorkAnswers : undefined,
+          additionalNotes: isReturnToWork ? form.additionalNotes : undefined,
           incidentAt: isAccident ? incidentAtIso : '',
           vehicleReg: isAccident ? vehicleReg : '',
           vehicleId: isAccident && form.vehicleReg !== '__other__' ? (form.vehicleId || '') : '',
-          stage: isAccident ? 'recorded' : undefined,
+          stage: isAccident ? 'recorded' : (isReturnToWork ? 'interview' : undefined),
           ...(isRecord
-            ? { publishToEmployee: form.hideFromEmployee ? false : undefined }
+            ? {
+              publishToEmployee: (form.hrOnly || form.hideFromEmployee) ? false : undefined,
+              hrOnly: canSetHrOnly ? Boolean(form.hrOnly) : undefined,
+            }
             : {}),
         }),
       });
@@ -3152,13 +3212,27 @@ export default function DisciplinaryCase() {
               <div>
                 <dt className="text-xs uppercase tracking-wide text-slate-500">Employee visibility</dt>
                 <dd className="mt-1">
-                  {caseData?.unpublishedFromEmployeeAt ? (
+                  {caseData?.hrOnly || caseData?.unpublishedFromEmployeeAt ? (
                     <span className="inline-flex rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-xs text-amber-100">
                       Hidden from employee
                     </span>
                   ) : (
                     <span className="inline-flex rounded-md border border-[#1a2540] bg-[#060e1a]/50 px-2 py-0.5 text-xs text-slate-300">
                       Visible when shared
+                    </span>
+                  )}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs uppercase tracking-wide text-slate-500">HR visibility</dt>
+                <dd className="mt-1">
+                  {caseData?.hrOnly ? (
+                    <span className="inline-flex rounded-md border border-rose-500/40 bg-rose-500/15 px-2 py-0.5 text-xs text-rose-100">
+                      HR only — Dale &amp; Michelle
+                    </span>
+                  ) : (
+                    <span className="inline-flex rounded-md border border-[#1a2540] bg-[#060e1a]/50 px-2 py-0.5 text-xs text-slate-300">
+                      All cases managers
                     </span>
                   )}
                 </dd>
@@ -3175,6 +3249,33 @@ export default function DisciplinaryCase() {
             </dl>
             {caseData?.summary ? (
               <p className="text-sm text-slate-300 mt-4 whitespace-pre-wrap">{caseData.summary}</p>
+            ) : null}
+            {canSetHrOnly ? (
+              <div className="mt-4 rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 flex items-center justify-between gap-4">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-rose-50">HR only</p>
+                  <p className="text-xs text-rose-100/70 mt-0.5">
+                    When on, only Dale Watkins and Michelle Cox can see this record.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={Boolean(caseData?.hrOnly)}
+                  aria-label="HR only"
+                  disabled={saving}
+                  onClick={() => apiUpdate({ hrOnly: !caseData?.hrOnly })}
+                  className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors disabled:opacity-50 ${
+                    caseData?.hrOnly ? 'bg-rose-500' : 'bg-slate-600'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
+                      caseData?.hrOnly ? 'translate-x-6' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
+              </div>
             ) : null}
           </StepCard>
 
@@ -3241,6 +3342,129 @@ export default function DisciplinaryCase() {
               </div>
             </div>
           ) : null}
+        </div>
+      );
+    }
+
+    if (family === 'return_to_work') {
+      const rtwDoc = (Array.isArray(documents) ? documents : []).find(
+        (doc) => doc.documentType === 'return_to_work',
+      );
+      const openDoc = (doc) => {
+        if (!doc?.portalHtml) return;
+        const win = window.open('', '_blank', 'noopener,noreferrer');
+        if (!win) return;
+        win.document.open();
+        win.document.write(doc.portalHtml);
+        win.document.close();
+      };
+      const isSigned = caseData?.returnToWorkEmployeeSignStatus === 'signed' || caseData?.stage === 'closed';
+      const answers = caseData?.returnToWorkAnswers || {};
+      const secondMgrName = caseData?.secondManagerNameSnapshot || nameForUid(caseData?.secondManagerUid, employees) || '—';
+
+      return (
+        <div className="space-y-6">
+          <div className={`rounded-xl border p-5 ${
+            isSigned
+              ? 'border-emerald-500/30 bg-emerald-500/10'
+              : 'border-amber-500/30 bg-amber-500/10'
+          }`}>
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div>
+                <p className={`font-semibold text-base ${isSigned ? 'text-emerald-100' : 'text-amber-100'}`}>
+                  {isSigned ? '✓ Return to work interview completed & signed' : '⏱ Awaiting employee digital signature'}
+                </p>
+                <p className={`text-xs mt-1 leading-relaxed ${isSigned ? 'text-emerald-200/80' : 'text-amber-200/80'}`}>
+                  {isSigned
+                    ? `Digitally signed by employee on ${formatDateTimeUk(caseData?.returnToWorkEmployeeSignedAt || caseData?.closedAt)}. Record is complete and stored on personnel file.`
+                    : `Conducted by management and issued to employee's portal on ${formatDateTimeUk(caseData?.openedAt || caseData?.createdAt)}. Both manager and second manager have recorded and digitally approved the interview.`}
+                </p>
+              </div>
+              {rtwDoc?.portalHtml && (
+                <button
+                  type="button"
+                  onClick={() => openDoc(rtwDoc)}
+                  className="px-3.5 py-2 text-xs rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-medium shrink-0 flex items-center gap-1.5"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z" />
+                  </svg>
+                  Print / View official document
+                </button>
+              )}
+            </div>
+          </div>
+
+          <StepCard title="Return to Work interview details">
+            <dl className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 text-sm">
+              <div>
+                <dt className="text-xs uppercase tracking-wide text-slate-500">Employee</dt>
+                <dd className="mt-1 text-white font-medium">{caseData?.employeeNameSnapshot || '—'}</dd>
+              </div>
+              <div>
+                <dt className="text-xs uppercase tracking-wide text-slate-500">Department</dt>
+                <dd className="mt-1 text-white">{caseData?.departmentSnapshot || '—'}</dd>
+              </div>
+              <div>
+                <dt className="text-xs uppercase tracking-wide text-slate-500">Interview date</dt>
+                <dd className="mt-1 text-white font-medium">
+                  {formatHistoryDate(caseData?.interviewDate || caseData?.eventDate || caseData?.createdAt)}
+                  {caseData?.interviewTime ? ` at ${caseData.interviewTime}` : ''}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-xs uppercase tracking-wide text-slate-500">Lead manager</dt>
+                <dd className="mt-1 text-white font-medium">{ownerManagerName || '—'}</dd>
+              </div>
+              <div>
+                <dt className="text-xs uppercase tracking-wide text-slate-500">Second manager present</dt>
+                <dd className="mt-1 text-white font-medium">{secondMgrName}</dd>
+              </div>
+              <div>
+                <dt className="text-xs uppercase tracking-wide text-slate-500">Signature status</dt>
+                <dd className="mt-1">
+                  <span className={`inline-flex rounded-md px-2 py-0.5 text-xs font-medium ${
+                    isSigned
+                      ? 'bg-emerald-500/20 text-emerald-200 border border-emerald-500/30'
+                      : 'bg-amber-500/20 text-amber-200 border border-amber-500/30'
+                  }`}>
+                    {isSigned ? 'Signed by employee' : 'Pending employee signature'}
+                  </span>
+                </dd>
+              </div>
+            </dl>
+          </StepCard>
+
+          <StepCard title="Standard Return to Work questions & responses">
+            <div className="space-y-4">
+              {RETURN_TO_WORK_QUESTIONS.map((q) => {
+                const answer = answers[q.id];
+                return (
+                  <div key={q.id} className="rounded-lg border border-[#1a2540] bg-[#060e1a]/60 p-4 space-y-2">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-indigo-300">
+                      Question {q.number}
+                    </p>
+                    <p className="text-sm font-medium text-slate-100">
+                      {q.question}
+                    </p>
+                    <div className="rounded border border-[#1a2540]/60 bg-[#0b1220] p-3 text-sm text-slate-200 whitespace-pre-wrap">
+                      {answer ? answer : <span className="text-slate-500 italic">None recorded</span>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </StepCard>
+
+          {caseData?.additionalNotes && (
+            <StepCard title="Additional notes & agreed adjustments">
+              <div className="rounded border border-[#1a2540]/60 bg-[#060e1a]/60 p-3 text-sm text-slate-200 whitespace-pre-wrap">
+                {caseData.additionalNotes}
+              </div>
+            </StepCard>
+          )}
+
+          {documentationHub}
         </div>
       );
     }
@@ -3502,7 +3726,9 @@ export default function DisciplinaryCase() {
                     ? 'Open a personnel record'
                     : isAccidentCreate
                       ? 'Record a vehicle accident'
-                      : 'Step 0 — Open the case'}
+                      : isReturnToWorkCreate
+                        ? 'Conduct Return to Work interview'
+                        : 'Step 0 — Open the case'}
               </p>
               <p className="text-sm text-slate-400 mt-1">
                 {isSamsaraCreate
@@ -3511,7 +3737,9 @@ export default function DisciplinaryCase() {
                     ? 'Add documents or interviews to someone’s file without starting a disciplinary or grievance process.'
                     : isAccidentCreate
                       ? 'Log the accident against the vehicle and driver. The driver is prompted to complete a bump card before you decide fault.'
-                      : 'Record the concern and open the case. You can hold interviews, upload notes, and decide later whether it resolves informally or goes formal.'}
+                      : isReturnToWorkCreate
+                        ? 'Record a Return to Work interview conducted by two managers with the employee. The 8 standard return to work questions are captured, digitally signed by management, and issued to the employee portal for their digital signature.'
+                        : 'Record the concern and open the case. You can hold interviews, upload notes, and decide later whether it resolves informally or goes formal.'}
               </p>
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -3522,7 +3750,7 @@ export default function DisciplinaryCase() {
                   ))}
                 </select>
               </Field>
-              {!isSamsaraCreate && !isRecordCreate && !isAccidentCreate && (
+              {!isSamsaraCreate && !isRecordCreate && !isAccidentCreate && !isReturnToWorkCreate && (
                 <Field label="Case type">
                   <select name="caseType" value={form.caseType} onChange={handleChange} className={inputClass}>
                     {CASE_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
@@ -3539,7 +3767,7 @@ export default function DisciplinaryCase() {
                   emptyLabel="Select an active employee"
                 />
               </Field>
-              <Field label="Owner manager (optional assign)">
+              <Field label={isReturnToWorkCreate ? "Lead manager (conducting)" : "Owner manager (optional assign)"}>
                 <EmployeeSelect
                   value={form.ownerManagerUid}
                   onChange={(uid) => setForm((prev) => ({ ...prev, ownerManagerUid: uid }))}
@@ -3549,7 +3777,42 @@ export default function DisciplinaryCase() {
                   emptyLabel="Defaults to you"
                 />
               </Field>
+              {isReturnToWorkCreate && (
+                <Field label="Second manager present (required)">
+                  <EmployeeSelect
+                    value={form.secondManagerUid}
+                    onChange={(uid) => setForm((prev) => ({ ...prev, secondManagerUid: uid }))}
+                    employees={employees}
+                    loading={employeesLoading}
+                    mode="managers"
+                    emptyLabel="Select second manager present"
+                  />
+                </Field>
+              )}
             </div>
+
+            {isReturnToWorkCreate && (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <Field label="Interview date">
+                  <input
+                    type="date"
+                    name="interviewDate"
+                    value={form.interviewDate}
+                    onChange={handleChange}
+                    className={inputClass}
+                  />
+                </Field>
+                <Field label="Interview time (optional)">
+                  <input
+                    type="time"
+                    name="interviewTime"
+                    value={form.interviewTime}
+                    onChange={handleChange}
+                    className={inputClass}
+                  />
+                </Field>
+              </div>
+            )}
 
             {isAccidentCreate ? (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -3593,7 +3856,7 @@ export default function DisciplinaryCase() {
                   </Field>
                 ) : null}
               </div>
-            ) : (
+            ) : isReturnToWorkCreate ? null : (
               <Field label={isRecordCreate ? 'Subject' : 'Issue'}>
                 <input
                   name="issue"
@@ -3623,10 +3886,12 @@ export default function DisciplinaryCase() {
                     ? 'Built as Employee name — Subject — Record — Date'
                     : isAccidentCreate
                       ? 'Built as Employee name — Vehicle accident — Registration'
-                      : 'Built as Employee name — Issue — Date'}
+                      : isReturnToWorkCreate
+                        ? 'Built as Employee name — Return to Work Interview — Date'
+                        : 'Built as Employee name — Issue — Date'}
               </span>
             </Field>
-            {!isSamsaraCreate && !isAccidentCreate && (
+            {!isSamsaraCreate && !isAccidentCreate && !isReturnToWorkCreate && (
               <Field label="Summary">
                 <textarea name="summary" value={form.summary} onChange={handleChange} rows={4} className={inputClass} />
               </Field>
@@ -3635,6 +3900,62 @@ export default function DisciplinaryCase() {
               <Field label="Notes (optional)">
                 <textarea name="summary" value={form.summary} onChange={handleChange} rows={3} className={inputClass} placeholder="Initial notes for managers" />
               </Field>
+            )}
+
+            {isReturnToWorkCreate && (
+              <div className="space-y-4 pt-2">
+                <div className="border-t border-[#1a2540] pt-4">
+                  <h4 className="text-base font-semibold text-white">Return to Work Questions</h4>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Ask the employee each of the 8 standard questions below and record their responses.
+                  </p>
+                </div>
+
+                <div className="space-y-4">
+                  {RETURN_TO_WORK_QUESTIONS.map((q) => (
+                    <div key={q.id} className="rounded-xl border border-[#1a2540] bg-[#060e1a]/60 p-4 space-y-2">
+                      <div className="flex items-center gap-2">
+                        <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">
+                          Question {q.number} of 8
+                        </span>
+                      </div>
+                      <label className="block text-sm font-medium text-slate-100">
+                        {q.question}
+                      </label>
+                      <textarea
+                        rows={3}
+                        value={form.returnToWorkAnswers?.[q.id] || ''}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setForm((prev) => ({
+                            ...prev,
+                            returnToWorkAnswers: {
+                              ...prev.returnToWorkAnswers,
+                              [q.id]: val,
+                            },
+                          }));
+                        }}
+                        placeholder={q.placeholder}
+                        className={inputClass}
+                      />
+                    </div>
+                  ))}
+                </div>
+
+                <div className="rounded-xl border border-[#1a2540] bg-[#060e1a]/60 p-4 space-y-2">
+                  <label className="block text-sm font-medium text-slate-100">
+                    Additional notes, agreed actions &amp; adjustments (optional)
+                  </label>
+                  <textarea
+                    rows={3}
+                    name="additionalNotes"
+                    value={form.additionalNotes}
+                    onChange={handleChange}
+                    placeholder="Any further discussion points, agreed adjustments, or manager notes..."
+                    className={inputClass}
+                  />
+                </div>
+              </div>
             )}
 
             {form.employeeUid && (
@@ -3760,32 +4081,70 @@ export default function DisciplinaryCase() {
             )}
 
             {isRecordCreate && (
-              <div className="rounded-lg border border-[#1a2540] bg-[#060e1a]/50 px-4 py-3 flex items-center justify-between gap-4">
-                <div className="min-w-0">
-                  <p className="text-sm font-medium text-white">Hide from employee</p>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    When on, this record stays off their My cases list (including if you add interviews later).
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={Boolean(form.hideFromEmployee)}
-                  aria-label="Hide from employee"
-                  onClick={() => setForm((prev) => ({
-                    ...prev,
-                    hideFromEmployee: !prev.hideFromEmployee,
-                  }))}
-                  className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors ${
-                    form.hideFromEmployee ? 'bg-indigo-500' : 'bg-slate-600'
-                  }`}
-                >
-                  <span
-                    className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
-                      form.hideFromEmployee ? 'translate-x-6' : 'translate-x-1'
+              <div className="space-y-3">
+                <div className="rounded-lg border border-[#1a2540] bg-[#060e1a]/50 px-4 py-3 flex items-center justify-between gap-4">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-white">Hide from employee</p>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      {form.hrOnly
+                        ? 'Required for HR-only records — stays off their My cases list.'
+                        : 'When on, this record stays off their My cases list (including if you add interviews later).'}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={Boolean(form.hideFromEmployee || form.hrOnly)}
+                    aria-label="Hide from employee"
+                    disabled={Boolean(form.hrOnly)}
+                    onClick={() => setForm((prev) => ({
+                      ...prev,
+                      hideFromEmployee: !prev.hideFromEmployee,
+                    }))}
+                    className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors disabled:opacity-60 ${
+                      (form.hideFromEmployee || form.hrOnly) ? 'bg-indigo-500' : 'bg-slate-600'
                     }`}
-                  />
-                </button>
+                  >
+                    <span
+                      className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
+                        (form.hideFromEmployee || form.hrOnly) ? 'translate-x-6' : 'translate-x-1'
+                      }`}
+                    />
+                  </button>
+                </div>
+                {canSetHrOnly && (
+                  <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 flex items-center justify-between gap-4">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-rose-50">HR only</p>
+                      <p className="text-xs text-rose-100/70 mt-0.5">
+                        Visible only to Dale Watkins and Michelle Cox. Hidden from all other managers and the employee.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={Boolean(form.hrOnly)}
+                      aria-label="HR only"
+                      onClick={() => setForm((prev) => {
+                        const next = !prev.hrOnly;
+                        return {
+                          ...prev,
+                          hrOnly: next,
+                          hideFromEmployee: next ? true : prev.hideFromEmployee,
+                        };
+                      })}
+                      className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors ${
+                        form.hrOnly ? 'bg-rose-500' : 'bg-slate-600'
+                      }`}
+                    >
+                      <span
+                        className={`inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform ${
+                          form.hrOnly ? 'translate-x-6' : 'translate-x-1'
+                        }`}
+                      />
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 
@@ -3824,10 +4183,12 @@ export default function DisciplinaryCase() {
               disabled={
                 saving
                 || !form.employeeUid
-                || (isAccidentCreate
-                  ? !(form.incidentAt && (form.vehicleReg === '__other__' ? form.vehicleRegOther : form.vehicleReg))
-                  : !String(form.issue || '').trim())
-                || (!isSamsaraCreate && !isRecordCreate && !isAccidentCreate && (form.processFamily === 'disciplinary' || form.processFamily === 'grievance') && !form.informalResolutionPath)
+                || (isReturnToWorkCreate
+                  ? (!form.secondManagerUid || form.secondManagerUid === (form.ownerManagerUid || user?.uid) || form.secondManagerUid === form.employeeUid)
+                  : isAccidentCreate
+                    ? !(form.incidentAt && (form.vehicleReg === '__other__' ? form.vehicleRegOther : form.vehicleReg))
+                    : !String(form.issue || '').trim())
+                || (!isSamsaraCreate && !isRecordCreate && !isAccidentCreate && !isReturnToWorkCreate && (form.processFamily === 'disciplinary' || form.processFamily === 'grievance') && !form.informalResolutionPath)
                 || (form.processFamily === 'grievance' && !(form.grievanceSubjectUids || []).length)
               }
               className={btnPrimary}
@@ -3840,14 +4201,31 @@ export default function DisciplinaryCase() {
                     ? 'Open record'
                     : isAccidentCreate
                       ? 'Record accident'
-                      : 'Open case — start fact-finding'}
+                      : isReturnToWorkCreate
+                        ? 'Record & Issue Return to Work for Employee Signature'
+                        : 'Open case — start fact-finding'}
             </button>
             {!form.employeeUid && (
               <p className="text-xs text-amber-300">
                 Click the employee field and choose who the case is about. The open button stays disabled until an employee is selected.
               </p>
             )}
-            {form.employeeUid && !isAccidentCreate && !String(form.issue || '').trim() && (
+            {form.employeeUid && isReturnToWorkCreate && !form.secondManagerUid && (
+              <p className="text-xs text-amber-300">
+                Select the second manager present before recording and issuing the Return to Work interview.
+              </p>
+            )}
+            {form.employeeUid && isReturnToWorkCreate && form.secondManagerUid && form.secondManagerUid === (form.ownerManagerUid || user?.uid) && (
+              <p className="text-xs text-rose-300">
+                The second manager must be a different manager from the lead manager.
+              </p>
+            )}
+            {form.employeeUid && isReturnToWorkCreate && form.secondManagerUid && form.secondManagerUid === form.employeeUid && (
+              <p className="text-xs text-rose-300">
+                The second manager cannot be the employee returning to work.
+              </p>
+            )}
+            {form.employeeUid && !isAccidentCreate && !isReturnToWorkCreate && !String(form.issue || '').trim() && (
               <p className="text-xs text-amber-300">
                 {isSamsaraCreate
                   ? 'Enter the issue — the title is built as Name — Issue Samsara Coaching Date.'

@@ -3,7 +3,6 @@ import { Link, useNavigate } from 'react-router-dom';
 import {
   fetchRollCallLists,
   formatRollCallDate,
-  rollCallPercentComplete,
   setRollCallListArchived,
 } from '../utils/rollCallLists';
 
@@ -88,7 +87,7 @@ export default function RollCallLists() {
               <p className="text-sm text-slate-400 mt-1">
                 {showArchived
                   ? 'Hidden lists you can restore if needed.'
-                  : 'Saved staff lists from the employee directory — tick off as you go.'}
+                  : 'Saved staff lists from the employee directory — distribute to staff or tick off as you go.'}
               </p>
             </div>
             <button
@@ -135,46 +134,81 @@ export default function RollCallLists() {
           ) : (
             <ul className="space-y-3">
               {visibleLists.map((list) => {
-                const percent = rollCallPercentComplete(list);
+                const total = Number(list.totalCount) || 0;
+                const confirmed = Number(list.confirmedCount ?? list.doneCount) || 0;
+                const rejected = Number(list.rejectedCount) || 0;
+                const seen = Number(list.seenCount) || 0;
+                const sent = Number(list.sentCount) || 0;
+
+                const confirmedPercent = total ? Math.round((confirmed / total) * 100) : 0;
+                const rejectedPercent = total ? Math.round((rejected / total) * 100) : 0;
+
                 return (
                   <li
                     key={list.id}
-                    className="rounded-xl border border-[#1a2540] bg-[#0b1220] px-5 py-4 flex flex-wrap items-center gap-4 justify-between"
+                    className="rounded-xl border border-[#1a2540] bg-[#0b1220] px-5 py-4 flex flex-wrap items-center gap-4 justify-between hover:border-slate-700 transition-colors"
                   >
                     <div className="min-w-0 flex-1">
-                      <Link
-                        to={`/dashboard/hr/roll-calls/${list.id}`}
-                        className="text-base font-medium text-white hover:text-indigo-200"
-                      >
-                        {list.title}
-                      </Link>
-                      <p className="text-sm text-slate-500 mt-1">
-                        {percent}% complete
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Link
+                          to={`/dashboard/hr/roll-calls/${list.id}`}
+                          className="text-base font-semibold text-white hover:text-indigo-200"
+                        >
+                          {list.title}
+                        </Link>
+                        {list.distributed ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                            Distributed
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-800 text-slate-400 border border-slate-700">
+                            Draft
+                          </span>
+                        )}
+                      </div>
+
+                      <p className="text-xs text-slate-400 mt-1">
+                        <span className="text-emerald-400 font-medium">{confirmed} confirmed</span>
                         {' · '}
-                        {list.doneCount}/{list.totalCount} done
+                        <span className="text-rose-400 font-medium">{rejected} rejected</span>
+                        {' · '}
+                        <span className="text-sky-400 font-medium">{seen} seen</span>
+                        {' · '}
+                        <span className="text-slate-400">{sent} pending</span>
+                        {' · '}
+                        <span className="text-slate-400">{total} total</span>
                         {list.updatedAt ? ` · Updated ${formatRollCallDate(list.updatedAt)}` : ''}
                         {list.createdByName ? ` · by ${list.createdByName}` : ''}
                       </p>
-                      <div className="mt-2 h-1.5 max-w-xs rounded-full bg-[#060e1a] overflow-hidden">
+
+                      {/* Multi-color progress bar */}
+                      <div className="mt-2.5 h-2 max-w-sm rounded-full bg-[#060e1a] overflow-hidden flex">
                         <div
-                          className="h-full rounded-full bg-indigo-500 transition-all"
-                          style={{ width: `${percent}%` }}
+                          className="h-full bg-emerald-500 transition-all"
+                          style={{ width: `${confirmedPercent}%` }}
+                          title={`${confirmed} confirmed`}
+                        />
+                        <div
+                          className="h-full bg-rose-500 transition-all"
+                          style={{ width: `${rejectedPercent}%` }}
+                          title={`${rejected} rejected`}
                         />
                       </div>
                     </div>
+
                     <div className="flex items-center gap-2">
                       <button
                         type="button"
                         onClick={() => navigate(`/dashboard/hr/roll-calls/${list.id}`)}
-                        className="px-3 py-2 rounded-lg text-sm border border-[#1a2540] text-slate-200 hover:bg-[#060e1a]"
+                        className="px-3.5 py-2 rounded-lg text-xs font-semibold bg-indigo-600 hover:bg-indigo-500 text-white transition-colors"
                       >
-                        Open
+                        View status
                       </button>
                       <button
                         type="button"
                         onClick={() => handleArchiveToggle(list)}
                         disabled={busyId === list.id}
-                        className={`px-3 py-2 rounded-lg text-sm border disabled:opacity-40 ${
+                        className={`px-3 py-2 rounded-lg text-xs border disabled:opacity-40 transition-colors ${
                           list.archived
                             ? 'border-indigo-500/30 text-indigo-200 hover:bg-indigo-500/10'
                             : 'border-slate-500/30 text-slate-300 hover:bg-[#060e1a]'

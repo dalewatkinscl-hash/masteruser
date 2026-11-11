@@ -6,6 +6,7 @@ import EmployeeFunPanel from '../components/EmployeeFunPanel';
 import CoachDepotPanel from '../components/CoachDepotPanel';
 import CoachCapitalistPanel from '../components/CoachCapitalistPanel';
 import { CountryHolesDailyPanel } from '../components/CountryHolesPanel';
+import MultiplayerPanel from '../components/MultiplayerPanel';
 import FunErrorBoundary from '../components/FunErrorBoundary';
 import SuggestionBoxPanel from '../components/SuggestionBoxPanel';
 import KudosPanel from '../components/KudosPanel';
@@ -13,7 +14,9 @@ import PollsPanel from '../components/PollsPanel';
 import ProfileWidgets from '../components/ProfileWidgets';
 import WorkspaceTabs from '../components/WorkspaceTabs';
 import EmployeeCaseActionsPanel from '../components/EmployeeCaseActionsPanel';
+import ManagedStaffPanel from '../components/ManagedStaffPanel';
 import SubmitBumpCardCta from '../components/SubmitBumpCardCta';
+import RollCallBanner from '../components/RollCallBanner';
 import { canManagePortalAccess } from '../utils/portalAccess';
 import { canManagePeopleCases } from '../utils/peopleCasesAccess';
 import { useLanguage } from '../context/LanguageContext';
@@ -154,12 +157,18 @@ export default function Profile() {
               <EmployeeFunPanel currentUserUid={user?.uid} isAdmin={canManagePortalAccess(user)} />
             </FunErrorBoundary>
           </div>
-          <aside className="w-full max-w-xl px-4 sm:px-8">
+          <aside className="w-full max-w-6xl px-4 sm:px-8">
             <div className="rounded-xl border border-base-300 bg-base-100/40 p-4">
               <p className="text-[10px] font-mono uppercase tracking-[0.18em] text-primary mb-3">{t('profile.polls')}</p>
               <PollsPanel compact />
             </div>
           </aside>
+        </div>
+      ) : activeTab === 'multiplayer' ? (
+        <div className="py-4 sm:py-6 w-full max-w-none px-1 sm:px-2">
+          <FunErrorBoundary>
+            <MultiplayerPanel />
+          </FunErrorBoundary>
         </div>
       ) : activeTab === 'coachdepot' ? (
         <div className="py-4 sm:py-6 w-full max-w-none px-1 sm:px-2">
@@ -179,6 +188,8 @@ export default function Profile() {
             <CountryHolesDailyPanel isAdmin={canManagePortalAccess(user)} />
           </FunErrorBoundary>
         </div>
+      ) : activeTab === 'managed-staff' ? (
+        <ManagedStaffPanel currentUserUid={user?.uid} isAdmin={canManagePortalAccess(user)} />
       ) : activeTab === 'cases' ? (
         <div className="px-4 sm:px-8 py-6">
           <EmployeeCaseActionsPanel />
@@ -206,6 +217,7 @@ export default function Profile() {
           <div className="max-w-7xl mx-auto grid grid-cols-1 xl:grid-cols-[minmax(0,1fr)_320px] gap-6 items-start">
             <div className="space-y-6 min-w-0">
               <h1 className="sr-only">{t('profile.heading')}</h1>
+              <RollCallBanner />
               {!canManagePeopleCases(user) && <SubmitBumpCardCta />}
               {user?.uid && (
                 <EmployeeProfileCard uid={user.uid} />

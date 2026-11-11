@@ -51,44 +51,80 @@ function WidgetShell({ title, children, empty }) {
   );
 }
 
-function PollVoteWidget({ poll, votingId, onVoteAb, onVoteText, textDraft, onTextDraftChange }) {
+function PollVoteWidget({ poll, votingId, onVoteAb, onVoteText, textDraft, onTextDraftChange, onOpenBracket }) {
   const busy = votingId === poll.id;
   const myKey = poll.myVote?.optionKey || '';
+  const isTiebreaker = poll.matchStatus === 'tiebreaker';
+  const isWeekendBreak = Boolean(!isTiebreaker && poll.isWeekendBreak);
 
   return (
     <div className="space-y-3 overflow-visible">
+      {isTiebreaker ? (
+        <div className="rounded-lg border border-amber-400/50 bg-amber-500/15 px-2.5 py-2 text-[11px] text-amber-100 leading-snug">
+          <p className="font-bold text-amber-300 uppercase tracking-wide">
+            ⚡ Tie Announcement — Sudden Death!
+          </p>
+          <p className="mt-0.5">
+            Tied at {poll.tiebreakerTiedScore ?? 0}–{poll.tiebreakerTiedScore ?? 0}. Everyone gets another vote — first additional vote wins!
+          </p>
+        </div>
+      ) : isWeekendBreak ? (
+        <div className="rounded-lg border border-indigo-400/30 bg-indigo-500/10 px-2.5 py-2 text-[11px] text-indigo-100 leading-snug">
+          <p className="font-bold text-indigo-300 uppercase tracking-wide">
+            ⏸️ Weekend Break — Mon to Fri Only
+          </p>
+          <p className="mt-0.5">
+            No matchups run on weekends. Voting for Monday’s matchup opens on Monday!
+          </p>
+        </div>
+      ) : null}
+
       {poll.type === 'ab' ? (
         <>
-          <div className="flex flex-col gap-1.5">
+          <div className="grid grid-cols-2 gap-2.5">
             {['a', 'b'].map((key) => {
               const option = (poll.results?.options || []).find((row) => row.key === key)
                 || {
                   key,
                   label: key === 'a' ? poll.optionA : poll.optionB,
+                  imageUrl: key === 'a' ? poll.imageA : poll.imageB,
                   votes: 0,
                   voters: [],
                 };
+              const imgUrl = option.imageUrl || (key === 'a' ? poll.imageA : poll.imageB);
               return (
                 <VotersHover
                   key={key}
                   label={option.label}
                   voters={option.voters || []}
                   votes={option.votes || 0}
-                  className="w-full"
+                  className="w-full h-full"
                 >
                   <button
                     type="button"
-                    disabled={busy}
+                    disabled={busy || isWeekendBreak}
                     onClick={() => onVoteAb(poll.id, key)}
-                    className={`w-full text-left px-2.5 py-1.5 rounded-md text-xs border transition-colors disabled:opacity-50 ${
-                      myKey === key
-                        ? key === 'a'
-                          ? 'border-indigo-500/60 bg-indigo-500/15 text-indigo-200'
-                          : 'border-cyan-500/60 bg-cyan-500/15 text-cyan-200'
-                        : 'border-[#1a2540] text-slate-300 hover:bg-white/[0.04]'
+                    className={`w-full h-full p-2.5 rounded-xl text-xs border transition-all flex flex-col items-center text-center justify-between gap-2 disabled:opacity-50 ${
+                      isTiebreaker
+                        ? 'border-amber-500/50 bg-amber-500/10 text-amber-100 hover:bg-amber-500/20'
+                        : myKey === key
+                          ? key === 'a'
+                            ? 'border-indigo-500/60 bg-indigo-500/15 text-indigo-200'
+                            : 'border-cyan-500/60 bg-cyan-500/15 text-cyan-200'
+                          : 'border-[#1a2540] bg-[#060e1a] text-slate-200 hover:bg-white/[0.04]'
                     }`}
                   >
-                    {option.label}
+                    {imgUrl ? (
+                      <img
+                        src={imgUrl}
+                        alt={option.label}
+                        className="w-28 h-28 rounded-xl object-cover flex-shrink-0 border border-white/10 bg-[#060e1a] shadow-md"
+                      />
+                    ) : null}
+                    <span className="font-semibold leading-tight line-clamp-2">{option.label}</span>
+                    <span className="text-[11px] font-mono text-slate-400">
+                      {option.votes || 0} vote{(option.votes || 0) === 1 ? '' : 's'}
+                    </span>
                   </button>
                 </VotersHover>
               );
@@ -150,11 +186,29 @@ function PollVoteWidget({ poll, votingId, onVoteAb, onVoteText, textDraft, onTex
         </>
       )}
 
-      <p className="text-[10px] text-slate-600">
-        {poll.results?.totalVotes || 0} vote{(poll.results?.totalVotes || 0) === 1 ? '' : 's'}
-        {poll.myVote ? ` · you chose “${poll.myVote.optionLabel}”` : ' · tap to vote'}
-        {busy ? ' · saving…' : ''}
-      </p>
+      <div className="flex items-center justify-between gap-2 pt-1">
+        <p className="text-[10px] text-slate-500">
+          {poll.results?.totalVotes || 0} vote{(poll.results?.totalVotes || 0) === 1 ? '' : 's'}
+          {isTiebreaker
+            ? ' · ⚡ Sudden Death'
+            : isWeekendBreak
+              ? ' · ⏸️ Opens Monday'
+              : poll.myVote
+                ? ` · you chose “${poll.myVote.optionLabel}”`
+                : ' · tap to vote'}
+          {poll.isWorldCup && !isTiebreaker && !isWeekendBreak ? ' · ⏰ Confirmed at 17:00' : ''}
+          {busy ? ' · saving…' : ''}
+        </p>
+        {onOpenBracket && (
+          <button
+            type="button"
+            onClick={onOpenBracket}
+            className="text-[11px] text-indigo-300 hover:text-indigo-200 font-medium flex-shrink-0"
+          >
+            Bracket & table →
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -446,18 +500,28 @@ export default function ProfileWidgets({ currentUserUid }) {
                 {coachCapBoard.me.lifetimeEarnings > 0
                   ? ` · ${formatMoney(coachCapBoard.me.lifetimeEarnings)}`
                   : ''}
+                {Number(coachCapBoard.me.claimedAngels) > 0
+                  ? ` · ${formatMoney(coachCapBoard.me.claimedAngels, { symbol: '' })} backers`
+                  : ''}
               </p>
             ) : null}
             {coachCapBoard.leaderboard.length > 0 ? (
               <ol className="space-y-1.5">
-                {coachCapBoard.leaderboard.slice(0, 5).map((row, index) => (
-                  <WidgetLeaderRow
-                    key={row.uid || index}
-                    row={{ ...row, rank: index + 1 }}
-                    currentUserUid={currentUserUid}
-                    resultText={formatMoney(row.lifetimeEarnings)}
-                  />
-                ))}
+                {coachCapBoard.leaderboard.slice(0, 5).map((row, index) => {
+                  const claimed = Math.max(0, Number(row.claimedAngels) || 0);
+                  const earningsLabel = formatMoney(row.lifetimeEarnings);
+                  const resultText = claimed > 0
+                    ? `${earningsLabel} · ${formatMoney(claimed, { symbol: '' })}b`
+                    : earningsLabel;
+                  return (
+                    <WidgetLeaderRow
+                      key={row.uid || index}
+                      row={{ ...row, rank: index + 1 }}
+                      currentUserUid={currentUserUid}
+                      resultText={resultText}
+                    />
+                  );
+                })}
               </ol>
             ) : null}
             <button
@@ -603,6 +667,7 @@ export default function ProfileWidgets({ currentUserUid }) {
             onVoteText={voteText}
             textDraft={textDrafts[poll.id]}
             onTextDraftChange={(pollId, value) => setTextDrafts((prev) => ({ ...prev, [pollId]: value }))}
+            onOpenBracket={() => navigate('/dashboard/profile', { state: { profileTab: 'polls' } })}
           />
         </WidgetShell>
       ))}

@@ -196,6 +196,8 @@ export default function EmployeeDetail() {
     complianceProfileId: '',
     cpcQualifiesAsDriver: false,
     portalPassword: DEFAULT_TEMP_PASSWORD,
+    lineManagerId: '',
+    isManager: false,
   });
 
   const isHrOnly = profileMeta?.hasPortalAccount === false;
@@ -235,6 +237,15 @@ export default function EmployeeDetail() {
     const params = new URLSearchParams({
       employeeUid: uid,
       processFamily: 'disciplinary',
+    });
+    if (profileMeta?.fullName) params.set('employeeName', profileMeta.fullName);
+    navigate(`/dashboard/hr/cases/new?${params.toString()}`);
+  };
+
+  const startReturnToWorkFromProfile = () => {
+    const params = new URLSearchParams({
+      employeeUid: uid,
+      processFamily: 'return_to_work',
     });
     if (profileMeta?.fullName) params.set('employeeName', profileMeta.fullName);
     navigate(`/dashboard/hr/cases/new?${params.toString()}`);
@@ -360,6 +371,7 @@ export default function EmployeeDetail() {
 
     try {
       const portalMappings = buildPortalMappings(accountForm);
+      const selectedManager = allEmployees.find((e) => e.uid === accountForm.lineManagerId);
       const response = await fetch('/api/adminCreateUser', {
         method: 'POST',
         credentials: 'include',
@@ -373,6 +385,13 @@ export default function EmployeeDetail() {
           portalsAccess: accountForm.portalsAccess,
           featureAccess: sanitizeFeatureAccessClient(accountForm.featureAccess),
           portalMappings,
+          employeeProfile: {
+            isManager: Boolean(accountForm.isManager),
+            isManagement: Boolean(accountForm.isManager),
+            lineManagerId: accountForm.lineManagerId || '',
+            lineManagerName: selectedManager?.fullName || '',
+            managerName: selectedManager?.fullName || '',
+          },
         }),
       });
       const data = (await readJsonResponse(response)) || {};
@@ -523,13 +542,22 @@ export default function EmployeeDetail() {
           </div>
         </div>
         {!isNew && canStartCases && (
-          <button
-            type="button"
-            onClick={startCaseFromProfile}
-            className="px-4 py-2 rounded-lg text-sm font-medium bg-indigo-600 hover:bg-indigo-500 text-white shrink-0"
-          >
-            Start case
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={startReturnToWorkFromProfile}
+              className="px-3.5 py-2 rounded-lg text-sm font-medium border border-[#1a2540] text-slate-200 hover:bg-[#0b1220]"
+            >
+              Return to work
+            </button>
+            <button
+              type="button"
+              onClick={startCaseFromProfile}
+              className="px-4 py-2 rounded-lg text-sm font-medium bg-indigo-600 hover:bg-indigo-500 text-white"
+            >
+              Start case
+            </button>
+          </div>
         )}
       </div>
 
@@ -574,10 +602,30 @@ export default function EmployeeDetail() {
                   />
                 </div>
                 <div>
+                  <label className="block text-[11px] font-medium uppercase tracking-wider text-slate-500 mb-1">Line manager</label>
+                  <select
+                    name="lineManagerId"
+                    value={accountForm.lineManagerId || ''}
+                    onChange={handleAccountChange}
+                    className="w-full bg-[#060e1a] border border-[#1a2540] text-slate-100 text-sm rounded-lg px-3 py-2"
+                  >
+                    <option value="">[ No Line Manager ]</option>
+                    {allEmployees
+                      .filter((emp) => emp.isActive !== false)
+                      .map((emp) => (
+                        <option key={emp.uid} value={emp.uid}>
+                          {emp.fullName || emp.email}
+                          {emp.employeeProfile?.department ? ` — ${emp.employeeProfile.department}` : ''}
+                          {emp.employeeProfile?.jobRole ? ` (${emp.employeeProfile.jobRole})` : ''}
+                        </option>
+                      ))}
+                  </select>
+                </div>
+                <div>
                   <label className="block text-[11px] font-medium uppercase tracking-wider text-slate-500 mb-1">Business communications</label>
                   <p className="text-sm text-slate-300">Work email by default. Personal preference can be set after the employee profile is created.</p>
                 </div>
-                <div className="flex items-end">
+                <div className="flex items-end gap-5">
                   <label className="flex items-center gap-2 cursor-pointer pb-2">
                     <input
                       type="checkbox"
@@ -587,6 +635,16 @@ export default function EmployeeDetail() {
                       className="w-4 h-4 rounded border-[#1a2540] bg-[#060e1a] text-indigo-500"
                     />
                     <span className="text-sm text-slate-300">Active</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer pb-2">
+                    <input
+                      type="checkbox"
+                      name="isManager"
+                      checked={Boolean(accountForm.isManager)}
+                      onChange={handleAccountChange}
+                      className="w-4 h-4 rounded border-[#1a2540] bg-[#060e1a] text-indigo-500"
+                    />
+                    <span className="text-sm text-slate-300">Management</span>
                   </label>
                 </div>
               </div>
