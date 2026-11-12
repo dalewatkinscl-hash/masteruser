@@ -2101,7 +2101,11 @@ function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false, weekendByp
   };
 
   const handleContributeSyndicate = async (arg) => {
-    if (playLocked || syndicateBusy) return;
+    if (playLocked && !isSyndicateDirector && !isAdmin) {
+      setToast('Daily play time limit reached. Play time resets at midnight London time, or use a time boost!');
+      return;
+    }
+    if (syndicateBusy) return;
     try {
       setSyndicateBusy(true);
       const payloadData = typeof arg === 'number'

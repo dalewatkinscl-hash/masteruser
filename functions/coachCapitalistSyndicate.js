@@ -94,7 +94,7 @@ const SYNDICATE_CONTRACTS_CATALOG = [
       currentCount: 0,
     },
     rewardCoins: 300,
-    minContribution: 10_000_000,
+    minContribution: 1,
     durationDays: 1,
   },
   {
@@ -112,7 +112,7 @@ const SYNDICATE_CONTRACTS_CATALOG = [
       currentCount: 0,
     },
     rewardCoins: 350,
-    minContribution: 50_000_000,
+    minContribution: 1,
     durationDays: 1,
   },
   {
@@ -130,7 +130,7 @@ const SYNDICATE_CONTRACTS_CATALOG = [
       currentCount: 0,
     },
     rewardCoins: 400,
-    minContribution: 100_000_000,
+    minContribution: 1,
     durationDays: 1,
   },
   {
@@ -148,7 +148,7 @@ const SYNDICATE_CONTRACTS_CATALOG = [
       currentCount: 0,
     },
     rewardCoins: 450,
-    minContribution: 500_000_000,
+    minContribution: 1,
     durationDays: 1,
   },
   {
@@ -166,7 +166,7 @@ const SYNDICATE_CONTRACTS_CATALOG = [
       currentCount: 0,
     },
     rewardCoins: 500,
-    minContribution: 1_000_000_000,
+    minContribution: 1,
     durationDays: 1,
   },
   {
@@ -184,7 +184,7 @@ const SYNDICATE_CONTRACTS_CATALOG = [
       currentCount: 0,
     },
     rewardCoins: 600,
-    minContribution: 10_000_000_000,
+    minContribution: 1,
     durationDays: 1,
   },
 ];

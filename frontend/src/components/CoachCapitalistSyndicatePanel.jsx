@@ -119,10 +119,15 @@ export default function CoachCapitalistSyndicatePanel({
     }
     if (maxShare > 0) {
       const remainingQuota = Math.max(0, maxCashPerPlayer - myContributedCash);
-      return Math.min(base, remainingQuota);
+      base = Math.min(base, remainingQuota);
     }
-    return base;
+    if (remainingCash > 0) {
+      base = Math.min(base, remainingCash);
+    }
+    return Math.max(0, base);
   };
+
+  const minContribution = Number(contract.minContribution ?? 1) || 1;
 
   const handleCashPledge = (amount) => {
     setError('');
@@ -148,8 +153,8 @@ export default function CoachCapitalistSyndicatePanel({
       setError(`Fair play quota: You can pledge up to ${formatMoney(allowed)} more on this tender (${Math.round(maxShare * 100)}% max).`);
       return;
     }
-    if (num < (contract.minContribution || 1000)) {
-      setError(`Minimum contribution for this tender is ${formatMoney(contract.minContribution || 1000)}.`);
+    if (num < minContribution) {
+      setError(`Minimum contribution for this tender is ${formatMoney(minContribution)}.`);
       return;
     }
     if (onContribute) {
@@ -506,134 +511,71 @@ export default function CoachCapitalistSyndicatePanel({
           )}
 
           {/* 1. Cash Contribution Section */}
-          <div className="rounded-lg border border-slate-700 bg-slate-950/70 p-3 space-y-2.5">
-            <div className="flex flex-wrap items-center justify-between gap-2">
+          {cashDone ? (
+            <div className="rounded-lg border border-emerald-500/40 bg-emerald-950/30 p-3 flex flex-wrap items-center justify-between gap-3">
               <div>
-                <p className="gui-font text-xs text-slate-200 flex items-center gap-1.5">
-                  <span>💵</span>
-                  <span>Pledge Fleet Cash to Syndicate Tender</span>
+                <p className="gui-font text-xs text-emerald-300 flex items-center gap-1.5 font-bold">
+                  <span>✅</span>
+                  <span>Cash Target Fully Funded</span>
                 </p>
-                <p className="text-[11px] text-slate-400">
-                  Wallet available: <strong className="text-amber-300 font-mono">{formatMoney(accountCash)}</strong>
+                <p className="text-[11px] text-slate-300">
+                  The syndicate has met the {formatMoney(targetCash)} funding goal!
                 </p>
               </div>
-              <div className="flex flex-wrap items-center gap-1.5">
-                {[5, 10, 25, 50, 100].map((pctVal) => (
-                  <button
-                    key={pctVal}
-                    type="button"
-                    disabled={isUpcoming || isExcluded}
-                    onClick={() => setPledgePercent(pctVal)}
-                    className={`rounded px-2 py-1 text-[11px] font-bold border transition ${
-                      pledgePercent === pctVal
-                        ? 'border-emerald-400 bg-emerald-500 text-slate-950'
-                        : 'border-slate-700 bg-slate-800 text-slate-300 hover:border-emerald-400/50'
-                    } ${isUpcoming || isExcluded ? 'opacity-50 cursor-not-allowed' : ''}`}
-                  >
-                    {pctVal === 100 ? 'MAX' : `${pctVal}%`}
-                  </button>
-                ))}
-              </div>
+              <span className="rounded bg-emerald-500/20 border border-emerald-400/40 px-2.5 py-1 text-xs text-emerald-300 font-mono font-bold shrink-0">
+                {formatMoney(currentCash)} / {formatMoney(targetCash)}
+              </span>
             </div>
-
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="flex-1 min-w-[12rem] flex items-center gap-2 bg-slate-900 border border-slate-700 rounded-md px-2.5 py-1.5">
-                <span className="text-slate-400 text-xs">Pledge:</span>
-                <span className="gui-font text-sm text-emerald-300 font-mono flex-1">
-                  {formatMoney(calculateCashPledge(pledgePercent))}
-                </span>
-                <span className="text-[10px] text-slate-500 font-normal">({pledgePercent}%)</span>
-              </div>
-              <GameUiButton
-                size="sm"
-                variant="success"
-                disabled={
-                  busy ||
-                  isUpcoming ||
-                  isExcluded ||
-                  accountCash <= 0 ||
-                  calculateCashPledge(pledgePercent) <= 0
-                }
-                onClick={() => handleCashPledge(calculateCashPledge(pledgePercent))}
-              >
-                {busy
-                  ? 'Transferring…'
-                  : isUpcoming
-                  ? `🔒 Locked (${countdown})`
-                  : isExcluded
-                  ? '🛡️ Quota Claimed Today'
-                  : `🤝 Pledge ${formatMoney(calculateCashPledge(pledgePercent))}`}
-              </GameUiButton>
-            </div>
-          </div>
-
-          {/* 2. Vehicle Fleet Donation Section */}
-          {reqVehicle && (
-            <div className="rounded-lg border border-sky-500/40 bg-slate-950/70 p-3 space-y-2.5">
+          ) : (
+            <div className="rounded-lg border border-slate-700 bg-slate-950/70 p-3 space-y-2.5">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
-                  <p className="gui-font text-xs text-sky-200 flex items-center gap-1.5">
-                    <span>🚌</span>
-                    <span>Donate Fleet Vehicles ({reqVehicle.vehicleName})</span>
+                  <p className="gui-font text-xs text-slate-200 flex items-center gap-1.5">
+                    <span>💵</span>
+                    <span>Pledge Fleet Cash to Syndicate Tender</span>
                   </p>
                   <p className="text-[11px] text-slate-400">
-                    Your Fleet Yard:{' '}
-                    <strong className="text-sky-300 font-mono font-bold">
-                      {playerOwnedVehicles}
-                    </strong>{' '}
-                    available in {reqDepotId} depot
+                    Wallet available: <strong className="text-amber-300 font-mono">{formatMoney(accountCash)}</strong>
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-1.5">
-                  {[1, 5, 10, 25, 'MAX'].map((val) => {
-                    const parsed = val === 'MAX'
-                      ? Math.min(playerOwnedVehicles, remainingVehicles)
-                      : Number(val);
-                    return (
-                      <button
-                        key={val}
-                        type="button"
-                        disabled={isUpcoming || isExcluded}
-                        onClick={() => setVehicleDonationQty(Math.max(1, parsed))}
-                        className={`rounded px-2 py-1 text-[11px] font-bold border transition ${
-                          vehicleDonationQty === parsed
-                            ? 'border-sky-400 bg-sky-500 text-slate-950'
-                            : 'border-slate-700 bg-slate-800 text-slate-300 hover:border-sky-400/50'
-                        } ${isUpcoming || isExcluded ? 'opacity-50 cursor-not-allowed' : ''}`}
-                      >
-                        {val}
-                      </button>
-                    );
-                  })}
+                  {[5, 10, 25, 50, 100].map((pctVal) => (
+                    <button
+                      key={pctVal}
+                      type="button"
+                      disabled={isUpcoming || isExcluded || accountCash <= 0}
+                      onClick={() => setPledgePercent(pctVal)}
+                      className={`rounded px-2 py-1 text-[11px] font-bold border transition ${
+                        pledgePercent === pctVal
+                          ? 'border-emerald-400 bg-emerald-500 text-slate-950'
+                          : 'border-slate-700 bg-slate-800 text-slate-300 hover:border-emerald-400/50'
+                      } ${isUpcoming || isExcluded || accountCash <= 0 ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    >
+                      {pctVal === 100 ? 'MAX' : `${pctVal}%`}
+                    </button>
+                  ))}
                 </div>
               </div>
 
               <div className="flex flex-wrap items-center gap-2">
                 <div className="flex-1 min-w-[12rem] flex items-center gap-2 bg-slate-900 border border-slate-700 rounded-md px-2.5 py-1.5">
-                  <span className="text-slate-400 text-xs">Donate:</span>
-                  <input
-                    type="number"
-                    min={1}
-                    max={Math.min(playerOwnedVehicles, remainingVehicles)}
-                    value={vehicleDonationQty}
-                    disabled={isUpcoming || isExcluded}
-                    onChange={(e) => setVehicleDonationQty(Math.max(1, parseInt(e.target.value, 10) || 1))}
-                    className="w-20 bg-slate-800 border border-slate-600 rounded px-2 py-0.5 text-xs text-white font-mono disabled:opacity-50"
-                  />
-                  <span className="text-xs text-sky-300 font-semibold">{reqVehicle.vehicleName}</span>
+                  <span className="text-slate-400 text-xs">Pledge:</span>
+                  <span className="gui-font text-sm text-emerald-300 font-mono flex-1">
+                    {formatMoney(calculateCashPledge(pledgePercent))}
+                  </span>
+                  <span className="text-[10px] text-slate-500 font-normal">({pledgePercent}%)</span>
                 </div>
                 <GameUiButton
                   size="sm"
-                  variant="primary"
+                  variant="success"
                   disabled={
                     busy ||
                     isUpcoming ||
                     isExcluded ||
-                    playerOwnedVehicles <= 0 ||
-                    vehicleDonationQty <= 0 ||
-                    vehicleDonationQty > playerOwnedVehicles
+                    accountCash <= 0 ||
+                    calculateCashPledge(pledgePercent) <= 0
                   }
-                  onClick={() => handleVehicleDonation(vehicleDonationQty)}
+                  onClick={() => handleCashPledge(calculateCashPledge(pledgePercent))}
                 >
                   {busy
                     ? 'Transferring…'
@@ -641,14 +583,136 @@ export default function CoachCapitalistSyndicatePanel({
                     ? `🔒 Locked (${countdown})`
                     : isExcluded
                     ? '🛡️ Quota Claimed Today'
-                    : `🚌 Donate ${vehicleDonationQty} Coach${vehicleDonationQty === 1 ? '' : 'es'}`}
+                    : accountCash <= 0
+                    ? '🪙 Wallet Empty'
+                    : maxShare > 0 && myContributedCash >= maxCashPerPlayer
+                    ? '🤝 Teamwork Cap Reached'
+                    : `🤝 Pledge ${formatMoney(calculateCashPledge(pledgePercent))}`}
                 </GameUiButton>
               </div>
 
-              <p className="text-[10px] text-amber-300/80">
-                ⚠️ Donated vehicles are permanently transferred to the syndicate tender and removed from your fleet yard!
-              </p>
+              {accountCash <= 0 ? (
+                <p className="text-[11px] text-amber-300/80">
+                  ℹ️ Wallet is empty (£0.00). Run routes or wait for depot earnings to accumulate cash before pledging!
+                </p>
+              ) : maxShare > 0 && myContributedCash >= maxCashPerPlayer ? (
+                <p className="text-[11px] text-teal-300/80">
+                  🤝 Collective Teamwork limit: You have pledged your maximum {Math.round(maxShare * 100)}% share ({formatMoney(maxCashPerPlayer)}) so fellow operators can collaborate!
+                </p>
+              ) : null}
             </div>
+          )}
+
+          {/* 2. Vehicle Fleet Donation Section */}
+          {reqVehicle && (
+            vehicleDone ? (
+              <div className="rounded-lg border border-emerald-500/40 bg-emerald-950/30 p-3 flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="gui-font text-xs text-emerald-300 flex items-center gap-1.5 font-bold">
+                    <span>✅</span>
+                    <span>Fleet Vehicle Requirement Fulfilled</span>
+                  </p>
+                  <p className="text-[11px] text-slate-300">
+                    All {targetVehicles} {reqVehicle.vehicleName} have been donated by the syndicate!
+                  </p>
+                </div>
+                <span className="rounded bg-emerald-500/20 border border-emerald-400/40 px-2.5 py-1 text-xs text-emerald-300 font-mono font-bold shrink-0">
+                  {targetVehicles} / {targetVehicles} Donated
+                </span>
+              </div>
+            ) : (
+              <div className="rounded-lg border border-sky-500/40 bg-slate-950/70 p-3 space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <p className="gui-font text-xs text-sky-200 flex items-center gap-1.5">
+                      <span>🚌</span>
+                      <span>Donate Fleet Vehicles ({reqVehicle.vehicleName})</span>
+                    </p>
+                    <p className="text-[11px] text-slate-400">
+                      Your Fleet Yard:{' '}
+                      <strong className="text-sky-300 font-mono font-bold">
+                        {playerOwnedVehicles}
+                      </strong>{' '}
+                      available in {reqDepotId} depot
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {[1, 5, 10, 25, 'MAX'].map((val) => {
+                      const parsed = val === 'MAX'
+                        ? Math.min(playerOwnedVehicles, remainingVehicles)
+                        : Number(val);
+                      return (
+                        <button
+                          key={val}
+                          type="button"
+                          disabled={isUpcoming || isExcluded || playerOwnedVehicles <= 0}
+                          onClick={() => setVehicleDonationQty(Math.max(1, parsed))}
+                          className={`rounded px-2 py-1 text-[11px] font-bold border transition ${
+                            vehicleDonationQty === parsed
+                              ? 'border-sky-400 bg-sky-500 text-slate-950'
+                              : 'border-slate-700 bg-slate-800 text-slate-300 hover:border-sky-400/50'
+                          } ${isUpcoming || isExcluded || playerOwnedVehicles <= 0 ? 'opacity-50 cursor-not-allowed' : ''}`}
+                        >
+                          {val}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex-1 min-w-[12rem] flex items-center gap-2 bg-slate-900 border border-slate-700 rounded-md px-2.5 py-1.5">
+                    <span className="text-slate-400 text-xs">Donate:</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={Math.max(1, Math.min(playerOwnedVehicles, remainingVehicles))}
+                      value={vehicleDonationQty}
+                      disabled={isUpcoming || isExcluded || playerOwnedVehicles <= 0}
+                      onChange={(e) => setVehicleDonationQty(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                      className="w-20 bg-slate-800 border border-slate-600 rounded px-2 py-0.5 text-xs text-white font-mono disabled:opacity-50"
+                    />
+                    <span className="text-xs text-sky-300 font-semibold">{reqVehicle.vehicleName}</span>
+                  </div>
+                  <GameUiButton
+                    size="sm"
+                    variant="primary"
+                    disabled={
+                      busy ||
+                      isUpcoming ||
+                      isExcluded ||
+                      playerOwnedVehicles <= 0 ||
+                      vehicleDonationQty <= 0 ||
+                      vehicleDonationQty > playerOwnedVehicles ||
+                      (maxShare > 0 && myContributedVehicles >= maxVehiclesPerPlayer)
+                    }
+                    onClick={() => handleVehicleDonation(vehicleDonationQty)}
+                  >
+                    {busy
+                      ? 'Transferring…'
+                      : isUpcoming
+                      ? `🔒 Locked (${countdown})`
+                      : isExcluded
+                      ? '🛡️ Quota Claimed Today'
+                      : playerOwnedVehicles <= 0
+                      ? '🚌 None in Depot'
+                      : maxShare > 0 && myContributedVehicles >= maxVehiclesPerPlayer
+                      ? '🤝 Teamwork Cap Reached'
+                      : `🚌 Donate ${vehicleDonationQty} Coach${vehicleDonationQty === 1 ? '' : 'es'}`}
+                  </GameUiButton>
+                </div>
+
+                {playerOwnedVehicles <= 0 ? (
+                  <p className="text-[11px] text-sky-300/80">
+                    ℹ️ You do not have any {reqVehicle.vehicleName} in your {reqDepotId} depot. Purchase them in Fleet to donate!
+                  </p>
+                ) : (
+                  <p className="text-[10px] text-amber-300/80">
+                    ⚠️ Donated vehicles are permanently transferred to the syndicate tender and removed from your fleet yard!
+                  </p>
+                )}
+              </div>
+            )
           )}
 
           {error && <p className="text-xs text-rose-300 font-semibold">{error}</p>}
