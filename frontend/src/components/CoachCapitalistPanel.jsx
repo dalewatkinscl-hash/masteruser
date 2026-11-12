@@ -923,11 +923,15 @@ function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false, weekendByp
     claimedRewardIdRef.current = reward.id;
 
     const cashBonus = Math.max(0, Number(reward.payoutCash) || 0);
-    const newCount = Math.max(0, Math.floor(Number(reward.syndicatesCompleted) || 1));
+    const bonusAngels = Math.max(0, Math.floor(Number(reward.bonusAngels) || 0));
+    const curState = stateRef.current;
+    const newCount = Math.max(
+      Number(curState.syndicatesCompleted) || 0,
+      Math.floor(Number(reward.syndicatesCompleted) || 1),
+    );
     const sponsor = reward.sponsorReward || null;
 
     // Credit directly into active in-memory game state
-    const curState = stateRef.current;
     const nextDepots = {};
     for (const [k, d] of Object.entries(curState.depots || {})) {
       nextDepots[k] = { ...d, syndicatesCompleted: newCount };
@@ -976,23 +980,33 @@ function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false, weekendByp
     const nextState = {
       ...curState,
       cash: (Number(curState.cash) || 0) + cashBonus,
+      angels: (Number(curState.angels) || 0) + bonusAngels,
+      bonusAngels: (Number(curState.bonusAngels) || 0) + bonusAngels,
       syndicatesCompleted: newCount,
       depots: nextDepots,
     };
     dispatch({ type: 'replace', state: nextState });
     stateRef.current = nextState;
 
+    if (reward.playTimeReset && playStatusRef.current) {
+      playStatusRef.current = { ...playStatusRef.current, locked: false, playedMs: 0 };
+    }
+
     // Show celebration modal and play sound
     setSyndicateRewardModal(reward);
     playCoachCapSfx('charter_claim');
 
-    // Acknowledge claim to server so it is not returned again
+    // Acknowledge claim to server so it is not returned again and persist bonus state
     fetch('/api/claimCoachCapitalistSyndicateReward', {
       method: 'POST',
       credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ id: reward.id }),
-    }).catch((err) => console.error('Failed to claim syndicate reward ack', err));
+    })
+      .then(() => {
+        pushCloudSave({ force: true }).catch(() => {});
+      })
+      .catch((err) => console.error('Failed to claim syndicate reward ack', err));
   }, []);
 
   const handleAdvanceSyndicateContract = async () => {
@@ -1346,9 +1360,6 @@ function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false, weekendByp
           if (payload.syndicateContract) {
             setSyndicateContract(payload.syndicateContract);
           }
-          if (payload.pendingSyndicateReward) {
-            checkPendingSyndicateReward(payload.pendingSyndicateReward);
-          }
           if (payload.uid) setCurrentUid(String(payload.uid));
           if (payload.isSyndicateDirector != null) setIsSyndicateDirector(Boolean(payload.isSyndicateDirector));
           if (payload.seasonId) setSeasonId(String(payload.seasonId));
@@ -1389,9 +1400,6 @@ function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false, weekendByp
           if (payload.syndicateContract) {
             setSyndicateContract(payload.syndicateContract);
           }
-          if (payload.pendingSyndicateReward) {
-            checkPendingSyndicateReward(payload.pendingSyndicateReward);
-          }
           const forceToken = payload.forceResetToken ? String(payload.forceResetToken) : '';
           const newlyForced = forceToken ? acknowledgeForceReset(forceToken) : false;
           if (forceToken) forceResetTokenRef.current = forceToken;
@@ -1413,6 +1421,9 @@ function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false, weekendByp
           const away = applyAwayEarnings(picked.state);
           dispatch({ type: 'replace', state: away.state });
           stateRef.current = away.state;
+          if (payload.pendingSyndicateReward) {
+            checkPendingSyndicateReward(payload.pendingSyndicateReward);
+          }
           lastSyncedEarnings.current = Math.max(
             totalLifetimeEarnings(away.state),
             Number(payload.lifetimeEarnings) || 0,
@@ -3368,10 +3379,10 @@ function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false, weekendByp
       <GameUiModal
         open={Boolean(syndicateRewardModal)}
         onClose={() => setSyndicateRewardModal(null)}
-        title="🎪 Syndicate Tender Victory!"
+        title={syndicateRewardModal?.modalTitle || '🎪 Syndicate Tender Victory!'}
         header="yellow"
         dark
-        confirmLabel="Collect Dividend & Expand Fleet"
+        confirmLabel={syndicateRewardModal?.confirmLabel || 'Collect Dividend & Expand Fleet'}
         confirmVariant="success"
         className="!w-[min(32rem,calc(100%-1.5rem))]"
         onConfirm={() => {
@@ -3385,39 +3396,64 @@ function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false, weekendByp
           <div className="space-y-4 py-1">
             <div className="text-center space-y-1">
               <span className="inline-block rounded-full bg-emerald-500/20 border border-emerald-400/50 px-3 py-0.5 text-xs font-black uppercase tracking-wider text-emerald-300">
-                Tender Won &amp; Paid Out
+                {syndicateRewardModal.badgeText || 'Tender Won & Paid Out'}
               </span>
               <h3 className="gui-font text-lg font-black text-white">
                 {syndicateRewardModal.tenderTitle || 'Collective Syndicate Tender'}
               </h3>
               <p className="text-xs text-slate-300">
-                Congratulations Operator! The collective fleet target was achieved and your dividend has been credited!
+                {syndicateRewardModal.customMessage ||
+                  'Congratulations Operator! The collective fleet target was achieved and your dividend has been credited!'}
               </p>
             </div>
 
             <div className="rounded-xl border border-emerald-500/30 bg-emerald-950/30 p-3.5 space-y-2.5">
-              <div className="flex items-center justify-between border-b border-emerald-500/20 pb-2 text-xs">
-                <span className="text-slate-400">Your Contribution:</span>
-                <span className="gui-font text-slate-200 font-mono">
-                  {formatMoney(syndicateRewardModal.pledged)}
-                  {syndicateRewardModal.vehiclesDonated > 0 ? ` + ${syndicateRewardModal.vehiclesDonated} vehicles donated` : ''}
-                </span>
-              </div>
-              <div className="flex items-center justify-between border-b border-emerald-500/20 pb-2">
-                <span className="text-xs text-emerald-400 font-bold">
-                  {syndicateRewardModal.cashReturnMult || 10}× Dividend Payout:
-                </span>
-                <span className="gui-font text-base sm:text-lg text-emerald-300 font-bold font-mono">
-                  +{formatMoney(syndicateRewardModal.payoutCash)}
-                </span>
-              </div>
+              {!syndicateRewardModal.hideContribution && (
+                <div className="flex items-center justify-between border-b border-emerald-500/20 pb-2 text-xs">
+                  <span className="text-slate-400">Your Contribution:</span>
+                  <span className="gui-font text-slate-200 font-mono">
+                    {formatMoney(syndicateRewardModal.pledged)}
+                    {syndicateRewardModal.vehiclesDonated > 0 ? ` + ${syndicateRewardModal.vehiclesDonated} vehicles donated` : ''}
+                  </span>
+                </div>
+              )}
+              {Number(syndicateRewardModal.payoutCash) > 0 && (
+                <div className="flex items-center justify-between border-b border-emerald-500/20 pb-2">
+                  <span className="text-xs text-emerald-400 font-bold">
+                    {syndicateRewardModal.cashLabel || `${syndicateRewardModal.cashReturnMult || 10}× Dividend Payout:`}
+                  </span>
+                  <span className="gui-font text-base sm:text-lg text-emerald-300 font-bold font-mono">
+                    +{formatMoney(syndicateRewardModal.payoutCash)}
+                  </span>
+                </div>
+              )}
+              {Number(syndicateRewardModal.bonusAngels) > 0 && (
+                <div className="flex items-center justify-between border-b border-emerald-500/20 pb-2">
+                  <span className="text-xs text-purple-300 font-bold">
+                    ✨ Backers (Angels) Awarded:
+                  </span>
+                  <span className="gui-font text-base sm:text-lg text-purple-300 font-bold font-mono">
+                    +{Number(syndicateRewardModal.bonusAngels).toLocaleString('en-GB')} Backers
+                  </span>
+                </div>
+              )}
+              {syndicateRewardModal.playTimeReset && (
+                <div className="flex items-center justify-between border-b border-emerald-500/20 pb-2 text-xs">
+                  <span className="text-sky-300 font-bold">
+                    ⏱️ Daily Play Time:
+                  </span>
+                  <span className="gui-font text-sky-300 font-bold font-mono">
+                    Full Reset (0m used today!)
+                  </span>
+                </div>
+              )}
 
               {syndicateRewardModal.sponsorReward && (
                 <div className="rounded-lg border border-amber-400/40 bg-amber-950/40 p-2.5 space-y-1">
                   <div className="flex items-center gap-2">
                     <span className="text-lg">{syndicateRewardModal.sponsorReward.icon || '🎁'}</span>
                     <span className="gui-font text-xs text-amber-300 font-bold">
-                      Sponsor Reward Won: {syndicateRewardModal.sponsorReward.title}
+                      {syndicateRewardModal.sponsorReward.labelPrefix || 'Sponsor Reward Won:'} {syndicateRewardModal.sponsorReward.title}
                     </span>
                   </div>
                   <p className="text-[11px] text-slate-300 leading-snug">
@@ -3426,27 +3462,31 @@ function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false, weekendByp
                 </div>
               )}
 
-              <div className="flex items-center justify-between border-b border-emerald-500/20 pb-2 text-xs">
-                <span className="text-amber-300 font-bold">
-                  Portal Coins Awarded:
-                </span>
-                <span className="gui-font text-amber-300 font-bold font-mono">
-                  +{syndicateRewardModal.coins || 150} Coins 🪙
-                </span>
-              </div>
-              <div className="flex items-center justify-between pt-1">
-                <div>
-                  <p className="text-xs text-teal-300 font-bold">
-                    Permanent Fleet Multiplier:
-                  </p>
-                  <p className="text-[10px] text-teal-200/70">
-                    Boosts profits across ALL depots forever (+0.5× per syndicate)!
-                  </p>
+              {!syndicateRewardModal.hideCoins && (
+                <div className="flex items-center justify-between border-b border-emerald-500/20 pb-2 text-xs">
+                  <span className="text-amber-300 font-bold">
+                    Portal Coins Awarded:
+                  </span>
+                  <span className="gui-font text-amber-300 font-bold font-mono">
+                    +{syndicateRewardModal.coins || 150} Coins 🪙
+                  </span>
                 </div>
-                <span className="gui-font text-lg text-teal-300 font-black font-mono">
-                  {Number(syndicateRewardModal.multiplier || 1.5).toFixed(1)}× ⚡
-                </span>
-              </div>
+              )}
+              {!syndicateRewardModal.hideMultiplier && (
+                <div className="flex items-center justify-between pt-1">
+                  <div>
+                    <p className="text-xs text-teal-300 font-bold">
+                      Permanent Fleet Multiplier:
+                    </p>
+                    <p className="text-[10px] text-teal-200/70">
+                      Boosts profits across ALL depots forever (+0.5× per syndicate)!
+                    </p>
+                  </div>
+                  <span className="gui-font text-lg text-teal-300 font-black font-mono">
+                    {Number(syndicateRewardModal.multiplier || 1.5).toFixed(1)}× ⚡
+                  </span>
+                </div>
+              )}
             </div>
           </div>
         )}

@@ -12230,6 +12230,7 @@ function sanitizeCoachCapitalistSave(raw) {
       angelsSpent += Math.max(0, Number(depots[id]?.angelsSpent) || 0);
     }
   }
+  const bonusAngels = Math.max(0, Math.floor(Number(raw.bonusAngels) || 0));
   const syndicatesCompleted = Math.max(0, Math.floor(Number(raw.syndicatesCompleted) || 0));
   return {
     version: 1,
@@ -12238,6 +12239,7 @@ function sanitizeCoachCapitalistSave(raw) {
     cash,
     angels,
     angelsSpent,
+    bonusAngels,
     depots,
     syndicatesCompleted,
   };
@@ -12868,7 +12870,6 @@ exports.saveCoachCapitalistSave = onRequest(
           keepPrev = true;
         } else if (sameLife) {
           if (prevSession < clientSession) keepPrev = true;
-          else if (prevSession === clientSession && prevCash < clientCash) keepPrev = true;
         }
       }
       let nextState = keepPrev
@@ -13364,12 +13365,42 @@ exports.claimCoachCapitalistSyndicateReward = onRequest(
         Number(data.syndicatesCompleted) || 0,
         Number(pending.syndicatesCompleted) || 1,
       );
-      await pSaveRef.update({
+      const updatePayload = {
         pendingSyndicateReward: admin.firestore.FieldValue.delete(),
         syndicatesCompleted,
         lastClaimedSyndicateAt: Date.now(),
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
+      };
+      if (data.state && typeof data.state === 'object' && !pending.serverCredited) {
+        const cashBonus = Math.max(0, Number(pending.payoutCash) || 0);
+        const bonusAngels = Math.max(0, Math.floor(Number(pending.bonusAngels) || 0));
+        const nextDepots = { ...(data.state.depots || {}) };
+        for (const [k, d] of Object.entries(nextDepots)) {
+          nextDepots[k] = { ...d, syndicatesCompleted };
+        }
+        const sponsor = pending.sponsorReward;
+        if (sponsor && sponsor.type === 'perks' && sponsor.details) {
+          const durMs = (Number(sponsor.details.durationHours) || 24) * 3600 * 1000;
+          const spd = Number(sponsor.details.speedMult) || 2;
+          const nowMs = Date.now();
+          for (const [k, d] of Object.entries(nextDepots)) {
+            nextDepots[k] = {
+              ...d,
+              frenzyUntil: Math.max(Number(d.frenzyUntil) || 0, nowMs) + durMs,
+              frenzySpeedMult: spd,
+            };
+          }
+        }
+        updatePayload.state = {
+          ...data.state,
+          cash: (Number(data.state.cash) || 0) + cashBonus,
+          angels: (Number(data.state.angels) || 0) + bonusAngels,
+          bonusAngels: (Number(data.state.bonusAngels) || 0) + bonusAngels,
+          syndicatesCompleted,
+          depots: nextDepots,
+        };
+      }
+      await pSaveRef.update(updatePayload);
       res.status(200).json({
         ok: true,
         claimed: true,

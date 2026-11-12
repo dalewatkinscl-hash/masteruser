@@ -692,6 +692,7 @@ export function createInitialState() {
     /** Shared backers pool — fed by weighted lifetime across all depots. */
     angels: 0,
     angelsSpent: 0,
+    bonusAngels: 0,
     syndicatesCompleted: 0,
     depots,
   };
@@ -1016,6 +1017,7 @@ export function normalizeGameState(raw) {
     merged.angels = angels;
     merged.angelsSpent = spent;
   }
+  merged.bonusAngels = Math.max(0, Math.floor(Number(raw.bonusAngels) || 0));
   return syncDepotUnlocks(merged);
 }
 
@@ -1611,7 +1613,8 @@ export function angelsFromLifetime(depot, lifetimeEarnings) {
 /** Pending shared backers from weighted lifetime across all depots. */
 export function pendingAngels(state) {
   const total = angelsFromWeightedLifetime(totalLifetimeEarnings(state));
-  const already = (Number(state.angels) || 0) + (Number(state.angelsSpent) || 0);
+  const bonus = Math.max(0, Number(state.bonusAngels) || 0);
+  const already = Math.max(0, (Number(state.angels) || 0) + (Number(state.angelsSpent) || 0) - bonus);
   return Math.max(0, total - already);
 }
 
