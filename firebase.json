@@ -985,6 +985,26 @@
         "region": "europe-west2"
       },
       {
+        "source": "/api/getAppraisals",
+        "function": "getAppraisals",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/getEmployeeAppraisals",
+        "function": "getEmployeeAppraisals",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/saveAppraisal",
+        "function": "saveAppraisal",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/deleteAppraisal",
+        "function": "deleteAppraisal",
+        "region": "europe-west2"
+      },
+      {
         "source": "/api/getFinanceReports",
         "function": "getFinanceReports",
         "region": "europe-west2"

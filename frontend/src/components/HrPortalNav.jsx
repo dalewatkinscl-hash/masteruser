@@ -41,6 +41,12 @@ export default function HrPortalNav() {
       to: '/dashboard/hr/roll-calls',
       active: pathname.includes('/hr/roll-calls'),
     },
+    canDirectory && {
+      id: 'appraisals',
+      label: 'Appraisals',
+      to: '/dashboard/hr/appraisals',
+      active: pathname.includes('/hr/appraisals'),
+    },
     canCases && {
       id: 'cases',
       label: 'People Cases',

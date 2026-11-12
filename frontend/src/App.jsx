@@ -54,6 +54,7 @@ const EmergencyPhone = lazyPage(() => import('./pages/EmergencyPhone'));
 const FunAdmin = lazyPage(() => import('./pages/FunAdmin'));
 const RollCallLists = lazyPage(() => import('./pages/RollCallLists'));
 const RollCallListDetail = lazyPage(() => import('./pages/RollCallListDetail'));
+const Appraisals = lazyPage(() => import('./pages/Appraisals'));
 const Reports = lazyPage(() => import('./pages/Reports'));
 const CoachManagerReplica = lazyPage(() => import('./components/CoachManagerReplica'));
 
@@ -192,6 +193,14 @@ export default function App() {
                       )}
                     />
                     <Route
+                      path="appraisals"
+                      element={(
+                        <ProtectedRoute requireEmployeeDirectory>
+                          <LazyPage><Appraisals /></LazyPage>
+                        </ProtectedRoute>
+                      )}
+                    />
+                    <Route
                       path="active-disciplinary-measures"
                       element={(
                         <ProtectedRoute requireCasesManager>
@@ -266,6 +275,7 @@ export default function App() {
                   </Route>
 
                   <Route path="roll-calls" element={<Navigate to="/dashboard/hr/roll-calls" replace />} />
+                  <Route path="appraisals" element={<Navigate to="/dashboard/hr/appraisals" replace />} />
                   <Route path="roll-calls/new" element={<Navigate to="/dashboard/hr/employees" replace />} />
                   <Route path="roll-calls/:listId" element={<RollCallListRedirect />} />
                   <Route path="employees" element={<Navigate to="/dashboard/hr/employees" replace />} />

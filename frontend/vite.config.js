@@ -53,6 +53,38 @@ function reportsDemoPlugin(enabled) {
             return;
           }
 
+          if (url.pathname === '/api/getAppraisals' && req.method === 'GET') {
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify(mock.getDemoAppraisals()));
+            return;
+          }
+
+          if (url.pathname === '/api/getEmployeeAppraisals' && req.method === 'GET') {
+            const payload = mock.getDemoEmployeeAppraisals(url.searchParams.get('employeeUid') || '');
+            res.setHeader('Content-Type', 'application/json');
+            if (!payload) {
+              res.statusCode = 404;
+              res.end(JSON.stringify({ error: 'Employee not found.' }));
+              return;
+            }
+            res.end(JSON.stringify(payload));
+            return;
+          }
+
+          if ((url.pathname === '/api/saveAppraisal' || url.pathname === '/api/deleteAppraisal') && req.method === 'POST') {
+            const chunks = [];
+            for await (const chunk of req) chunks.push(chunk);
+            const raw = Buffer.concat(chunks).toString('utf8');
+            const body = raw ? JSON.parse(raw) : {};
+            const result = url.pathname === '/api/saveAppraisal'
+              ? mock.saveDemoAppraisal(body)
+              : mock.deleteDemoAppraisal(String(body.id || ''));
+            res.statusCode = result.status;
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify(result.body));
+            return;
+          }
+
           if (url.pathname === '/api/getFinanceReports' && req.method === 'GET') {
             res.setHeader('Content-Type', 'application/json');
             if (deny) {

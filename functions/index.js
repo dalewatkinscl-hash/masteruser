@@ -57,6 +57,7 @@ const {
 const { createPeopleCasesApi } = require('./peopleCasesApi');
 const { createRollCallListsApi } = require('./rollCallLists');
 const { createMultiplayerHandlers } = require('./multiplayer');
+const { createAppraisalsApi } = require('./appraisals');
 const { canManageCases } = require('./peopleCases');
 const {
   getMyManagedStaffData,
@@ -4624,6 +4625,22 @@ exports.joinMultiplayerMatch = multiplayerApi.joinMultiplayerMatch;
 exports.leaveMultiplayerMatch = multiplayerApi.leaveMultiplayerMatch;
 exports.getMultiplayerMatch = multiplayerApi.getMultiplayerMatch;
 exports.multiplayerMove = multiplayerApi.multiplayerMove;
+
+const appraisalsApi = createAppraisalsApi({
+  admin,
+  db,
+  onRequest,
+  withCors,
+  getVerifiedSessionUser,
+  getEffectivePortalRole,
+  canViewAllEmployeeProfiles,
+  mergeEmployeeProfiles,
+});
+
+exports.getAppraisals = appraisalsApi.getAppraisals;
+exports.getEmployeeAppraisals = appraisalsApi.getEmployeeAppraisals;
+exports.saveAppraisal = appraisalsApi.saveAppraisal;
+exports.deleteAppraisal = appraisalsApi.deleteAppraisal;
 
 // GET → verify SharePoint connectivity and return the resolved folder path for an employee.
 exports.getSharePointDisciplinaryPath = onRequest(

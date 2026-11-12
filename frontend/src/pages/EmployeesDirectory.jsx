@@ -640,6 +640,13 @@ export default function EmployeesDirectory() {
           >
             Roll calls
           </button>
+          <button
+            type="button"
+            onClick={() => navigate('/dashboard/hr/appraisals')}
+            className="px-4 py-2.5 rounded-lg border border-[#1a2540] text-slate-200 text-sm font-medium hover:bg-[#0b1220] transition-colors"
+          >
+            Appraisals
+          </button>
           {isAdmin && (
             <>
               <button

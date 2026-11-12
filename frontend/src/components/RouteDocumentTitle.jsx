@@ -16,6 +16,7 @@ const TITLE_MAP = [
   { test: (p) => /^\/dashboard\/hr\/employees\/[^/]+$/.test(p), title: 'Employee' },
   { test: (p) => p.startsWith('/dashboard/hr/employees'), title: 'Employees' },
   { test: (p) => p.startsWith('/dashboard/hr/roll-calls'), title: 'Roll calls' },
+  { test: (p) => p.startsWith('/dashboard/hr/appraisals'), title: 'Appraisals' },
   { test: (p) => p.startsWith('/dashboard/hr/active-disciplinary'), title: 'Active disciplinaries' },
   { test: (p) => p.startsWith('/dashboard/hr/bonus-deductions'), title: 'Bonus deductions' },
   { test: (p) => p.startsWith('/dashboard/hr/bonus-payments'), title: 'Bonus payments' },
