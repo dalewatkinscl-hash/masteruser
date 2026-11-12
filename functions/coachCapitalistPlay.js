@@ -353,9 +353,10 @@ async function purchasePlayTimeBoost(db, {
   };
 }
 
-const LIFETIME_WEIGHT = { local: 1, regional: 2.5, national: 5 };
+const LIFETIME_WEIGHT = { local: 1, regional: 2.5, national: 2 };
 const ANGEL_SCALE = 180;
 const ANGEL_DIVISOR = 1e15;
+const ANGEL_SOFT_CAP = 10_000_000;
 
 function weightedLifetimeFromState(state) {
   if (!state?.depots) return 0;
@@ -370,7 +371,10 @@ function weightedLifetimeFromState(state) {
 function angelsFromWeighted(weighted) {
   const life = Math.max(0, Number(weighted) || 0);
   if (life <= 0) return 0;
-  return Math.floor(ANGEL_SCALE * Math.sqrt(life / ANGEL_DIVISOR));
+  const raw = ANGEL_SCALE * Math.sqrt(life / ANGEL_DIVISOR);
+  if (raw <= ANGEL_SOFT_CAP) return Math.floor(raw);
+  const excess = raw - ANGEL_SOFT_CAP;
+  return ANGEL_SOFT_CAP + Math.floor(Math.pow(excess, 0.45) * 500);
 }
 
 function pendingAngelsFromState(state) {
@@ -499,6 +503,8 @@ function emptyStarterState(now = Date.now()) {
     cash: 0,
     angels: 0,
     angelsSpent: 0,
+    unopenedPacks: 0,
+    cards: {},
     depots: {
       local: blankDepot(true, true),
       regional: blankDepot(false, false),

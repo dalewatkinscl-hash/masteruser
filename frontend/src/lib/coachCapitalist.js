@@ -595,7 +595,7 @@ export const DEPOTS = [
     theme: 'national',
     unlockCost: 1e16,
     unlockHint: 'Earn £10 quadrillion at Regional Hub (or National Operator Charter)',
-    lifetimeWeight: 5, // National £ counts 5× toward score + shared backers
+    lifetimeWeight: 2, // Rebalanced for Season 4 (2× toward score + shared backers)
     angelDivisor: 1e14, // Mars uses 100B equivalent scale (wiki: 100 billion vs 400 billion)
     angelScale: 180, // 150 × 1.2 (legacy per-depot curve)
     startingCash: 10,
@@ -694,6 +694,9 @@ export function createInitialState() {
     angelsSpent: 0,
     bonusAngels: 0,
     syndicatesCompleted: 0,
+    /** Season 4 Fleet Trading Cards & Booster Packs */
+    unopenedPacks: 0,
+    cards: {},
     depots,
   };
 }
@@ -935,11 +938,15 @@ export function normalizeGameState(raw) {
   if (!raw || typeof raw !== 'object') return createInitialState();
   const base = createInitialState();
   const syndicatesCompleted = Math.max(0, Math.floor(Number(raw.syndicatesCompleted) || 0));
+  const unopenedPacks = Math.max(0, Math.floor(Number(raw.unopenedPacks) || 0));
+  const cards = (raw.cards && typeof raw.cards === 'object') ? { ...raw.cards } : {};
   const merged = {
     ...base,
     ...raw,
     version: 1,
     syndicatesCompleted,
+    unopenedPacks,
+    cards,
     depots: { ...base.depots },
   };
   if (raw.buyMode === 10 || raw.buyMode === 100 || raw.buyMode === 'max' || raw.buyMode === 'next' || raw.buyMode === 1) {
@@ -1483,13 +1490,19 @@ export function getSyndicateMultiplier(syndicatesCompleted) {
   return 1.5 + (count - 1) * 0.5;
 }
 
-export function computeMultipliers(depot, depotState, accountAngels = null, explicitSyndicateMult = null, accountSyndicatesCompleted = null) {
+export function computeMultipliers(depot, depotState, accountAngels = null, explicitSyndicateMult = null, accountSyndicatesCompleted = null, cardBonuses = null) {
   const n = depot.businesses.length;
   const owned = depotState.owned;
   const upgradeProfit = Array.from({ length: n }, () => 1);
   let allProfit = 1;
   let angelAllSpeedMult = 1;
   let angelBonusExtra = Number(depotState.angelBonusExtra) || 0;
+
+  if (cardBonuses) {
+    if (cardBonuses.allProfitPct) allProfit *= (1 + cardBonuses.allProfitPct / 100);
+    if (cardBonuses.allSpeedPct) angelAllSpeedMult *= (1 + cardBonuses.allSpeedPct / 100);
+    if (cardBonuses.angelBonusExtra) angelBonusExtra += cardBonuses.angelBonusExtra;
+  }
 
   for (const id of depotState.upgrades || []) {
     const up = depot.cashUpgrades.find((u) => u.id === id);
@@ -1548,6 +1561,11 @@ export function computeMultipliers(depot, depotState, accountAngels = null, expl
     const mgrLevel = getManagerLevel(depotState, i);
     const mgrSpeedMult = mgrLevel >= 3 ? 3 : mgrLevel >= 2 ? 1.5 : 1;
     const mgrProfitMult = mgrLevel >= 3 ? 3 : mgrLevel >= 2 ? 1.5 : 1;
+    const cardBizProfit = cardBonuses?.bizProfitPct?.[`${depot.id}:${i}`] || 0;
+    const cardBizSpeed = cardBonuses?.bizSpeedPct?.[`${depot.id}:${i}`] || 0;
+    const cardProfitFactor = cardBizProfit > 0 ? (1 + cardBizProfit / 100) : 1;
+    const cardSpeedFactor = cardBizSpeed > 0 ? (1 + cardBizSpeed / 100) : 1;
+
     const profitMult = profitFromStandardUnlocks(o)
       * (news.profitByTarget[i] || 1)
       * upgradeProfit[i]
@@ -1556,8 +1574,9 @@ export function computeMultipliers(depot, depotState, accountAngels = null, expl
       * mgrProfitMult
       * angelMult
       * underdogProfitMult
-      * syndicateProfitMult;
-    const totalSpeedMult = (2 ** speedHalves) * angelAllSpeedMult * mgrSpeedMult * frenzySpeedMult * breakdownSpeedMult;
+      * syndicateProfitMult
+      * cardProfitFactor;
+    const totalSpeedMult = (2 ** speedHalves) * angelAllSpeedMult * mgrSpeedMult * frenzySpeedMult * breakdownSpeedMult * cardSpeedFactor;
     const time = biz.baseTime / totalSpeedMult;
     const revenuePerUnit = biz.baseRevenue * profitMult;
     const cycleRevenue = revenuePerUnit * o;
@@ -1594,12 +1613,17 @@ export function computeMultipliers(depot, depotState, accountAngels = null, expl
 /** Shared backer curve scale (AdCap Earth 150 × 1.2 accrual buff). */
 export const ANGEL_SCALE = 180;
 const ANGEL_DIVISOR = 1e15;
+const ANGEL_SOFT_CAP = 10_000_000; // 10 million backers soft cap to prevent runaway scaling in late game
 
-/** Shared backer curve — Earth-scale formula on weighted account lifetime. */
+/** Shared backer curve — Earth-scale formula on weighted account lifetime with Season 4 dampening. */
 export function angelsFromWeightedLifetime(weightedLifetime) {
   const life = Number(weightedLifetime) || 0;
   if (life <= 0) return 0;
-  return Math.floor(ANGEL_SCALE * Math.sqrt(life / ANGEL_DIVISOR));
+  const raw = ANGEL_SCALE * Math.sqrt(life / ANGEL_DIVISOR);
+  if (raw <= ANGEL_SOFT_CAP) return Math.floor(raw);
+  // Sub-linear curve past 10M so National Hub numbers stay balanced and fun
+  const excess = raw - ANGEL_SOFT_CAP;
+  return ANGEL_SOFT_CAP + Math.floor(Math.pow(excess, 0.45) * 500);
 }
 
 /** @deprecated Prefer angelsFromWeightedLifetime — kept for call sites that pass a depot. */
@@ -2067,8 +2091,8 @@ export function syncDepotUnlocks(state) {
   return next;
 }
 
-export function totalRevenuePerSecond(depot, depotState, accountAngels = null) {
-  const mult = computeMultipliers(depot, depotState, accountAngels);
+export function totalRevenuePerSecond(depot, depotState, accountAngels = null, cardBonuses = null) {
+  const mult = computeMultipliers(depot, depotState, accountAngels, null, null, cardBonuses);
   let sum = 0;
   for (let i = 0; i < depot.businesses.length; i += 1) {
     if (depotState.managers[i] && (depotState.owned[i] || 0) > 0) {
@@ -2969,6 +2993,21 @@ export function playCoachCapSfx(kind = 'buy') {
     } else if (kind === 'crisis_penalty') {
       tone(220, 0, 0.22, 'sawtooth', 0.12, 110);
       tone(165, 0.15, 0.25, 'sawtooth', 0.12, 82.4);
+    } else if (kind === 'pack_rip') {
+      tone(440, 0, 0.12, 'sawtooth', 0.08, 110);
+      tone(880, 0.03, 0.14, 'triangle', 0.09, 220);
+      tone(1200, 0.06, 0.16, 'sine', 0.07, 330);
+    } else if (kind === 'card_flip') {
+      tone(493.88, 0, 0.05, 'triangle', 0.08, 659.25);
+      tone(880, 0.02, 0.06, 'sine', 0.06);
+    } else if (kind === 'shiny_fanfare') {
+      tone(523.25, 0, 0.1, 'triangle', 0.09); // C5
+      tone(659.25, 0.06, 0.1, 'triangle', 0.09); // E5
+      tone(783.99, 0.12, 0.1, 'triangle', 0.09); // G5
+      tone(1046.5, 0.18, 0.12, 'sine', 0.11); // C6
+      tone(1318.5, 0.25, 0.14, 'sine', 0.12); // E6
+      tone(1567.98, 0.32, 0.2, 'sine', 0.14); // G6
+      tone(2093.0, 0.40, 0.45, 'sine', 0.16); // C7 sparkle
     }
   } catch {
     /* ignore audio errors */

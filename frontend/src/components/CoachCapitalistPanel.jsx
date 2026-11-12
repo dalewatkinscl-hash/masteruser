@@ -70,6 +70,8 @@ import { SHOW_COACH_CAPITALIST } from '../utils/featureFlags';
 import CoachCapitalistEventsAdmin from './CoachCapitalistEventsAdmin';
 import CoachCapitalistPlayTimeAdmin from './CoachCapitalistPlayTimeAdmin';
 import CoachCapitalistSyndicatePanel from './CoachCapitalistSyndicatePanel';
+import { BoosterPackOpeningModal, CardBinderView } from './CoachCapitalistCards';
+import { computeCardBonuses, addCardsToInventory } from '../lib/coachCapitalistCards';
 
 const BUY_MODES = [1, 10, 100, 'next', 'max'];
 const EMPTY_NAMES = { depots: {} };
@@ -299,6 +301,19 @@ function reducer(state, action) {
       return { ...state, buyMode: action.mode };
     case 'setActiveDepot':
       return { ...state, activeDepot: action.depotId };
+    case 'awardBoosterPacks':
+      return {
+        ...state,
+        unopenedPacks: Math.max(0, (Number(state.unopenedPacks) || 0) + (Number(action.count) || 1)),
+      };
+    case 'openBoosterPack': {
+      const nextCards = addCardsToInventory(state.cards || {}, action.drawnCards || []);
+      return {
+        ...state,
+        unopenedPacks: Math.max(0, (Number(state.unopenedPacks) || 0) - 1),
+        cards: nextCards,
+      };
+    }
     default:
       return state;
   }
@@ -905,6 +920,7 @@ function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false, weekendByp
   const [soundMuted, setSoundMuted] = useState(() => isCoachCapSoundMuted());
   const [flashingRows, setFlashingRows] = useState({});
   const [milestonesOpen, setMilestonesOpen] = useState(false);
+  const [packModalOpen, setPackModalOpen] = useState(false);
   const [activeCharter, setActiveCharter] = useState(null);
   const [charterRemainingSec, setCharterRemainingSec] = useState(0);
   const [activeUnderdogOffer, setActiveUnderdogOffer] = useState(null);
@@ -1054,18 +1070,19 @@ function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false, weekendByp
     Math.floor((Number(state.angels) || 0) + (Number(state.angelsSpent) || 0)),
   );
   const priceMult = depotPriceMult(state.activeDepot);
-  const mult = computeMultipliers(depot, depotState, accountAngels);
-  const rps = totalRevenuePerSecond(depot, depotState, accountAngels);
+  const cardBonuses = useMemo(() => computeCardBonuses(state.cards), [state.cards]);
+  const mult = computeMultipliers(depot, depotState, accountAngels, null, null, cardBonuses);
+  const rps = totalRevenuePerSecond(depot, depotState, accountAngels, cardBonuses);
   const totalRps = useMemo(() => {
     let sum = 0;
     for (const d of DEPOTS) {
       const ds = state.depots?.[d.id];
       if (!ds?.unlocked) continue;
       const dWithOverrides = applyNameOverrides(d, nameConfig);
-      sum += totalRevenuePerSecond(dWithOverrides, ds, accountAngels);
+      sum += totalRevenuePerSecond(dWithOverrides, ds, accountAngels, cardBonuses);
     }
     return sum;
-  }, [state.depots, nameConfig, accountAngels]);
+  }, [state.depots, nameConfig, accountAngels, cardBonuses]);
   const pending = pendingAngels(state);
   const lifetimeTotal = totalLifetimeEarnings(state);
   const activeWeight = depotLifetimeWeight(state.activeDepot);
@@ -1185,8 +1202,17 @@ function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false, weekendByp
           return copy;
         });
       }, 1250);
-      const topEv = crossed[crossed.length - 1];
-      setToast(`🎉 ${topEv.businessName} @ ${topEv.at} · ${topEv.effectLabel}`);
+      const globalCrossed = crossed.filter((ev) => ev.type === 'global');
+      if (globalCrossed.length > 0) {
+        dispatch({
+          type: 'awardBoosterPacks',
+          count: globalCrossed.length,
+        });
+        setToast(`📦 Whole Fleet Milestone Reached! You earned ${globalCrossed.length > 1 ? `${globalCrossed.length} Booster Packs` : 'a Trading Card Booster Pack'}!`);
+      } else {
+        const topEv = crossed[crossed.length - 1];
+        setToast(`🎉 ${topEv.businessName} @ ${topEv.at} · ${topEv.effectLabel}`);
+      }
     } else {
       playCoachCapSfx('buy');
       if (fallbackToast) setToast(fallbackToast);
@@ -2570,6 +2596,7 @@ function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false, weekendByp
               ['managers', 'Managers', affordableManagersList.length + affordablePromotionsCount],
               ['upgrades', 'Upgrades', affordableCashUpgradesList.length],
               ['angels', 'Backers', affordableAngelUpgradesCount + (prestigePreview.recommended ? 1 : 0)],
+              ['cards', '🃏 Cards', Number(state.unopenedPacks) || 0],
               ['syndicate', '🤝 Syndicate', syndicateContract?.status === 'active' ? 1 : 0],
               ['leaderboard', 'Leaderboard', 0],
               ...(adminMode && isAdmin
@@ -3101,6 +3128,14 @@ function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false, weekendByp
             </div>
           ) : null}
 
+          {tab === 'cards' ? (
+            <CardBinderView
+              cards={state.cards || {}}
+              unopenedPacks={Number(state.unopenedPacks) || 0}
+              onOpenPackClick={() => setPackModalOpen(true)}
+            />
+          ) : null}
+
           {tab === 'syndicate' ? (
             <CoachCapitalistSyndicatePanel
               contract={syndicateContract}
@@ -3492,6 +3527,15 @@ function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false, weekendByp
         )}
       </GameUiModal>
 
+      <BoosterPackOpeningModal
+        open={packModalOpen}
+        onClose={() => setPackModalOpen(false)}
+        unopenedCount={Number(state.unopenedPacks) || 0}
+        onPackOpened={(drawn) => {
+          dispatch({ type: 'openBoosterPack', drawnCards: drawn });
+        }}
+      />
+
       {isAdmin ? (
         <AdminImageMapperModal
           open={mapperOpen}
@@ -3814,7 +3858,7 @@ function AdminImageMapperModal({
 
 function SeasonWrapupBody({ wrapup }) {
   if (!wrapup) return null;
-  const label = wrapup.previousSeasonLabel || 'Season 2';
+  const label = wrapup.previousSeasonLabel || 'Season 3';
   const champ = wrapup.champion;
   const unclaimed = wrapup.mostUnclaimedBackers;
   const claimed = wrapup.mostClaimedBackers;
@@ -3831,7 +3875,7 @@ function SeasonWrapupBody({ wrapup }) {
       <div className="rounded-xl border border-amber-400/40 bg-gradient-to-r from-amber-500/15 via-slate-900 to-amber-500/10 p-3 text-center space-y-1">
         <p className="gui-font text-base text-amber-300">🏆 {label} Hall of Fame Podium</p>
         <p className="text-xs text-slate-300">
-          Congratulations to our Gold, Silver, and Bronze fleet champions! Everyone starts fresh for <strong>Season 3</strong>.
+          Congratulations to our Gold, Silver, and Bronze fleet champions! Everyone starts fresh for <strong>Season 4</strong>.
         </p>
       </div>
 
@@ -3904,15 +3948,23 @@ function SeasonWrapupBody({ wrapup }) {
         </div>
       ) : null}
 
-      <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-2.5 text-xs text-emerald-100 space-y-1">
-        <p className="font-bold text-emerald-300 flex items-center gap-1.5">
-          <span>🤝 New in Season 3: Depot Contracts &amp; Syndicate Bidding!</span>
+      <div className="rounded-xl border border-amber-400/40 bg-gradient-to-b from-amber-500/15 to-slate-950 p-3 text-xs space-y-1.5 shadow">
+        <p className="font-bold text-amber-300 flex items-center gap-1.5 text-sm">
+          <span>🃏 New in Season 4: Fleet Trading Cards &amp; Booster Packs!</span>
         </p>
-        <p className="text-[11px] text-emerald-100/90">
-          Work together with all Country Lion operators to fund massive corporate contracts (Glastonbury express, Rail Replacements, and Grand Prix shuttles). Hit the collective goal to unlock huge Syndicate Dividends for all players!
+        <p className="text-[11px] text-slate-200 leading-relaxed">
+          Every time your entire fleet hits a whole-depot milestone (25, 50, 100, 200, 300+ across all 10 vehicles), you earn a <strong>3-Card Booster Pack</strong>!
         </p>
-        <p className="text-[10px] text-emerald-200/70 border-t border-emerald-500/20 pt-1">
-          🔧 National Hub economics have been thoroughly rebalanced so competition remains tight and fun.
+        <div className="rounded-lg bg-slate-900/80 p-2 border border-white/10 space-y-1 text-[11px]">
+          <p className="text-emerald-300 font-semibold">
+            ✨ <strong>2% Chance of Holographic Shiny Cards:</strong> Every card has a 2% chance to drop as an ultra-rare Shiny card with 5× to 10× massive permanent multipliers!
+          </p>
+          <p className="text-slate-300">
+            🎴 <strong>20 Cards to Collect:</strong> Fleet legends, workshop crew, and depot relics. Check your Binder in the new <strong>🃏 Cards</strong> tab!
+          </p>
+        </div>
+        <p className="text-[10px] text-amber-200/70 border-t border-amber-500/20 pt-1">
+          ⚖️ <strong>Rebalanced Economics:</strong> Backer scaling past National Hub has been re-tuned with smooth exponential dampening so late-game competition stays close and thrilling!
         </p>
       </div>
     </div>
@@ -3920,7 +3972,7 @@ function SeasonWrapupBody({ wrapup }) {
 }
 
 function CoachCapitalistSeasonAdmin() {
-  const [seasonId, setSeasonId] = useState('2026-S3');
+  const [seasonId, setSeasonId] = useState('2026-S4');
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
@@ -3932,7 +3984,7 @@ function CoachCapitalistSeasonAdmin() {
       return;
     }
     if (!window.confirm(
-      `Start Coach Capitalist season "${id}"?\n\nThis archives Season 2 scores with Gold/Silver/Bronze winners, clears the leaderboard, resets all saves to zero, and resets everyone's daily playtime today.`,
+      `Start Coach Capitalist season "${id}"?\n\nThis archives Season 3 scores with Gold/Silver/Bronze winners, clears the leaderboard, resets all saves to zero, and resets everyone's daily playtime today.`,
     )) {
       return;
     }
@@ -3949,7 +4001,7 @@ function CoachCapitalistSeasonAdmin() {
           dailyPlayCapMs: 60 * 60 * 1000,
           awayEarningsEnabled: true,
           archiveScores: true,
-          previousSeasonLabel: 'Season 2',
+          previousSeasonLabel: 'Season 3',
         }),
       });
       const payload = (await readJsonResponse(response)) || {};
