@@ -195,7 +195,7 @@ export default function App() {
                     <Route
                       path="appraisals"
                       element={(
-                        <ProtectedRoute requireEmployeeDirectory>
+                        <ProtectedRoute requireAppraisals>
                           <LazyPage><Appraisals /></LazyPage>
                         </ProtectedRoute>
                       )}

@@ -24,7 +24,7 @@ export function buildDemoUser({ allowReports = true } = {}) {
   };
 }
 
-const { buildAppraisalSchedule, addMonthsIso, RATINGS } = require(path.join(root, 'functions/appraisals.js'));
+const { buildAppraisalSchedule, addMonthsIso, RATINGS, APPRAISAL_CYCLE_MONTHS } = require(path.join(root, 'functions/appraisals.js'));
 const DEMO_RATING_IDS = new Set(RATINGS.map((rating) => rating.id));
 
 const demoPeople = [
@@ -132,7 +132,7 @@ function demoEmployeeRows() {
 }
 
 export function getDemoAppraisals() {
-  return { employees: demoEmployeeRows(), cycleMonths: 12, dueSoonDays: 30 };
+  return { employees: demoEmployeeRows(), cycleMonths: APPRAISAL_CYCLE_MONTHS, dueSoonDays: 30 };
 }
 
 export function getDemoEmployeeAppraisals(employeeUid) {
@@ -151,7 +151,7 @@ export function saveDemoAppraisal(body = {}) {
   const appraisalDate = String(body.appraisalDate || '').slice(0, 10);
   const reviewerName = String(body.reviewerName || '').trim();
   const rating = String(body.rating || '').trim();
-  const nextDueDate = String(body.nextDueDate || '').slice(0, 10) || addMonthsIso(appraisalDate, 12);
+  const nextDueDate = String(body.nextDueDate || '').slice(0, 10) || addMonthsIso(appraisalDate, APPRAISAL_CYCLE_MONTHS);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(appraisalDate)) {
     return { status: 400, body: { error: 'Appraisal date is required.' } };
   }

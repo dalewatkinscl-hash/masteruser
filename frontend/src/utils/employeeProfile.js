@@ -17,6 +17,21 @@ export function canAccessHrDirectory(user) {
   return canViewAllEmployeeProfiles(user);
 }
 
+/** Department choices on the employee profile. */
+export const EMPLOYEE_DEPARTMENTS = [
+  'Accounts',
+  'Casual Driver',
+  'Cloud Nine',
+  'Compliance',
+  'Directors',
+  'Driving',
+  'Operations',
+  'Part Time Driver',
+  'Sales',
+  'Training, Development & Performance',
+  'Workshop',
+];
+
 export function formatDisplayDate(value) {
   if (!value) return '—';
   const date = new Date(`${value}T00:00:00`);

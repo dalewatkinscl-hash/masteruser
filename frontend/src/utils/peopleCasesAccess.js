@@ -1,6 +1,7 @@
 /** People Cases hub access requires an explicit cases_app role (or master admin). Headcount/HR does not grant it. */
 import { canAccessHrDirectory } from './employeeProfile';
 import { canAccessBonusAdmin } from './featureAccess';
+import { canAccessAppraisals } from './appraisals';
 
 export function getCasesRole(user) {
   if (user?.portalsAccess?.master_admin === 'admin') return 'admin';
@@ -43,9 +44,12 @@ export function canAccessHrCases(user) {
   return canManagePeopleCases(user);
 }
 
-/** In-app HR portal entry — directory, cases, and/or bonus feature access. */
+/** In-app HR portal entry — directory, cases, appraisals, and/or bonus feature access. */
 export function canAccessHrPortal(user) {
-  return canAccessHrDirectory(user) || canAccessHrCases(user) || canAccessBonusAdmin(user);
+  return canAccessHrDirectory(user)
+    || canAccessHrCases(user)
+    || canAccessBonusAdmin(user)
+    || canAccessAppraisals(user);
 }
 
 /** Roles a manager already held on this case (for appeal-recipient conflict warnings). */

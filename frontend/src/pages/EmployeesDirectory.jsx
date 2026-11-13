@@ -574,17 +574,36 @@ export default function EmployeesDirectory() {
       <tr className="border-b border-[#1a2540] bg-[#0b1220]">
         {visibleColumns.map((column) => (
           <th key={`filter-${column.id}`} className="px-4 pt-1 pb-3 text-left align-top">
-            <ColumnFilterDropdown
-              columnId={column.id}
-              options={filterOptionsByColumn[column.id] || []}
-              selected={columnFilters[column.id] || []}
-              onChange={(values) => handleFilterChange(column.id, values)}
-              open={openFilterColumn === column.id}
-              onToggle={() => setOpenFilterColumn((current) => (
-                current === column.id ? null : column.id
-              ))}
-              onClose={closeFilter}
-            />
+            {column.id === 'department' ? (
+              <select
+                value={(columnFilters.department || [])[0] || ''}
+                onChange={(e) => handleFilterChange(
+                  'department',
+                  e.target.value ? [e.target.value] : [],
+                )}
+                aria-label="Filter by department"
+                className="max-w-[11rem] bg-[#060e1a] border border-[#1a2540] text-slate-200 text-xs rounded px-2 py-1.5"
+              >
+                <option value="">All</option>
+                {(filterOptionsByColumn.department || [])
+                  .filter((option) => option && option !== '—')
+                  .map((option) => (
+                    <option key={option} value={option}>{option}</option>
+                  ))}
+              </select>
+            ) : (
+              <ColumnFilterDropdown
+                columnId={column.id}
+                options={filterOptionsByColumn[column.id] || []}
+                selected={columnFilters[column.id] || []}
+                onChange={(values) => handleFilterChange(column.id, values)}
+                open={openFilterColumn === column.id}
+                onToggle={() => setOpenFilterColumn((current) => (
+                  current === column.id ? null : column.id
+                ))}
+                onClose={closeFilter}
+              />
+            )}
           </th>
         ))}
       </tr>

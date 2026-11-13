@@ -1,6 +1,7 @@
 import { Link, Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { canAccessHrDirectory } from '../utils/employeeProfile';
+import { canAccessAppraisals } from '../utils/appraisals';
 import { canAccessHrCases, canAccessHrPortal } from '../utils/peopleCasesAccess';
 import { canAccessBonusAdmin } from '../utils/featureAccess';
 
@@ -11,6 +12,7 @@ export default function HrPortalNav() {
   const { user } = useAuth();
   const { pathname } = useLocation();
   const canDirectory = canAccessHrDirectory(user);
+  const canAppraisals = canAccessAppraisals(user);
   const canCases = canAccessHrCases(user);
   const canBonus = canAccessBonusAdmin(user);
   const isAdmin = user?.portalsAccess?.master_admin === 'admin';
@@ -41,7 +43,7 @@ export default function HrPortalNav() {
       to: '/dashboard/hr/roll-calls',
       active: pathname.includes('/hr/roll-calls'),
     },
-    canDirectory && {
+    canAppraisals && {
       id: 'appraisals',
       label: 'Appraisals',
       to: '/dashboard/hr/appraisals',
@@ -123,6 +125,9 @@ export function HrPortalLanding() {
   }
   if (canAccessBonusAdmin(user)) {
     return <Navigate to="/dashboard/hr/bonus-deductions" replace />;
+  }
+  if (canAccessAppraisals(user)) {
+    return <Navigate to="/dashboard/hr/appraisals" replace />;
   }
   return <Navigate to="/dashboard/profile" replace />;
 }

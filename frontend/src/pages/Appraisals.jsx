@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { canViewAllEmployeeProfiles } from '../utils/employeeProfile';
 import {
   APPRAISAL_CYCLE_MONTHS,
   APPRAISAL_RATINGS,
@@ -23,6 +24,65 @@ const FILTERS = [
   { id: 'current', label: 'Up to date' },
   { id: 'missing', label: 'No dates' },
 ];
+
+const SORTS = [
+  { id: 'name', label: 'Employee A–Z' },
+  { id: 'due', label: 'Next due' },
+];
+
+const DEPARTMENT_GROUP_ORDER = [
+  'Accounts',
+  'Cloud Nine',
+  'Compliance',
+  'Driving',
+  'Part Time Driver',
+  'Casual Driver',
+  'Operations',
+  'Sales',
+  'Training, Development & Performance',
+  'Workshop',
+];
+
+function compareText(left, right) {
+  return String(left || '').localeCompare(String(right || ''), undefined, { sensitivity: 'base' });
+}
+
+function departmentGroupLabel(employee) {
+  const department = String(employee?.department || '').trim();
+  if (department.toLowerCase() === 'casual drivers') return 'Casual Driver';
+  return department || 'No department';
+}
+
+function groupAppraisalRows(rows) {
+  const buckets = new Map();
+  rows.forEach((employee) => {
+    const label = departmentGroupLabel(employee);
+    if (!buckets.has(label)) buckets.set(label, []);
+    buckets.get(label).push(employee);
+  });
+  const rank = new Map(DEPARTMENT_GROUP_ORDER.map((name, index) => [name.toLowerCase(), index]));
+  return [...buckets.entries()]
+    .sort(([left], [right]) => {
+      const leftRank = rank.has(left.toLowerCase()) ? rank.get(left.toLowerCase()) : 1000;
+      const rightRank = rank.has(right.toLowerCase()) ? rank.get(right.toLowerCase()) : 1000;
+      if (leftRank !== rightRank) return leftRank - rightRank;
+      if (left === 'No department') return 1;
+      if (right === 'No department') return -1;
+      return compareText(left, right);
+    })
+    .map(([label, groupRows]) => ({ id: label.toLowerCase(), label, rows: groupRows }));
+}
+
+function compareAppraisalRows(left, right, sort) {
+  const byName = () => compareText(left.fullName || left.email, right.fullName || right.email);
+  if (sort === 'due') {
+    const leftDue = left.nextDueDate || '9999-99-99';
+    const rightDue = right.nextDueDate || '9999-99-99';
+    if (leftDue !== rightDue) return leftDue < rightDue ? -1 : 1;
+    return byName();
+  }
+  return byName();
+}
 
 const STATUS_STYLES = {
   overdue: 'bg-red-500/15 text-red-200 border-red-500/30',
@@ -64,6 +124,86 @@ function StatusBadge({ row }) {
   );
 }
 
+function isSeniorManagerRow(employee) {
+  return String(employee?.jobRole || '').trim().toLowerCase() === 'senior manager';
+}
+
+function DepartmentGroups({ rows, onOpen }) {
+  const groups = groupAppraisalRows(rows);
+  return (
+    <div className="space-y-6">
+      {groups.map((group) => (
+        <section key={group.id} className="space-y-2">
+          <h3 className="text-sm font-semibold uppercase tracking-widest text-slate-300">
+            {group.label}
+            <span className="ml-2 font-medium text-slate-500">{group.rows.length}</span>
+          </h3>
+          <AppraisalTable rows={group.rows} onOpen={onOpen} />
+        </section>
+      ))}
+    </div>
+  );
+}
+
+function AppraisalTable({ rows, onOpen }) {
+  return (
+    <div className="w-full min-w-0 max-w-full overflow-x-auto rounded-xl border border-[#1a2540]">
+      <table className="w-full min-w-[680px] text-sm">
+        <thead className="bg-[#0b1220] text-left text-xs font-semibold uppercase tracking-widest text-slate-400">
+          <tr>
+            <th className="px-4 py-3">Employee</th>
+            <th className="px-4 py-3">Department</th>
+            <th className="px-4 py-3">Last appraisal</th>
+            <th className="px-4 py-3">Next due</th>
+            <th className="px-4 py-3">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((employee) => (
+            <tr
+              key={employee.uid}
+              className="border-t border-[#1a2540] hover:bg-[#0b1220]/80 cursor-pointer"
+              onClick={() => onOpen(employee)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault();
+                  onOpen(employee);
+                }
+              }}
+              tabIndex={0}
+            >
+              <td className="px-4 py-3">
+                <p className="font-medium text-white">
+                  {employee.fullName || employee.email || 'Unnamed employee'}
+                </p>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  {[employee.jobRole, employee.managerName ? `Manager ${employee.managerName}` : '']
+                    .filter(Boolean)
+                    .join(' · ') || employee.email || '—'}
+                  {!employee.isActive ? ' · Inactive' : ''}
+                </p>
+              </td>
+              <td className="px-4 py-3 text-slate-300">{employee.department || '—'}</td>
+              <td className="px-4 py-3 text-slate-300">
+                {employee.lastAppraisalDate ? formatAppraisalDate(employee.lastAppraisalDate) : '—'}
+                {employee.latestRating ? (
+                  <span className="block text-xs text-slate-500 mt-0.5">
+                    {appraisalRatingLabel(employee.latestRating)}
+                  </span>
+                ) : null}
+              </td>
+              <td className="px-4 py-3 text-slate-300 break-words">{appraisalDueLabel(employee)}</td>
+              <td className="px-4 py-3">
+                <StatusBadge row={employee} />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function CloseIcon() {
   return (
     <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -76,10 +216,12 @@ export default function Appraisals() {
   const { user } = useAuth();
   const reviewerDefault = user?.fullName || user?.email || '';
   const [employees, setEmployees] = useState([]);
+  const [seniorManagers, setSeniorManagers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState('all');
+  const [sort, setSort] = useState('name');
   const [includeInactive, setIncludeInactive] = useState(false);
   const [selectedUid, setSelectedUid] = useState('');
   const [history, setHistory] = useState([]);
@@ -93,6 +235,7 @@ export default function Appraisals() {
   const load = async () => {
     const payload = await fetchAppraisals();
     setEmployees(payload.employees || []);
+    setSeniorManagers(payload.seniorManagers || []);
   };
 
   useEffect(() => {
@@ -114,21 +257,43 @@ export default function Appraisals() {
   }, []);
 
   const population = useMemo(
-    () => employees.filter((employee) => includeInactive || employee.isActive),
+    () => employees.filter((employee) => {
+      const department = String(employee.department || '').trim().toLowerCase();
+      const name = String(employee.fullName || '').trim().toLowerCase();
+      const email = String(employee.email || '').trim().toLowerCase();
+      if (department === 'director' || department === 'directors') return false;
+      if (department === 'casual driver' || department === 'casual drivers') return false;
+      if (isSeniorManagerRow(employee)) return false;
+      if (name === 'driver' || name === 'test driver' || name === 'test office') return false;
+      if (
+        email === 'driver@countrylion.co.uk'
+        || email === 'testdriver@countrylion.co.uk'
+        || email === 'testoffice@countrylion.co.uk'
+      ) return false;
+      return includeInactive || employee.isActive;
+    }),
     [employees, includeInactive],
   );
 
+  const seniorPopulation = useMemo(
+    () => seniorManagers.filter((employee) => includeInactive || employee.isActive),
+    [seniorManagers, includeInactive],
+  );
+
   const counts = useMemo(() => {
-    const next = { all: population.length, overdue: 0, due_soon: 0, current: 0, missing: 0 };
-    population.forEach((employee) => {
-      if (next[employee.status] !== undefined) next[employee.status] += 1;
+    const next = { all: 0, overdue: 0, due_soon: 0, current: 0, missing: 0 };
+    [...population, ...seniorPopulation].forEach((employee) => {
+      next.all += 1;
+      if (employee.status && employee.status !== 'all' && next[employee.status] !== undefined) {
+        next[employee.status] += 1;
+      }
     });
     return next;
-  }, [population]);
+  }, [population, seniorPopulation]);
 
-  const visible = useMemo(() => {
+  const applyView = (rows) => {
     const query = search.trim().toLowerCase();
-    return population.filter((employee) => {
+    return rows.filter((employee) => {
       if (filter !== 'all' && employee.status !== filter) return false;
       if (!query) return true;
       const haystack = [
@@ -139,10 +304,20 @@ export default function Appraisals() {
         employee.managerName,
       ].join(' ').toLowerCase();
       return haystack.includes(query);
-    });
-  }, [population, filter, search]);
+    }).sort((left, right) => compareAppraisalRows(left, right, sort));
+  };
 
-  const selected = employees.find((employee) => employee.uid === selectedUid) || null;
+  const visible = useMemo(
+    () => applyView(population),
+    [population, filter, search, sort],
+  );
+  const visibleSenior = useMemo(
+    () => applyView(seniorPopulation),
+    [seniorPopulation, filter, search, sort],
+  );
+
+  const selected = [...employees, ...seniorManagers].find((employee) => employee.uid === selectedUid) || null;
+  const canOpenEmployee = canViewAllEmployeeProfiles(user);
 
   const openEmployee = (employee) => {
     setSelectedUid(employee.uid);
@@ -268,7 +443,7 @@ export default function Appraisals() {
       <div className="px-4 sm:px-8 py-6 border-b border-[#1a2540]">
         <h1 className="text-2xl font-bold text-white">Appraisals</h1>
         <p className="text-sm text-slate-400 mt-1 max-w-3xl">
-          Annual reviews are due {APPRAISAL_CYCLE_MONTHS} months after the last appraisal.
+          Reviews are due every {APPRAISAL_CYCLE_MONTHS} months after the last appraisal.
           People with no appraisal on file are due {APPRAISAL_CYCLE_MONTHS} months after their start date.
           Due soon means the next {DUE_SOON_DAYS} days.
         </p>
@@ -312,6 +487,18 @@ export default function Appraisals() {
               className="w-full sm:w-80 min-h-11 bg-[#060e1a] border border-[#1a2540] text-slate-100 text-sm rounded-lg px-4 py-2.5 focus:outline-none focus:border-indigo-500/60"
             />
             <label className="flex items-center gap-2 text-sm text-slate-300">
+              <span className="text-slate-500">Order by</span>
+              <select
+                value={sort}
+                onChange={(event) => setSort(event.target.value)}
+                className="min-h-11 bg-[#060e1a] border border-[#1a2540] text-slate-100 text-sm rounded-lg px-3 py-2.5 focus:outline-none focus:border-indigo-500/60"
+              >
+                {SORTS.map((item) => (
+                  <option key={item.id} value={item.id}>{item.label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="flex items-center gap-2 text-sm text-slate-300">
               <input
                 type="checkbox"
                 checked={includeInactive}
@@ -321,70 +508,49 @@ export default function Appraisals() {
               Include inactive
             </label>
             <p className="text-sm text-slate-500 ml-auto">
-              {loading ? 'Loading…' : `${visible.length} shown`}
+              {loading
+                ? 'Loading…'
+                : `${visible.length} shown${visibleSenior.length ? ` · ${visibleSenior.length} senior` : ''}`}
             </p>
           </div>
 
           {loading ? (
             <p className="text-sm text-slate-500">Loading appraisals…</p>
-          ) : visible.length === 0 ? (
-            <div className="rounded-xl border border-[#1a2540] bg-[#0b1220] px-6 py-10 text-center">
-              <p className="text-slate-300 text-sm">No employees match this view.</p>
-            </div>
           ) : (
-            <div className="w-full min-w-0 max-w-full overflow-x-auto rounded-xl border border-[#1a2540]">
-              <table className="w-full min-w-[680px] text-sm">
-                <thead className="bg-[#0b1220] text-left text-xs font-semibold uppercase tracking-widest text-slate-400">
-                  <tr>
-                    <th className="px-4 py-3">Employee</th>
-                    <th className="px-4 py-3">Department</th>
-                    <th className="px-4 py-3">Last appraisal</th>
-                    <th className="px-4 py-3">Next due</th>
-                    <th className="px-4 py-3">Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {visible.map((employee) => (
-                    <tr
-                      key={employee.uid}
-                      className="border-t border-[#1a2540] hover:bg-[#0b1220]/80 cursor-pointer"
-                      onClick={() => openEmployee(employee)}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter' || event.key === ' ') {
-                          event.preventDefault();
-                          openEmployee(employee);
-                        }
-                      }}
-                      tabIndex={0}
-                    >
-                      <td className="px-4 py-3">
-                        <p className="font-medium text-white">
-                          {employee.fullName || employee.email || 'Unnamed employee'}
-                        </p>
-                        <p className="text-xs text-slate-500 mt-0.5">
-                          {[employee.jobRole, employee.managerName ? `Manager ${employee.managerName}` : '']
-                            .filter(Boolean)
-                            .join(' · ') || employee.email || '—'}
-                          {!employee.isActive ? ' · Inactive' : ''}
-                        </p>
-                      </td>
-                      <td className="px-4 py-3 text-slate-300">{employee.department || '—'}</td>
-                      <td className="px-4 py-3 text-slate-300">
-                        {employee.lastAppraisalDate ? formatAppraisalDate(employee.lastAppraisalDate) : '—'}
-                        {employee.latestRating ? (
-                          <span className="block text-xs text-slate-500 mt-0.5">
-                            {appraisalRatingLabel(employee.latestRating)}
-                          </span>
-                        ) : null}
-                      </td>
-                      <td className="px-4 py-3 text-slate-300 break-words">{appraisalDueLabel(employee)}</td>
-                      <td className="px-4 py-3">
-                        <StatusBadge row={employee} />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="space-y-8">
+              {seniorPopulation.length > 0 && (
+                <section className="space-y-3">
+                  <div>
+                    <h2 className="text-lg font-semibold text-white">Senior managers</h2>
+                    <p className="text-sm text-slate-400 mt-1">
+                      Open a senior manager to record their appraisal. Directors and admins can record these. Other HR managers cannot see this section.
+                    </p>
+                  </div>
+                  {visibleSenior.length === 0 ? (
+                    <div className="rounded-xl border border-[#1a2540] bg-[#0b1220] px-6 py-8 text-center">
+                      <p className="text-slate-300 text-sm">No senior managers match this view.</p>
+                    </div>
+                  ) : (
+                    <DepartmentGroups rows={visibleSenior} onOpen={openEmployee} />
+                  )}
+                </section>
+              )}
+
+              {population.length > 0 && (
+                visible.length === 0 ? (
+                  <div className="rounded-xl border border-[#1a2540] bg-[#0b1220] px-6 py-10 text-center">
+                    <p className="text-slate-300 text-sm">No employees match this view.</p>
+                  </div>
+                ) : (
+                  <DepartmentGroups rows={visible} onOpen={openEmployee} />
+                )
+              )}
+
+              {population.length === 0 && seniorPopulation.length === 0 && (
+                <div className="rounded-xl border border-[#1a2540] bg-[#0b1220] px-6 py-10 text-center">
+                  <p className="text-slate-300 text-sm">No employees match this view.</p>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -409,12 +575,14 @@ export default function Appraisals() {
                 </p>
                 <div className="mt-2 flex flex-wrap items-center gap-2">
                   <StatusBadge row={selected} />
-                  <Link
-                    to={`/dashboard/hr/employees/${selected.uid}`}
-                    className="text-xs text-indigo-300 hover:text-indigo-200"
-                  >
-                    Open employee
-                  </Link>
+                  {canOpenEmployee ? (
+                    <Link
+                      to={`/dashboard/hr/employees/${selected.uid}`}
+                      className="text-xs text-indigo-300 hover:text-indigo-200"
+                    >
+                      Open employee
+                    </Link>
+                  ) : null}
                 </div>
               </div>
               <button

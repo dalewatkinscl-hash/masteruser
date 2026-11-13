@@ -1,6 +1,7 @@
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { canViewAllEmployeeProfiles } from '../utils/employeeProfile';
+import { canAccessAppraisals } from '../utils/appraisals';
 import { canManagePeopleCases } from '../utils/peopleCasesAccess';
 import { canAccessBonusAdmin, canAccessFinanceReports } from '../utils/featureAccess';
 import PageSpinner from './PageSpinner';
@@ -10,6 +11,7 @@ export default function ProtectedRoute({
   children,
   requireAdmin = false,
   requireEmployeeDirectory = false,
+  requireAppraisals = false,
   requireCasesManager = false,
   requireBonusAccess = false,
   requireFinanceReports = false,
@@ -19,6 +21,7 @@ export default function ProtectedRoute({
   // Nested route guards (HR pages) should not replace the whole portal chrome.
   const nestedGuard = requireAdmin
     || requireEmployeeDirectory
+    || requireAppraisals
     || requireCasesManager
     || requireBonusAccess
     || requireFinanceReports;
@@ -31,6 +34,9 @@ export default function ProtectedRoute({
     return <Navigate to="/dashboard/profile" replace />;
   }
   if (requireEmployeeDirectory && !canViewAllEmployeeProfiles(user)) {
+    return <Navigate to="/dashboard/profile" replace />;
+  }
+  if (requireAppraisals && !canAccessAppraisals(user)) {
     return <Navigate to="/dashboard/profile" replace />;
   }
   if (requireCasesManager && !canManagePeopleCases(user)) {

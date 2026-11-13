@@ -1,6 +1,28 @@
 import { formatDisplayDate, readJsonResponse } from './employeeProfile';
 
-export const APPRAISAL_CYCLE_MONTHS = 12;
+export const APPRAISAL_CYCLE_MONTHS = 3;
+
+export function isSeniorManagerUser(user) {
+  const jobRole = user?.employeeProfile?.jobRole ?? user?.jobRole;
+  return String(jobRole || '').trim().toLowerCase() === 'senior manager';
+}
+
+export function isDirectorUser(user) {
+  const department = String(user?.employeeProfile?.department || '').trim().toLowerCase();
+  const jobRole = String(user?.employeeProfile?.jobRole || '').trim().toLowerCase();
+  return department === 'director' || department === 'directors' || jobRole === 'director';
+}
+
+export function isAppraisalAdminUser(user) {
+  return user?.portalsAccess?.master_admin === 'admin' || user?.portalsAccess?.hr_app === 'admin';
+}
+
+export function canAccessAppraisals(user) {
+  if (!user) return false;
+  if (isAppraisalAdminUser(user)) return true;
+  if (user?.portalsAccess?.hr_app === 'manager') return true;
+  return isDirectorUser(user) || isSeniorManagerUser(user);
+}
 export const DUE_SOON_DAYS = 30;
 
 export const APPRAISAL_RATINGS = [

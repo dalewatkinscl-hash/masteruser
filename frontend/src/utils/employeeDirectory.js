@@ -1,4 +1,5 @@
 import { resolveContractDisplayLabel } from './contractModes';
+import { EMPLOYEE_DEPARTMENTS } from './employeeProfile';
 
 export function getEmployeeStatusLabel(employee) {
   if (employee?.hasPortalAccount === false) return 'HR only';
@@ -91,6 +92,10 @@ function sanitizeVisibleColumnIds(columnIds) {
 /** Ensure newer default columns appear for users with saved prefs. */
 function ensureDefaultColumns(columnIds) {
   const ids = [...columnIds];
+  if (!ids.includes('department')) {
+    const drivingIndex = ids.indexOf('drivingStaff');
+    ids.splice(drivingIndex >= 0 ? drivingIndex : ids.length, 0, 'department');
+  }
   if (!ids.includes('drivingStaff')) {
     const after = ids.indexOf('department');
     ids.splice(after >= 0 ? after + 1 : ids.length, 0, 'drivingStaff');
@@ -176,6 +181,9 @@ export function getColumnOptionValue(employee, column) {
 
 export function collectColumnFilterOptions(employees, columnId) {
   const values = new Set();
+  if (columnId === 'department') {
+    EMPLOYEE_DEPARTMENTS.forEach((name) => values.add(name));
+  }
   for (const employee of employees) {
     values.add(String(getColumnOptionValue(employee, columnId) ?? '—'));
   }

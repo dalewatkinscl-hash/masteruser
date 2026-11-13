@@ -8,6 +8,7 @@ import { KudosBadgeGraphic } from './kudosGraphics';
 import { PORTAL_THEME_OPTIONS } from '../context/ThemeContext';
 import {
   createEmptyEmployeeProfile,
+  EMPLOYEE_DEPARTMENTS,
   formatBirthdaySummary,
   formatDisplayDate,
   normalizeBusinessCommsEmail,
@@ -647,11 +648,19 @@ export default function EmployeeProfileCard({
                 </Field>
                 <Field label={t('card.department')}>
                   {editable.hr ? (
-                    <input
+                    <select
                       className={inputClassName(false)}
-                      value={form.department}
+                      value={form.department || ''}
                       onChange={(e) => updateField('department', e.target.value)}
-                    />
+                    >
+                      <option value="">—</option>
+                      {EMPLOYEE_DEPARTMENTS.map((name) => (
+                        <option key={name} value={name}>{name}</option>
+                      ))}
+                      {form.department && !EMPLOYEE_DEPARTMENTS.includes(form.department) ? (
+                        <option value={form.department}>{form.department}</option>
+                      ) : null}
+                    </select>
                   ) : (
                     <p className="text-sm text-white">{employee.department || '—'}</p>
                   )}
