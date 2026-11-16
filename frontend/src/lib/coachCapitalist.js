@@ -2499,13 +2499,17 @@ export const VIP_CHARTER_TEMPLATES = DEFAULT_EVENTS.filter((e) => e.category ===
 export function rollEventOffer(state, depot, accountAngels = 0, options = {}) {
   if (!state || !depot) return null;
   const isFirstPlace = Boolean(options.isFirstPlace);
+  const isOutsideTopTen = Boolean(options.isOutsideTopTen);
   const catalog = Array.isArray(options.customEvents) && options.customEvents.length > 0
     ? options.customEvents
     : DEFAULT_EVENTS;
 
   const eligible = catalog.filter((e) => {
     if (e.enabled === false) return false;
-    if (isFirstPlace && e.spawnForFirstPlace === false) return false;
+    // P1 never receives booster/positive events — only punishing ones.
+    if (isFirstPlace && e.category !== 'negative') return false;
+    // Players outside the Top 10 only receive positive/bonus catch-up events.
+    if (isOutsideTopTen && e.category !== 'positive') return false;
     return true;
   });
 

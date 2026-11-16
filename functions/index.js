@@ -12249,6 +12249,21 @@ function sanitizeCoachCapitalistSave(raw) {
   }
   const bonusAngels = Math.max(0, Math.floor(Number(raw.bonusAngels) || 0));
   const syndicatesCompleted = Math.max(0, Math.floor(Number(raw.syndicatesCompleted) || 0));
+  const unopenedPacks = Math.max(0, Math.floor(Number(raw.unopenedPacks) || 0));
+  const cards = {};
+  if (raw.cards && typeof raw.cards === 'object' && !Array.isArray(raw.cards)) {
+    for (const [cardId, entry] of Object.entries(raw.cards)) {
+      const cleanId = String(cardId || '').trim().slice(0, 80);
+      if (!cleanId || !entry || typeof entry !== 'object') continue;
+      const count = Math.max(0, Math.floor(Number(entry.count) || 0));
+      if (count <= 0) continue;
+      cards[cleanId] = {
+        count,
+        shinyCount: Math.max(0, Math.min(count, Math.floor(Number(entry.shinyCount) || 0))),
+        firstDrawnAt: Math.max(0, Math.floor(Number(entry.firstDrawnAt) || 0)),
+      };
+    }
+  }
   return {
     version: 1,
     activeDepot,
@@ -12257,6 +12272,8 @@ function sanitizeCoachCapitalistSave(raw) {
     angels,
     angelsSpent,
     bonusAngels,
+    unopenedPacks,
+    cards,
     depots,
     syndicatesCompleted,
   };
@@ -12633,6 +12650,71 @@ exports.saveCoachCapitalistConfig = onRequest(
         res.status(200).json({ ...grantRes, ...listRes });
         return;
       }
+      if (action === 'grantSpeedBooster') {
+        const rawUids = Array.isArray(req.body?.uids)
+          ? req.body.uids
+          : (req.body?.uid ? [req.body.uid] : []);
+        const cleanUids = Array.from(new Set(rawUids.map((id) => String(id || '').trim()).filter(Boolean)));
+        if (!cleanUids.length) {
+          res.status(400).json({ error: 'Select at least one player first.' });
+          return;
+        }
+        const speedMult = Math.max(2, Math.min(100, Number(req.body?.speedMult) || 25));
+        const durationMins = Math.max(0.5, Math.min(120, Number(req.body?.durationMins) || 3));
+        const cleanReason = String(req.body?.reason || '').trim().slice(0, 140);
+        const nowMs = Date.now();
+        const adminName = session.profile.fullName || session.profile.email || 'Admin';
+
+        let grantedCount = 0;
+        for (const targetUid of cleanUids) {
+          const saveRef = db.collection(COACH_CAPITALIST_SAVES).doc(targetUid);
+          const snap = await saveRef.get();
+          const data = snap.exists ? (snap.data() || {}) : {};
+          const curSyndicates = Math.max(
+            0,
+            Math.floor(Number(data.syndicatesCompleted || data.state?.syndicatesCompleted) || 0),
+          );
+          const rewardId = `admin-booster-${nowMs}-${Math.random().toString(36).slice(2, 6)}`;
+          const pendingSyndicateReward = {
+            id: rewardId,
+            modalTitle: `⚡ ${speedMult}× Fleet Overdrive!`,
+            badgeText: '🚀 Admin Speed Booster',
+            tenderTitle: `${speedMult}× Speed Overdrive (${durationMins} Mins)`,
+            customMessage: cleanReason
+              ? `${adminName} has awarded you a ${speedMult}× Fleet Speed Booster for ${durationMins} minutes! Note: ${cleanReason}`
+              : `${adminName} has awarded you a ${speedMult}× Fleet Speed Booster for ${durationMins} minutes across all depots!`,
+            confirmLabel: `Engage ${speedMult}× Overdrive!`,
+            hideContribution: true,
+            hideCoins: true,
+            hideMultiplier: true,
+            payoutCash: 0,
+            syndicatesCompleted: curSyndicates,
+            sponsorReward: {
+              type: 'perks',
+              icon: '⚡',
+              labelPrefix: 'Booster Activated:',
+              title: `${speedMult}× Fleet Overdrive (${durationMins} Mins)`,
+              desc: `Every depot in your fleet is boosted to ${speedMult}× speed for ${durationMins} minutes!`,
+              details: {
+                durationHours: durationMins / 60,
+                speedMult,
+              },
+            },
+            awardedAt: nowMs,
+          };
+          await saveRef.set(
+            {
+              uid: targetUid,
+              pendingSyndicateReward,
+              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            },
+            { merge: true },
+          );
+          grantedCount += 1;
+        }
+        res.status(200).json({ ok: true, grantedCount, speedMult, durationMins });
+        return;
+      }
 
       const updateData = {
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -12919,6 +13001,24 @@ exports.saveCoachCapitalistSave = onRequest(
       nextState.syndicatesCompleted = syndicatesCompleted;
       for (const id of COACH_CAP_DEPOT_IDS) {
         if (nextState.depots?.[id]) nextState.depots[id].syndicatesCompleted = syndicatesCompleted;
+      }
+
+      // Never let a stale open tab wipe unopened booster packs or opened cards
+      const prevCardsObj = (prevData.state?.cards && typeof prevData.state.cards === 'object') ? prevData.state.cards : {};
+      const nextCardsObj = (nextState.cards && typeof nextState.cards === 'object') ? nextState.cards : {};
+      const countCardsTotal = (obj) => Object.values(obj).reduce((s, c) => s + Math.max(0, Number(c?.count) || 0), 0);
+      const prevCardsTotal = countCardsTotal(prevCardsObj);
+      const nextCardsTotal = countCardsTotal(nextCardsObj);
+      if (prevCardsTotal > nextCardsTotal) {
+        nextState.cards = prevCardsObj;
+      }
+      const prevPacks = Math.max(0, Math.floor(Number(prevData.state?.unopenedPacks) || 0));
+      const nextPacks = Math.max(0, Math.floor(Number(nextState.unopenedPacks) || 0));
+      const prevTotalPacks = prevPacks + Math.floor(prevCardsTotal / 3);
+      const resolvedCardsTotal = Math.max(prevCardsTotal, nextCardsTotal);
+      const nextTotalPacks = nextPacks + Math.floor(resolvedCardsTotal / 3);
+      if (prevTotalPacks > nextTotalPacks) {
+        nextState.unopenedPacks = Math.max(nextPacks, prevTotalPacks - Math.floor(resolvedCardsTotal / 3));
       }
 
       if (shouldWrite) {

@@ -993,11 +993,18 @@ function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false, weekendByp
       }
     }
 
+    const bonusPacks = Math.max(0, Math.floor(Number(reward.bonusPacks) || 0));
+    const curPacks = Math.max(0, Math.floor(Number(curState.unopenedPacks) || 0));
+    const nextUnopenedPacks = reward.minUnopenedPacks != null
+      ? Math.max(curPacks, Math.floor(Number(reward.minUnopenedPacks) || 0))
+      : curPacks + bonusPacks;
+
     const nextState = {
       ...curState,
       cash: (Number(curState.cash) || 0) + cashBonus,
       angels: (Number(curState.angels) || 0) + bonusAngels,
       bonusAngels: (Number(curState.bonusAngels) || 0) + bonusAngels,
+      unopenedPacks: nextUnopenedPacks,
       syndicatesCompleted: newCount,
       depots: nextDepots,
     };
@@ -1719,19 +1726,24 @@ function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false, weekendByp
     return () => window.clearTimeout(t);
   }, [awayBanner]);
 
+  const isFirstPlace = Boolean(rivalInfo?.isLeading || leaderboardMe?.rank === 1);
+  const effectiveRank = rivalInfo?.myRank || leaderboardMe?.rank || null;
+  const isOutsideTopTen = Boolean(!isFirstPlace && effectiveRank && effectiveRank > 10);
+
   const spawnVipCharter = (forcedEvent = null) => {
     const cur = stateRef.current;
     const d = applyNameOverrides(getDepot(cur.activeDepot), nameConfig);
-    const isFirstPlace = leaderboardMe?.rank === 1;
     let offer = null;
     if (forcedEvent) {
       offer = rollEventOffer(cur, d, cur.angels, {
         isFirstPlace: false,
+        isOutsideTopTen: false,
         customEvents: [forcedEvent],
       });
     } else {
       offer = rollEventOffer(cur, d, cur.angels, {
         isFirstPlace,
+        isOutsideTopTen,
         customEvents: eventsCatalog,
       });
     }
@@ -1751,6 +1763,8 @@ function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false, weekendByp
     const d = applyNameOverrides(getDepot(cur.activeDepot), nameConfig);
     const res = resolveEventAction(cur, activeCharter, Date.now());
     setActiveCharter(null);
+    dispatch({ type: 'replace', state: res.state });
+    stateRef.current = res.state;
     if (activeCharter.category === 'negative') {
       playCoachCapSfx('charter_claim');
       if (res.toastMessage) setToast(res.toastMessage);
@@ -1760,25 +1774,26 @@ function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false, weekendByp
       playCoachCapSfx('charter_claim');
       if (res.toastMessage) setToast(res.toastMessage);
     }
-    dispatch({ type: 'replace', state: res.state });
-    stateRef.current = res.state;
   };
 
-  // Periodic VIP Charter / Crisis active-play event spawner (~60s first offer, then every ~150s of active play).
+  // Periodic VIP Charter / Crisis active-play event spawner.
+  // Players outside the Top 10 trigger lots of bonus events (every ~35s); Top 10 every ~155s (P1 gets punishing events only).
   useEffect(() => {
     if (!cloudReady || !pageVisible || playLocked || quietHours) return undefined;
+    const firstMs = isOutsideTopTen ? 12_000 : 60_000;
+    const intervalMs = isOutsideTopTen ? 35_000 : 155_000;
     const firstDelay = window.setTimeout(() => {
       spawnVipCharter();
-    }, 60_000);
+    }, firstMs);
     const interval = window.setInterval(() => {
       spawnVipCharter();
-    }, 155_000);
+    }, intervalMs);
     return () => {
       window.clearTimeout(firstDelay);
       window.clearInterval(interval);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cloudReady, pageVisible, playLocked, quietHours, eventsCatalog, leaderboardMe?.rank]);
+  }, [cloudReady, pageVisible, playLocked, quietHours, eventsCatalog, isFirstPlace, isOutsideTopTen]);
 
   // Countdown for active event / VIP Charter offer.
   useEffect(() => {
@@ -1832,18 +1847,20 @@ function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false, weekendByp
   // Automatic Underdog 3× Profit (5m) event popup for any player who is not 1st on the leaderboard.
   useEffect(() => {
     if (!cloudReady || !pageVisible || playLocked || quietHours || !isNotFirstPlace) return undefined;
+    const firstMs = isOutsideTopTen ? 10_000 : 25_000;
+    const intervalMs = isOutsideTopTen ? 90_000 : 240_000;
     const firstDelay = window.setTimeout(() => {
       spawnUnderdogOffer(false);
-    }, 25_000);
+    }, firstMs);
     const interval = window.setInterval(() => {
       spawnUnderdogOffer(false);
-    }, 240_000);
+    }, intervalMs);
     return () => {
       window.clearTimeout(firstDelay);
       window.clearInterval(interval);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cloudReady, pageVisible, playLocked, quietHours, isNotFirstPlace, leaderName]);
+  }, [cloudReady, pageVisible, playLocked, quietHours, isNotFirstPlace, isOutsideTopTen, leaderName]);
 
   // Countdown for active Underdog offer popup.
   useEffect(() => {
@@ -2740,10 +2757,10 @@ function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false, weekendByp
                       const prevOwned = [...(depotState.owned || [])];
                       const next = buyBusinesses(state, state.activeDepot, i, state.buyMode);
                       const nextOwned = next.depots[state.activeDepot]?.owned || prevOwned;
+                      replaceState(next);
                       if ((nextOwned[i] || 0) !== (prevOwned[i] || 0)) {
                         celebratePurchase(depot, prevOwned, nextOwned, `Bought ${biz.name}`);
                       }
-                      replaceState(next);
                     }}
                   />
                 ))}
@@ -3094,13 +3111,13 @@ function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false, weekendByp
                         const prevOwned = [...(depotState.owned || [])];
                         const next = buyAngelUpgrade(state, state.activeDepot, up.id);
                         const nextOwned = next.depots[state.activeDepot]?.owned || prevOwned;
+                        replaceState(next);
                         if (up.flatOwned || up.bonusOwned) {
                           celebratePurchase(depot, prevOwned, nextOwned, up.name);
                         } else {
                           playCoachCapSfx('upgrade');
                           setToast(up.name);
                         }
-                        replaceState(next);
                       }}
                     >
                       {formatMoney(up.cost, { symbol: '' })} backers
@@ -3426,7 +3443,11 @@ function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false, weekendByp
         className="!w-[min(32rem,calc(100%-1.5rem))]"
         onConfirm={() => {
           if (syndicateRewardModal) {
-            setToast(`💰 +${formatMoney(syndicateRewardModal.payoutCash)} credited to your fleet wallet!`);
+            if (Number(syndicateRewardModal.payoutCash) > 0) {
+              setToast(`💰 +${formatMoney(syndicateRewardModal.payoutCash)} credited to your fleet wallet!`);
+            } else if (Number(syndicateRewardModal.bonusPacks) > 0) {
+              setToast(`📦 +${syndicateRewardModal.bonusPacks} Booster Pack${Number(syndicateRewardModal.bonusPacks) === 1 ? '' : 's'} ready in your Cards tab!`);
+            }
           }
           setSyndicateRewardModal(null);
         }}
@@ -3473,6 +3494,16 @@ function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false, weekendByp
                   </span>
                   <span className="gui-font text-base sm:text-lg text-purple-300 font-bold font-mono">
                     +{Number(syndicateRewardModal.bonusAngels).toLocaleString('en-GB')} Backers
+                  </span>
+                </div>
+              )}
+              {Number(syndicateRewardModal.bonusPacks) > 0 && (
+                <div className="flex items-center justify-between border-b border-emerald-500/20 pb-2">
+                  <span className="text-xs text-amber-300 font-bold">
+                    📦 Trading Card Booster Packs:
+                  </span>
+                  <span className="gui-font text-base sm:text-lg text-amber-300 font-bold font-mono">
+                    +{Number(syndicateRewardModal.bonusPacks)} Pack{Number(syndicateRewardModal.bonusPacks) === 1 ? '' : 's'}
                   </span>
                 </div>
               )}
@@ -3537,6 +3568,9 @@ function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false, weekendByp
         unopenedCount={Number(state.unopenedPacks) || 0}
         onPackOpened={(drawn) => {
           dispatch({ type: 'openBoosterPack', drawnCards: drawn });
+          window.setTimeout(() => {
+            pushCloudSave({ force: true }).catch(() => {});
+          }, 150);
         }}
       />
 

@@ -136,6 +136,40 @@ export default function CoachCapitalistPlayTimeAdmin({ onPlayTimeUpdated }) {
     }
   };
 
+  const applySpeedBooster = async (uids, key = 'batch-booster', speedMult = 25, durationMins = 3) => {
+    const cleanUids = (Array.isArray(uids) ? uids : [uids]).filter(Boolean);
+    if (!cleanUids.length) {
+      setError('Select at least one player first.');
+      return;
+    }
+    setBusyKey(key);
+    setError('');
+    try {
+      const response = await fetch('/api/saveCoachCapitalistConfig', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'grantSpeedBooster',
+          uids: cleanUids,
+          speedMult,
+          durationMins,
+          reason: grantReason || '',
+        }),
+      });
+      const payload = (await readJsonSafe(response)) || {};
+      if (!response.ok) throw new Error(payload.error || 'Failed to award speed booster.');
+      const who = cleanUids.length === 1
+        ? (players.find((p) => p.uid === cleanUids[0])?.fullName || 'player')
+        : `${cleanUids.length} players`;
+      showSuccess(`⚡ Awarded ${speedMult}× Speed Booster (${durationMins} mins) to ${who}!`);
+    } catch (err) {
+      setError(err.message || 'Failed to award speed booster.');
+    } finally {
+      setBusyKey('');
+    }
+  };
+
   // Summary metrics
   const stats = useMemo(() => {
     let activeToday = 0;
@@ -390,6 +424,18 @@ export default function CoachCapitalistPlayTimeAdmin({ onPlayTimeUpdated }) {
               ? 'Awarding…'
               : `⏱️ Award +${parsedCustomHours}h to Selected (${selectedUids.length})`}
           </GameUiButton>
+
+          <GameUiButton
+            size="sm"
+            variant="warning"
+            disabled={!selectedUids.length || Boolean(busyKey)}
+            onClick={() => applySpeedBooster(selectedUids, 'batch-booster', 25, 3)}
+            title="Award a 25× Fleet Speed Booster for 3 minutes to selected players"
+          >
+            {busyKey === 'batch-booster'
+              ? 'Sending…'
+              : `⚡ Award 25× (3m) Booster (${selectedUids.length})`}
+          </GameUiButton>
         </div>
       </div>
 
@@ -636,6 +682,16 @@ export default function CoachCapitalistPlayTimeAdmin({ onPlayTimeUpdated }) {
                     title={`Add +2 hours (+120 minutes) of play time for ${row.fullName}`}
                   >
                     {busyKey === `row:${row.uid}:2h` ? '…' : '+2 hrs'}
+                  </GameUiButton>
+
+                  <GameUiButton
+                    size="sm"
+                    variant="warning"
+                    disabled={Boolean(busyKey)}
+                    onClick={() => applySpeedBooster([row.uid], `row:${row.uid}:booster25`, 25, 3)}
+                    title={`Award a 25× Fleet Speed Booster for 3 minutes to ${row.fullName}`}
+                  >
+                    {busyKey === `row:${row.uid}:booster25` ? '…' : '⚡ 25× 3m'}
                   </GameUiButton>
 
                   {playedMs > 0 ? (
