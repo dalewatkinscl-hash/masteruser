@@ -141,7 +141,7 @@ export function getDemoEmployeeAppraisals(employeeUid) {
   const appraisals = demoAppraisals
     .filter((item) => item.employeeUid === employeeUid)
     .sort((left, right) => right.appraisalDate.localeCompare(left.appraisalDate));
-  return { employee, appraisals };
+  return { employee, appraisals, validDisciplinaries: [] };
 }
 
 export function saveDemoAppraisal(body = {}) {
@@ -177,6 +177,15 @@ export function saveDemoAppraisal(body = {}) {
     rating,
     summary: String(body.summary || '').trim(),
     objectives: String(body.objectives || '').trim(),
+    lateness: String(body.lateness || '').trim(),
+    sick: String(body.sick || '').trim(),
+    disciplinaries: String(body.disciplinaries || '').trim(),
+    performance: String(body.performance || '').trim(),
+    careerGoals: String(body.careerGoals || '').trim(),
+    issuesSuggestions: String(body.issuesSuggestions || '').trim(),
+    samsaraEvents: String(body.samsaraEvents || '').trim(),
+    weekendAvailability: String(body.weekendAvailability || '').trim(),
+    disciplinaryCases: Array.isArray(appraisal.disciplinaryCases) ? appraisal.disciplinaryCases : [],
     nextDueDate,
     updatedAt: new Date().toISOString(),
   });

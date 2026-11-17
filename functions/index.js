@@ -1080,7 +1080,7 @@ function buildEffectiveProfile(profile) {
 
 // Calls the mentor portal's /api/provisionUser endpoint to create or update a user
 // profile in the mentor Firestore. Non-blocking — errors are logged but do not fail the caller.
-async function provisionMentorUser({ uid, email, fullName, role }) {
+async function provisionMentorUser({ uid, email, fullName, role, isActive = true }) {
   const mentorUrl = process.env.MENTOR_PORTAL_URL;
   const secret = process.env.MENTOR_PROVISION_SECRET;
 
@@ -1096,7 +1096,7 @@ async function provisionMentorUser({ uid, email, fullName, role }) {
         'Content-Type': 'application/json',
         'x-provision-secret': secret,
       },
-      body: JSON.stringify({ uid, email, fullName, role }),
+      body: JSON.stringify({ uid, email, fullName, role, isActive }),
     });
 
     if (!response.ok) {
@@ -1108,9 +1108,27 @@ async function provisionMentorUser({ uid, email, fullName, role }) {
   }
 }
 
+async function revokePortalLogin(uid) {
+  if (!uid) return;
+  try {
+    await auth.updateUser(uid, { disabled: true });
+  } catch (error) {
+    if (error?.code !== 'auth/user-not-found') {
+      console.error('revokePortalLogin disable failed', uid, error);
+    }
+  }
+  try {
+    await auth.revokeRefreshTokens(uid);
+  } catch (error) {
+    if (error?.code !== 'auth/user-not-found') {
+      console.error('revokePortalLogin revoke failed', uid, error);
+    }
+  }
+}
+
 // Calls the assessment portal's /api/provisionUser endpoint to create or update a user
 // profile in the assessment Firestore. Non-blocking - errors are logged but do not fail the caller.
-async function provisionAssessmentUser({ uid, email, fullName, role, profileId = '', contactEmail = '' }) {
+async function provisionAssessmentUser({ uid, email, fullName, role, profileId = '', contactEmail = '', isActive = true }) {
   const assessmentUrl = process.env.ASSESSMENT_PORTAL_URL;
   const secret = process.env.ASSESSMENT_PROVISION_SECRET;
 
@@ -1126,7 +1144,7 @@ async function provisionAssessmentUser({ uid, email, fullName, role, profileId =
         'Content-Type': 'application/json',
         'x-provision-secret': secret,
       },
-      body: JSON.stringify({ uid, email, fullName, role, profileId, contactEmail }),
+      body: JSON.stringify({ uid, email, fullName, role, profileId, contactEmail, isActive }),
     });
 
     if (!response.ok) {
@@ -1140,7 +1158,7 @@ async function provisionAssessmentUser({ uid, email, fullName, role, profileId =
 
 // Calls the CPC portal's /api/provisionUser endpoint to create or update a driver profile.
 // Non-blocking — errors are logged but do not fail the caller.
-async function provisionCpcUser({ uid, email, fullName, role, portalMappings = {}, previousUid = '' }) {
+async function provisionCpcUser({ uid, email, fullName, role, portalMappings = {}, previousUid = '', isActive = true }) {
   const cpcUrl = process.env.CPC_PORTAL_URL;
   const secret = process.env.CPC_PROVISION_SECRET;
 
@@ -1169,6 +1187,7 @@ async function provisionCpcUser({ uid, email, fullName, role, portalMappings = {
         qualifiesAsDriver,
         portalMappings,
         previousUid,
+        isActive,
       }),
     });
 
@@ -1183,7 +1202,7 @@ async function provisionCpcUser({ uid, email, fullName, role, portalMappings = {
 
 // Calls the Weekend Availability / compliance portal provision endpoint.
 // Creates or links a local users/{initials} profile. Non-blocking.
-async function provisionComplianceUser({ uid, email, fullName, role, profileId = '' }) {
+async function provisionComplianceUser({ uid, email, fullName, role, profileId = '', isActive = true }) {
   const complianceUrl = process.env.COMPLIANCE_PORTAL_URL;
   const secret = process.env.COMPLIANCE_PROVISION_SECRET;
 
@@ -1201,7 +1220,7 @@ async function provisionComplianceUser({ uid, email, fullName, role, profileId =
         'Content-Type': 'application/json',
         'x-provision-secret': secret,
       },
-      body: JSON.stringify({ uid, email, fullName, role, profileId }),
+      body: JSON.stringify({ uid, email, fullName, role, profileId, isActive }),
     });
 
     const bodyText = await response.text().catch(() => '');
@@ -1275,7 +1294,7 @@ async function provisionComplianceUser({ uid, email, fullName, role, profileId =
   }
 }
 
-async function provisionTrainingUser({ uid, email, fullName, role }) {
+async function provisionTrainingUser({ uid, email, fullName, role, isActive = true }) {
   const trainingUrl = process.env.TRAINING_PORTAL_URL;
   const secret = process.env.TRAINING_PROVISION_SECRET;
 
@@ -1300,6 +1319,7 @@ async function provisionTrainingUser({ uid, email, fullName, role }) {
         email,
         fullName,
         role: normalizedRole,
+        isActive,
       }),
     });
 
@@ -1365,6 +1385,7 @@ async function provisionHolidaysUser({ uid, email, fullName, role, profile }) {
         email,
         fullName,
         role,
+        isActive: profile?.isActive !== false,
         portalsAccess: profile?.portalsAccess || {},
         employeeProfile: {
           department: employeeProfile.department || '',
@@ -1569,6 +1590,9 @@ exports.adminCreateUser = onRequest(
       });
 
       const sanitizedPortalsAccess = sanitizePortalsAccess(portalsAccess);
+      if (!sanitizedPortalsAccess.mentoring_app) {
+        sanitizedPortalsAccess.mentoring_app = 'new_starter';
+      }
       const sanitizedFeatureAccess = sanitizeFeatureAccess(featureAccess);
       const sanitizedPortalMappings = sanitizePortalMappings(portalMappings);
       const employeeProfile = sanitizeEmployeeProfile(req.body.employeeProfile || {});
@@ -1598,6 +1622,7 @@ exports.adminCreateUser = onRequest(
         {
           email,
           fullName,
+          isActive: Boolean(isActive),
           businessCommsEmail: contactFields.businessCommsEmail,
           contactEmail: contactFields.contactEmail,
         },
@@ -1950,6 +1975,11 @@ exports.adminUpdateUser = onRequest(
  * @return {Promise<void>}
  */
 async function provisionPortalUsers(uid, portalsAccess, profile, portalMappings) {
+  const active = profile?.isActive !== false;
+  if (!active) {
+    await revokePortalLogin(uid);
+  }
+
   const mentoringRole = portalsAccess.mentoring_app;
   if (mentoringRole) {
     await provisionMentorUser({
@@ -1957,6 +1987,7 @@ async function provisionPortalUsers(uid, portalsAccess, profile, portalMappings)
       email: profile?.email || '',
       fullName: profile?.fullName || '',
       role: mentoringRole,
+      isActive: profile?.isActive !== false,
     });
   }
 
@@ -1969,6 +2000,7 @@ async function provisionPortalUsers(uid, portalsAccess, profile, portalMappings)
       role: assessmentRole,
       profileId: portalMappings.assessment_app?.profileId || '',
       contactEmail: resolveBusinessContactEmail(profile),
+      isActive: active,
     });
   }
 
@@ -1981,6 +2013,7 @@ async function provisionPortalUsers(uid, portalsAccess, profile, portalMappings)
       role: cpcRole,
       portalMappings,
       previousUid: profile?.previousUid || '',
+      isActive: active,
     });
   }
 
@@ -1992,16 +2025,18 @@ async function provisionPortalUsers(uid, portalsAccess, profile, portalMappings)
       fullName: profile?.fullName || '',
       role: complianceRole,
       profileId: portalMappings?.compliance_app?.profileId || '',
+      isActive: active,
     });
   }
 
   const trainingRole = portalsAccess.training_app;
-  if (trainingRole) {
+  if (trainingRole && active) {
     await provisionTrainingUser({
       uid,
       email: profile?.email || '',
       fullName: profile?.fullName || '',
       role: trainingRole,
+      isActive: true,
     });
   } else {
     await deprovisionTrainingUser({
@@ -2421,10 +2456,32 @@ exports.getPortalUsers = onRequest(
       }
 
       const callerRole = getEffectivePortalRole(caller, portal);
-      const allowedCallerRoles =
-        portal === 'cpc_app' ? ['trainer', 'admin'] : ['manager', 'admin'];
+      const allowedCallerRoles = portal === 'cpc_app'
+        ? ['trainer', 'admin']
+        : portal === 'mentoring_app'
+          ? ['mentor', 'admin']
+          : ['manager', 'admin'];
       if (!callerRole || !allowedCallerRoles.includes(callerRole)) {
         res.status(403).json({ error: 'Insufficient portal access.' });
+        return;
+      }
+
+      if (portal === 'mentoring_app' && req.query.includeInactive === '1') {
+        const snapshot = await db.collection('users').get();
+        const users = snapshot.docs
+          .map((doc) => {
+            const data = doc.data() || {};
+            return {
+              uid: doc.id,
+              email: data.email || '',
+              personalEmail: data.employeeProfile?.personalEmail || '',
+              fullName: data.fullName || '',
+              isActive: data.isActive !== false,
+            };
+          })
+          .filter((user) => user.isActive === false)
+          .sort((a, b) => (a.fullName || a.email).localeCompare(b.fullName || b.email));
+        res.status(200).json({ users });
         return;
       }
 
@@ -3567,6 +3624,34 @@ async function importHrRows(rows) {
         },
         { merge: true },
       );
+      const lockedProfile = {
+        ...existing,
+        fullName: mapped.fullName || existing.fullName || '',
+        isActive: mapped.isActive,
+        employeeProfile: mergedForContact.employeeProfile,
+      };
+      if (mapped.isActive === false) {
+        await provisionPortalUsers(
+          existing.uid,
+          existing.portalsAccess || {},
+          lockedProfile,
+          existing.portalMappings || {},
+        );
+      } else if (existing.isActive === false) {
+        try {
+          await auth.updateUser(existing.uid, { disabled: false });
+        } catch (error) {
+          if (error?.code !== 'auth/user-not-found') {
+            console.error('importHrRows enable login failed', existing.uid, error);
+          }
+        }
+        await provisionPortalUsers(
+          existing.uid,
+          existing.portalsAccess || {},
+          lockedProfile,
+          existing.portalMappings || {},
+        );
+      }
       matched += 1;
       continue;
     }

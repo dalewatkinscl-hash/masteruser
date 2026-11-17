@@ -37,6 +37,12 @@ function toTrimmedString(value) {
   return String(value || '').trim();
 }
 
+function isYesFlag(value) {
+  if (value === true) return true;
+  const text = toTrimmedString(value).toLowerCase();
+  return text === 'yes' || text === 'y' || text === 'true' || text === '1';
+}
+
 function isAppraisalOutOfScope(department) {
   return OUT_OF_SCOPE_DEPARTMENTS.has(toTrimmedString(department).toLowerCase());
 }
@@ -166,9 +172,52 @@ function serializeTimestamp(value) {
   return null;
 }
 
+const NOTE_FIELDS = [
+  'lateness',
+  'sick',
+  'disciplinaries',
+  'performance',
+  'careerGoals',
+  'issuesSuggestions',
+  'samsaraEvents',
+  'weekendAvailability',
+];
+
+function serializeDisciplinaryLink(data = {}) {
+  return {
+    id: toTrimmedString(data.id),
+    title: toTrimmedString(data.title),
+    outcomePreset: toTrimmedString(data.outcomePreset),
+    status: toTrimmedString(data.status),
+    stage: toTrimmedString(data.stage),
+    warningEffectiveAt: toIsoDate(data.warningEffectiveAt),
+    warningExpiresAt: toIsoDate(data.warningExpiresAt),
+  };
+}
+
+function isValidDisciplinaryCase(data = {}, today = '') {
+  const family = toTrimmedString(data.processFamily || 'disciplinary').toLowerCase();
+  if (family !== 'disciplinary') return false;
+  const status = toTrimmedString(data.status).toLowerCase();
+  if (status === 'cancelled' || status === 'void' || status === 'deleted') return false;
+  if (data.warningClearedAt) return false;
+  const outcome = toTrimmedString(data.outcomePreset).toLowerCase();
+  if (outcome === 'no_further_action' || outcome === 'samsara_coaching') return false;
+  const expires = toIsoDate(data.warningExpiresAt);
+  if (expires && today && expires < today) return false;
+  return true;
+}
+
 function serializeAppraisal(doc) {
   const data = typeof doc.data === 'function' ? doc.data() : doc;
   const id = doc.id || data.id;
+  const notes = {};
+  NOTE_FIELDS.forEach((field) => {
+    notes[field] = toTrimmedString(data[field]);
+  });
+  const disciplinaryCases = Array.isArray(data.disciplinaryCases)
+    ? data.disciplinaryCases.map(serializeDisciplinaryLink).filter((item) => item.id)
+    : [];
   return {
     id,
     employeeUid: toTrimmedString(data.employeeUid),
@@ -178,6 +227,8 @@ function serializeAppraisal(doc) {
     rating: RATING_IDS.has(data.rating) ? data.rating : '',
     summary: toTrimmedString(data.summary),
     objectives: toTrimmedString(data.objectives),
+    ...notes,
+    disciplinaryCases,
     nextDueDate: toIsoDate(data.nextDueDate),
     createdAt: serializeTimestamp(data.createdAt),
     createdByUid: toTrimmedString(data.createdByUid),
@@ -248,6 +299,16 @@ function createAppraisalsApi({
     return true;
   }
 
+  async function loadValidDisciplinaries(employeeUid, today) {
+    const snap = await db.collection('disciplinary_cases').where('employeeUid', '==', employeeUid).get();
+    return snap.docs
+      .map((doc) => ({ id: doc.id, ...(doc.data() || {}) }))
+      .filter((item) => isValidDisciplinaryCase(item, today))
+      .map(serializeDisciplinaryLink)
+      .filter((item) => item.id)
+      .sort((left, right) => (right.warningEffectiveAt || '').localeCompare(left.warningEffectiveAt || ''));
+  }
+
   function assertAccess(session, res) {
     if (!session) {
       res.status(401).json({ error: 'Authentication required.' });
@@ -278,6 +339,7 @@ function createAppraisalsApi({
       isActive: data.isActive !== false,
       department: toTrimmedString(profile.department),
       jobRole: toTrimmedString(profile.jobRole),
+      drivingStaff: isYesFlag(profile.drivingStaff) || isYesFlag(profile.isDriver),
       managerName: toTrimmedString(profile.managerName),
       startDate: toIsoDate(profile.startDate),
       appraisalCount: 0,
@@ -426,7 +488,13 @@ function createAppraisalsApi({
         }
         if (!assertCanReviewEmployee(session, row, res)) return;
         row.appraisalCount = appraisals.length;
-        res.status(200).json({ employee: row, appraisals });
+        let validDisciplinaries = [];
+        try {
+          validDisciplinaries = await loadValidDisciplinaries(employeeUid, today);
+        } catch (caseError) {
+          console.error('loadValidDisciplinaries failed', caseError);
+        }
+        res.status(200).json({ employee: row, appraisals, validDisciplinaries });
       } catch (error) {
         console.error('getEmployeeAppraisals failed', error);
         res.status(500).json({ error: 'Failed to load appraisal history.' });
@@ -516,6 +584,15 @@ function createAppraisalsApi({
         }
 
         const name = actorName(session.profile);
+        const notes = {};
+        NOTE_FIELDS.forEach((field) => {
+          notes[field] = clip(body[field], 4000);
+        });
+        const disciplinaryCases = existing?.disciplinaryCases
+          ? (Array.isArray(existing.disciplinaryCases) ? existing.disciplinaryCases : [])
+            .map(serializeDisciplinaryLink)
+            .filter((item) => item.id)
+          : await loadValidDisciplinaries(employeeUid, londonTodayIso());
         const payload = {
           employeeUid,
           employeeName: toTrimmedString(userSnap.data()?.fullName),
@@ -525,6 +602,8 @@ function createAppraisalsApi({
           rating,
           summary,
           objectives,
+          ...notes,
+          disciplinaryCases,
           nextDueDate,
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
           updatedByUid: toTrimmedString(session.profile?.uid),
