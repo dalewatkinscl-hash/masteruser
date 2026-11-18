@@ -3168,6 +3168,7 @@ function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false, weekendByp
               syndicatesCompleted={state.syndicatesCompleted || 0}
               isAdmin={isAdmin}
               isSyndicateDirector={isSyndicateDirector}
+              isMonopoly={isFirstPlace}
               onAdvanceContract={handleAdvanceSyndicateContract}
             />
           ) : null}

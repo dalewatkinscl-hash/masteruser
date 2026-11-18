@@ -1,10 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { formatMoney, getSyndicateMultiplier } from '../lib/coachCapitalist';
 import { GameUiButton, GameUiBadge } from './gameUi';
 
-function formatCountdown(targetMs) {
+function formatCountdown(targetMs, nowMs = Date.now()) {
   if (!targetMs) return 'Soon';
-  const diff = Math.max(0, targetMs - Date.now());
+  const diff = Math.max(0, targetMs - nowMs);
   const hours = Math.floor(diff / (1000 * 60 * 60));
   const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
   const seconds = Math.floor((diff % (1000 * 60)) / 1000);
@@ -36,6 +36,7 @@ export default function CoachCapitalistSyndicatePanel({
   syndicatesCompleted = 0,
   isAdmin = false,
   isSyndicateDirector = false,
+  isMonopoly = false,
   onAdvanceContract,
 }) {
   const [pledgePercent, setPledgePercent] = useState(10); // 5%, 10%, 25%, 50%, Max
@@ -43,15 +44,21 @@ export default function CoachCapitalistSyndicatePanel({
   const [error, setError] = useState('');
   const [countdown, setCountdown] = useState('');
 
+  const clockOffsetMs = useMemo(() => {
+    const srv = Number(contract?.serverNow);
+    return Number.isFinite(srv) && srv > 0 ? srv - Date.now() : 0;
+  }, [contract?.serverNow]);
+
   // Live countdown ticker for weekend stand-down, upcoming tender, or tender expiration
   useEffect(() => {
     const tick = () => {
+      const serverNowMs = Date.now() + clockOffsetMs;
       if (contract?.status === 'weekend_standdown' && contract.opensAt) {
-        setCountdown(formatCountdown(contract.opensAt));
+        setCountdown(formatCountdown(contract.opensAt, serverNowMs));
       } else if (contract?.status === 'upcoming' && contract.opensAt) {
-        setCountdown(formatCountdown(contract.opensAt));
+        setCountdown(formatCountdown(contract.opensAt, serverNowMs));
       } else if (contract?.expiresAt) {
-        setCountdown(formatCountdown(contract.expiresAt));
+        setCountdown(formatCountdown(contract.expiresAt, serverNowMs));
       } else {
         setCountdown('');
       }
@@ -59,17 +66,18 @@ export default function CoachCapitalistSyndicatePanel({
     tick();
     const interval = setInterval(tick, 1000);
     return () => clearInterval(interval);
-  }, [contract]);
+  }, [contract, clockOffsetMs]);
 
   if (!contract) return null;
 
   const isWeekend = contract.status === 'weekend_standdown';
-  const isUpcoming = contract.status === 'upcoming' || (contract.opensAt && Date.now() < contract.opensAt);
+  const isUpcoming = contract.status === 'upcoming';
 
   // Eligibility check: is the current user excluded (e.g. they already took part in today's earlier syndicate)?
   const isExcluded = Boolean(
     currentUid && Array.isArray(contract.excludedUids) && contract.excludedUids.includes(currentUid),
   );
+  const isBlocked = isExcluded || isMonopoly;
 
   // Target and Progress calculation
   const targetCash = Number(contract.targetCash ?? contract.targetAmount) || 1;
@@ -135,6 +143,10 @@ export default function CoachCapitalistSyndicatePanel({
       setError(`This tender has not opened yet. It drops at ${formatDropTime(contract.opensAt)} London time!`);
       return;
     }
+    if (isMonopoly) {
+      setError('👑 Monopoly Lockout: As the #1 player on the leaderboard, you hold a market monopoly and cannot join Corporate Syndicates!');
+      return;
+    }
     if (isExcluded) {
       setError("You've already participated in today's earlier syndicate! This tender is reserved for operators who haven't taken part today.");
       return;
@@ -166,6 +178,10 @@ export default function CoachCapitalistSyndicatePanel({
     setError('');
     if (isUpcoming) {
       setError(`This tender has not opened yet. It drops at ${formatDropTime(contract.opensAt)} London time!`);
+      return;
+    }
+    if (isMonopoly) {
+      setError('👑 Monopoly Lockout: As the #1 player on the leaderboard, you hold a market monopoly and cannot join Corporate Syndicates!');
       return;
     }
     if (isExcluded) {
@@ -335,6 +351,23 @@ export default function CoachCapitalistSyndicatePanel({
           <p className="text-xs text-slate-300 leading-relaxed">
             Daily tenders launch at randomized hours between 10:00 AM and 13:00 PM (1:00 PM) to guarantee fair opportunities for all operators across the company. Review the vehicle and capital targets below and prepare your depot!
           </p>
+        </div>
+      )}
+
+      {/* Monopoly Lockout Notice (#1 Leaderboard Player) */}
+      {isMonopoly && (
+        <div className="rounded-lg border border-rose-500/60 bg-gradient-to-r from-rose-950/70 via-slate-950 to-slate-950 p-3.5 flex items-start gap-3">
+          <div className="w-8 h-8 rounded-full bg-rose-500/20 border border-rose-400/50 flex items-center justify-center text-lg shrink-0">
+            👑
+          </div>
+          <div className="min-w-0">
+            <p className="text-xs font-bold text-rose-300 uppercase tracking-wider">
+              Monopoly Lockout — #1 Leaderboard Boss
+            </p>
+            <p className="text-xs text-slate-200 mt-0.5 leading-relaxed">
+              As the #1 player on the leaderboard, you hold a market monopoly and are barred by competition regulators from joining Corporate Syndicates. Other operators must band together to challenge your lead!
+            </p>
+          </div>
         </div>
       )}
 
@@ -543,13 +576,13 @@ export default function CoachCapitalistSyndicatePanel({
                     <button
                       key={pctVal}
                       type="button"
-                      disabled={isUpcoming || isExcluded || accountCash <= 0}
+                      disabled={isUpcoming || isBlocked || accountCash <= 0}
                       onClick={() => setPledgePercent(pctVal)}
                       className={`rounded px-2 py-1 text-[11px] font-bold border transition ${
                         pledgePercent === pctVal
                           ? 'border-emerald-400 bg-emerald-500 text-slate-950'
                           : 'border-slate-700 bg-slate-800 text-slate-300 hover:border-emerald-400/50'
-                      } ${isUpcoming || isExcluded || accountCash <= 0 ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      } ${isUpcoming || isBlocked || accountCash <= 0 ? 'opacity-50 cursor-not-allowed' : ''}`}
                     >
                       {pctVal === 100 ? 'MAX' : `${pctVal}%`}
                     </button>
@@ -571,7 +604,7 @@ export default function CoachCapitalistSyndicatePanel({
                   disabled={
                     busy ||
                     isUpcoming ||
-                    isExcluded ||
+                    isBlocked ||
                     accountCash <= 0 ||
                     calculateCashPledge(pledgePercent) <= 0
                   }
@@ -581,6 +614,8 @@ export default function CoachCapitalistSyndicatePanel({
                     ? 'Transferring…'
                     : isUpcoming
                     ? `🔒 Locked (${countdown})`
+                    : isMonopoly
+                    ? '👑 Monopoly Lockout'
                     : isExcluded
                     ? '🛡️ Quota Claimed Today'
                     : accountCash <= 0
@@ -645,13 +680,13 @@ export default function CoachCapitalistSyndicatePanel({
                         <button
                           key={val}
                           type="button"
-                          disabled={isUpcoming || isExcluded || playerOwnedVehicles <= 0}
+                          disabled={isUpcoming || isBlocked || playerOwnedVehicles <= 0}
                           onClick={() => setVehicleDonationQty(Math.max(1, parsed))}
                           className={`rounded px-2 py-1 text-[11px] font-bold border transition ${
                             vehicleDonationQty === parsed
                               ? 'border-sky-400 bg-sky-500 text-slate-950'
                               : 'border-slate-700 bg-slate-800 text-slate-300 hover:border-sky-400/50'
-                          } ${isUpcoming || isExcluded || playerOwnedVehicles <= 0 ? 'opacity-50 cursor-not-allowed' : ''}`}
+                          } ${isUpcoming || isBlocked || playerOwnedVehicles <= 0 ? 'opacity-50 cursor-not-allowed' : ''}`}
                         >
                           {val}
                         </button>
@@ -668,7 +703,7 @@ export default function CoachCapitalistSyndicatePanel({
                       min={1}
                       max={Math.max(1, Math.min(playerOwnedVehicles, remainingVehicles))}
                       value={vehicleDonationQty}
-                      disabled={isUpcoming || isExcluded || playerOwnedVehicles <= 0}
+                      disabled={isUpcoming || isBlocked || playerOwnedVehicles <= 0}
                       onChange={(e) => setVehicleDonationQty(Math.max(1, parseInt(e.target.value, 10) || 1))}
                       className="w-20 bg-slate-800 border border-slate-600 rounded px-2 py-0.5 text-xs text-white font-mono disabled:opacity-50"
                     />
@@ -680,7 +715,7 @@ export default function CoachCapitalistSyndicatePanel({
                     disabled={
                       busy ||
                       isUpcoming ||
-                      isExcluded ||
+                      isBlocked ||
                       playerOwnedVehicles <= 0 ||
                       vehicleDonationQty <= 0 ||
                       vehicleDonationQty > playerOwnedVehicles ||
@@ -692,6 +727,8 @@ export default function CoachCapitalistSyndicatePanel({
                       ? 'Transferring…'
                       : isUpcoming
                       ? `🔒 Locked (${countdown})`
+                      : isMonopoly
+                      ? '👑 Monopoly Lockout'
                       : isExcluded
                       ? '🛡️ Quota Claimed Today'
                       : playerOwnedVehicles <= 0

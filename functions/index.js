@@ -12220,7 +12220,7 @@ function coachCapitalistLifetimeSortKey(lifetimeEarnings) {
 }
 
 /** Weights must match frontend coachCapitalist.js DEPOTS.lifetimeWeight */
-const COACH_CAP_LIFETIME_WEIGHT = { local: 1, regional: 2.5, national: 5 };
+const COACH_CAP_LIFETIME_WEIGHT = { local: 1, regional: 2.5, national: 0.5 };
 
 function coachCapitalistTotalLifetime(state) {
   if (!state?.depots) return 0;
@@ -13291,6 +13291,21 @@ exports.contributeCoachCapitalistSyndicate = onRequest(
     try {
       const uid = session.profile.uid;
       const userName = session.profile.fullName || session.profile.email || 'Operator';
+      // Monopoly lockout: #1 player on the leaderboard cannot join syndicates
+      const topScoreSnap = await db.collection(COACH_CAPITALIST_SCORES)
+        .orderBy('lifetimeSort', 'desc')
+        .limit(1)
+        .get();
+      if (!topScoreSnap.empty) {
+        const topDoc = topScoreSnap.docs[0];
+        const topLife = Number(topDoc.data()?.lifetimeEarnings) || 0;
+        if (topDoc.id === uid && topLife > 0) {
+          res.status(403).json({
+            error: '👑 Monopoly Lockout: As the #1 player on the leaderboard, you hold a market monopoly and cannot join Corporate Syndicates!',
+          });
+          return;
+        }
+      }
       const syndicateRef = db.doc('coach_capitalist/syndicate');
       const saveRef = db.collection(COACH_CAPITALIST_SAVES).doc(uid);
 

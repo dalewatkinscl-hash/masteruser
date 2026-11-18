@@ -353,7 +353,7 @@ async function purchasePlayTimeBoost(db, {
   };
 }
 
-const LIFETIME_WEIGHT = { local: 1, regional: 2.5, national: 2 };
+const LIFETIME_WEIGHT = { local: 1, regional: 2.5, national: 0.5 };
 const ANGEL_SCALE = 180;
 const ANGEL_DIVISOR = 1e15;
 const ANGEL_SOFT_CAP = 10_000_000;

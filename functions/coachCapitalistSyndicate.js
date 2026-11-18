@@ -362,7 +362,7 @@ async function advanceSyndicateContract(db, force = false, options = {}) {
   });
 
   await docRef.set(nextContract);
-  return nextContract;
+  return { ...nextContract, serverNow: Date.now() };
 }
 
 async function getOrCreateSyndicateContract(db) {
@@ -382,17 +382,17 @@ async function getOrCreateSyndicateContract(db) {
         startedAt: data.opensAt || now,
       };
       await docRef.update({ status: 'active', startedAt: data.opensAt || now });
-      return activated;
+      return { ...activated, serverNow: now };
     }
 
     // 1. Contract expired without meeting target -> mark expired (awaiting Dale to launch next)
     if (data.status === 'active' && data.expiresAt && now > data.expiresAt) {
       await docRef.update({ status: 'expired', expiredAt: now });
-      return { ...data, status: 'expired', expiredAt: now };
+      return { ...data, status: 'expired', expiredAt: now, serverNow: now };
     }
 
     // Completed, expired, or active contracts remain as-is until Dale Watkins explicitly triggers the next one
-    return data;
+    return { ...data, serverNow: now };
   }
 
   if (isLondonWeekend(now)) {
@@ -406,12 +406,12 @@ async function getOrCreateSyndicateContract(db) {
       isWeekend: true,
     };
     await docRef.set(standdown);
-    return standdown;
+    return { ...standdown, serverNow: now };
   }
 
   const initial = defaultSyndicateContract(0, todayKey);
   await docRef.set(initial);
-  return initial;
+  return { ...initial, serverNow: now };
 }
 
 module.exports = {
