@@ -15,6 +15,8 @@ import {
   claimBackers,
   claimUnderdogBoost,
   claimVipCharterReward,
+  computeDvsaCatchChancePer5s,
+  computeSeason5Mods,
   DEFAULT_EVENTS,
   rollEventOffer,
   resolveEventAction,
@@ -37,6 +39,7 @@ import {
   getBusinessArtValue,
   getBusinessCostMultiplier,
   getDepot,
+  getLondonDayKeyClient,
   getManagerPromotionInfo,
   getMilestoneRoadmap,
   isCoachCapSoundMuted,
@@ -56,22 +59,28 @@ import {
   rollVipCharterOffer,
   saveState,
   setCoachCapSoundMuted,
+  setOLicenceMode,
   startCycle,
   syncDepotUnlocks,
   tickDepot,
+  tickOLicenceHeat,
   totalLifetimeEarnings,
   totalRevenuePerSecond,
+  triggerPublicInquiryPenalty,
   getSyndicateMultiplier,
   isCoachCapWeekend,
   getNextMondayMorningMs,
 } from '../lib/coachCapitalist';
+import { useAuth } from '../context/AuthContext';
 import { GameUiBadge, GameUiButton, GameUiModal, GameUiPanel } from './gameUi';
 import { SHOW_COACH_CAPITALIST } from '../utils/featureFlags';
 import CoachCapitalistEventsAdmin from './CoachCapitalistEventsAdmin';
 import CoachCapitalistPlayTimeAdmin from './CoachCapitalistPlayTimeAdmin';
 import CoachCapitalistSyndicatePanel from './CoachCapitalistSyndicatePanel';
+import CoachCapitalistTrafficOfficePanel from './CoachCapitalistTrafficOfficePanel';
+import CoachCapitalistOLicenceBar from './CoachCapitalistOLicenceBar';
 import { BoosterPackOpeningModal, CardBinderView } from './CoachCapitalistCards';
-import { computeCardBonuses, addCardsToInventory } from '../lib/coachCapitalistCards';
+import { computeCardBonuses, addCardsToInventory, getTachoHeatReduction } from '../lib/coachCapitalistCards';
 
 const BUY_MODES = [1, 10, 100, 'next', 'max'];
 const EMPTY_NAMES = { depots: {} };
@@ -314,6 +323,27 @@ function reducer(state, action) {
         cards: nextCards,
       };
     }
+    case 'setOLicenceMode':
+      return setOLicenceMode(state, action.mode, action.now);
+    case 'tickOLicence':
+      return tickOLicenceHeat(state, action.deltaSec, action.opts).state;
+    case 'triggerPublicInquiry':
+      return triggerPublicInquiryPenalty(state, action.now).state;
+    case 'setCardsState':
+      return {
+        ...state,
+        cards: action.cards || state.cards || {},
+        ...(action.cardsRev != null ? { cardsRev: Number(action.cardsRev) || 0 } : {}),
+      };
+    case 'applyDepotTicks':
+      return syncDepotUnlocks({
+        ...state,
+        cash: Math.max(0, Number(state.cash) || 0) + (Number(action.cashEarned) || 0),
+        depots: {
+          ...state.depots,
+          ...(action.depotsPatch || {}),
+        },
+      });
     default:
       return state;
   }
@@ -851,7 +881,20 @@ function BusinessRow({
   );
 }
 
+function CoachCapitalistBlockedNotice() {
+  return (
+    <div className="w-full max-w-lg mx-auto rounded-2xl border border-rose-500/35 bg-[#120d10] px-6 py-10 text-center shadow-xl">
+      <div className="text-[11px] uppercase tracking-[0.16em] text-rose-300/90">Coach Capitalist</div>
+      <h2 className="mt-2 text-xl font-semibold text-white">Access Unavailable</h2>
+      <p className="mt-3 text-sm text-white/70 leading-relaxed">
+        Coach Capitalist is not available on your account.
+      </p>
+    </div>
+  );
+}
+
 export default function CoachCapitalistPanel({ sandbox = false, isAdmin = false }) {
+  const { user } = useAuth();
   const [adminWeekendBypass, setAdminWeekendBypass] = useState(false);
   const [weekendActive, setWeekendActive] = useState(() => isCoachCapWeekend());
 
@@ -862,6 +905,9 @@ export default function CoachCapitalistPanel({ sandbox = false, isAdmin = false 
     return () => clearInterval(timer);
   }, []);
 
+  if (!sandbox && user?.coachCapitalistBlocked) {
+    return <CoachCapitalistBlockedNotice />;
+  }
   if (!SHOW_COACH_CAPITALIST && !sandbox) {
     return <CoachCapitalistMaintenance />;
   }
@@ -932,7 +978,18 @@ function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false, weekendByp
   const [syndicateRewardModal, setSyndicateRewardModal] = useState(null);
   const [currentUid, setCurrentUid] = useState('');
   const [isSyndicateDirector, setIsSyndicateDirector] = useState(false);
+  const [scheduledSeasonLaunch, setScheduledSeasonLaunch] = useState(null);
+  const [seasonIntroKey, setSeasonIntroKey] = useState('');
+  const [trafficOffice, setTrafficOffice] = useState(null);
+  const [trafficLoading, setTrafficLoading] = useState(false);
+  const [trafficBusy, setTrafficBusy] = useState(false);
+  const [cardTrades, setCardTrades] = useState({ openTrades: [], recentCompleted: [] });
+  const [cardExchangeBusy, setCardExchangeBusy] = useState(false);
+  const [publicInquiryModal, setPublicInquiryModal] = useState(null);
+  const [clockNow, setClockNow] = useState(() => Date.now());
   const claimedRewardIdRef = useRef(null);
+  const autoLaunchedRef = useRef(false);
+  const dvsaTickCounterRef = useRef(0);
 
   const checkPendingSyndicateReward = useCallback((reward) => {
     if (!reward || claimedRewardIdRef.current === reward.id) return;
@@ -1078,18 +1135,28 @@ function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false, weekendByp
   );
   const priceMult = depotPriceMult(state.activeDepot);
   const cardBonuses = useMemo(() => computeCardBonuses(state.cards), [state.cards]);
-  const mult = computeMultipliers(depot, depotState, accountAngels, null, null, cardBonuses);
-  const rps = totalRevenuePerSecond(depot, depotState, accountAngels, cardBonuses);
+  const tachoHeatReduction = useMemo(() => getTachoHeatReduction(state.cards), [state.cards]);
+  const season5Mods = useMemo(
+    () => computeSeason5Mods(state, trafficOffice, cardBonuses, clockNow),
+    [state, trafficOffice, cardBonuses, clockNow],
+  );
+  const cardBonusesRef = useRef(cardBonuses);
+  const season5ModsRef = useRef(season5Mods);
+  cardBonusesRef.current = cardBonuses;
+  season5ModsRef.current = season5Mods;
+
+  const mult = computeMultipliers(depot, depotState, accountAngels, null, null, cardBonuses, season5Mods);
+  const rps = totalRevenuePerSecond(depot, depotState, accountAngels, cardBonuses, season5Mods);
   const totalRps = useMemo(() => {
     let sum = 0;
     for (const d of DEPOTS) {
       const ds = state.depots?.[d.id];
       if (!ds?.unlocked) continue;
       const dWithOverrides = applyNameOverrides(d, nameConfig);
-      sum += totalRevenuePerSecond(dWithOverrides, ds, accountAngels, cardBonuses);
+      sum += totalRevenuePerSecond(dWithOverrides, ds, accountAngels, cardBonuses, season5Mods);
     }
     return sum;
-  }, [state.depots, nameConfig, accountAngels, cardBonuses]);
+  }, [state.depots, nameConfig, accountAngels, cardBonuses, season5Mods]);
   const pending = pendingAngels(state);
   const lifetimeTotal = totalLifetimeEarnings(state);
   const activeWeight = depotLifetimeWeight(state.activeDepot);
@@ -1395,11 +1462,15 @@ function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false, weekendByp
           }
           if (payload.uid) setCurrentUid(String(payload.uid));
           if (payload.isSyndicateDirector != null) setIsSyndicateDirector(Boolean(payload.isSyndicateDirector));
+          if (payload.scheduledSeasonLaunch !== undefined) {
+            setScheduledSeasonLaunch(payload.scheduledSeasonLaunch || null);
+          }
           if (payload.seasonId) setSeasonId(String(payload.seasonId));
+          const cfgIntroKey = String(payload.forceResetToken || payload.seasonId || '');
+          if (cfgIntroKey) setSeasonIntroKey(cfgIntroKey);
           if (payload.previousSeasonWrapup) {
             setSeasonWrapup(payload.previousSeasonWrapup);
-            const sid = String(payload.seasonId || '');
-            if (sid && !hasAcknowledgedSeasonIntro(sid) && !sandbox) {
+            if (cfgIntroKey && !hasAcknowledgedSeasonIntro(cfgIntroKey) && !sandbox) {
               setSeasonIntroOpen(true);
             }
           }
@@ -1410,7 +1481,7 @@ function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false, weekendByp
 
       if (sandbox) {
         if (!cancelled) {
-          const away = applyAwayEarnings(stateRef.current);
+          const away = applyAwayEarnings(stateRef.current, Date.now(), cardBonusesRef.current, season5ModsRef.current);
           if (away.awayMs >= 1500 && away.earned > 0) {
             dispatch({ type: 'replace', state: away.state });
             setAwayBanner(
@@ -1433,15 +1504,19 @@ function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false, weekendByp
           if (payload.syndicateContract) {
             setSyndicateContract(payload.syndicateContract);
           }
+          if (payload.scheduledSeasonLaunch !== undefined) {
+            setScheduledSeasonLaunch(payload.scheduledSeasonLaunch || null);
+          }
           const forceToken = payload.forceResetToken ? String(payload.forceResetToken) : '';
           const newlyForced = forceToken ? acknowledgeForceReset(forceToken) : false;
           if (forceToken) forceResetTokenRef.current = forceToken;
           applyPlayPayload(payload);
           if (payload.seasonId) setSeasonId(String(payload.seasonId));
+          const saveIntroKey = String(forceToken || payload.seasonId || '');
+          if (saveIntroKey) setSeasonIntroKey(saveIntroKey);
           if (payload.previousSeasonWrapup) {
             setSeasonWrapup(payload.previousSeasonWrapup);
-            const sid = String(payload.seasonId || '');
-            if (sid && !hasAcknowledgedSeasonIntro(sid)) setSeasonIntroOpen(true);
+            if (saveIntroKey && !hasAcknowledgedSeasonIntro(saveIntroKey)) setSeasonIntroOpen(true);
           }
           // New admin/claim wipe token: take cloud and drop localStorage. Later loads merge normally.
           const picked = newlyForced
@@ -1451,7 +1526,7 @@ function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false, weekendByp
               payload.state,
               payload.updatedAt || null,
             );
-          const away = applyAwayEarnings(picked.state);
+          const away = applyAwayEarnings(picked.state, Date.now(), cardBonusesRef.current, season5ModsRef.current);
           dispatch({ type: 'replace', state: away.state });
           stateRef.current = away.state;
           if (payload.pendingSyndicateReward) {
@@ -1520,17 +1595,15 @@ function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false, weekendByp
         cur.depots[cur.activeDepot],
         Date.now(),
         cur.angels,
+        cardBonusesRef.current,
+        season5ModsRef.current,
       );
       dispatch({
-        type: 'replace',
-        state: syncDepotUnlocks({
-          ...cur,
-          cash: Math.max(0, Number(cur.cash) || 0) + tick.earned,
-          depots: {
-            ...cur.depots,
-            [cur.activeDepot]: tick.depotState,
-          },
-        }),
+        type: 'applyDepotTicks',
+        cashEarned: tick.earned,
+        depotsPatch: {
+          [cur.activeDepot]: tick.depotState,
+        },
       });
     }, 80);
     return () => window.clearInterval(id);
@@ -1542,34 +1615,127 @@ function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false, weekendByp
       const cur = stateRef.current;
       let changed = false;
       let cashEarned = 0;
-      const depots = { ...cur.depots };
+      const depotsPatch = {};
       for (const d of DEPOTS) {
         if (d.id === cur.activeDepot) continue;
-        if (!depots[d.id]?.unlocked) continue;
-        if (!depots[d.id].managers?.some(Boolean) && !depots[d.id].running?.some(Boolean)) continue;
+        if (!cur.depots[d.id]?.unlocked) continue;
+        if (!cur.depots[d.id].managers?.some(Boolean) && !cur.depots[d.id].running?.some(Boolean)) continue;
         const tick = tickDepot(
           applyNameOverrides(d, nameConfig),
-          depots[d.id],
+          cur.depots[d.id],
           Date.now(),
           cur.angels,
+          cardBonusesRef.current,
+          season5ModsRef.current,
         );
-        depots[d.id] = tick.depotState;
+        depotsPatch[d.id] = tick.depotState;
         cashEarned += tick.earned;
         changed = true;
       }
       if (changed) {
         dispatch({
-          type: 'replace',
-          state: syncDepotUnlocks({
-            ...cur,
-            cash: Math.max(0, Number(cur.cash) || 0) + cashEarned,
-            depots,
-          }),
+          type: 'applyDepotTicks',
+          cashEarned,
+          depotsPatch,
         });
       }
     }, 2000);
     return () => window.clearInterval(id);
   }, [nameConfig, cloudReady, pageVisible, playLocked]);
+
+  // 1s clock + Season 5 scheduled launch auto-trigger + O-Licence heat & 5s DVSA Public Inquiry check.
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      const now = Date.now();
+      setClockNow(now);
+
+      // Auto-trigger scheduled Season 5 wipe for open clients the moment 10:00 AM arrives
+      if (
+        !sandbox
+        && cloudReady
+        && scheduledSeasonLaunch
+        && !scheduledSeasonLaunch.executedAtMs
+        && Number(scheduledSeasonLaunch.launchAtMs) > 0
+        && now >= Number(scheduledSeasonLaunch.launchAtMs)
+        && !autoLaunchedRef.current
+      ) {
+        autoLaunchedRef.current = true;
+        fetch('/api/getCoachCapitalistSave', { credentials: 'include' })
+          .then((r) => readJsonResponse(r))
+          .then((payload) => {
+            if (!payload) return;
+            if (payload.scheduledSeasonLaunch !== undefined) {
+              setScheduledSeasonLaunch(payload.scheduledSeasonLaunch || null);
+            }
+            const ft = payload.forceResetToken ? String(payload.forceResetToken) : '';
+            if (ft && acknowledgeForceReset(ft)) {
+              forceResetTokenRef.current = ft;
+              const freshState = normalizeGameState(payload.state);
+              dispatch({ type: 'replace', state: freshState });
+              stateRef.current = freshState;
+              lastSyncedEarnings.current = 0;
+              if (payload.seasonId) setSeasonId(String(payload.seasonId));
+              const introK = String(ft || payload.seasonId || '');
+              setSeasonIntroKey(introK);
+              if (payload.previousSeasonWrapup) {
+                setSeasonWrapup(payload.previousSeasonWrapup);
+                setSeasonIntroOpen(true);
+              }
+              applyPlayPayload(payload);
+              setToast('🚀 Season 5 is live! Everyone starts fresh — good luck!');
+              loadTrafficOffice(true);
+            }
+          })
+          .catch(() => {
+            autoLaunchedRef.current = false;
+          });
+      }
+
+      if (!cloudReady || !pageVisible || playLocked || quietHours) return;
+
+      const cur = stateRef.current;
+      const dayKey = getLondonDayKeyClient(now);
+      const tachoRed = getTachoHeatReduction(cur?.cards);
+      const tickRes = tickOLicenceHeat(cur, 1, {
+        now,
+        tachoHeatReduction: tachoRed,
+        dayKey,
+      });
+      dispatch({
+        type: 'tickOLicence',
+        deltaSec: 1,
+        opts: { now, tachoHeatReduction: tachoRed, dayKey },
+      });
+
+      if (tickRes.cleanPackAwarded) {
+        playCoachCapSfx('milestone');
+        setToast('🟢 15-Minute Clean Operator Shift! +1 Trading Card Booster Pack earned!');
+        window.setTimeout(() => pushCloudSave({ force: true }).catch(() => {}), 150);
+      }
+
+      dvsaTickCounterRef.current += 1;
+      if (dvsaTickCounterRef.current % 5 === 0) {
+        const olAfter = tickRes.state.oLicence;
+        const chance = computeDvsaCatchChancePer5s(olAfter, now);
+        if (chance > 0 && Math.random() < chance) {
+          const inquiry = triggerPublicInquiryPenalty(tickRes.state, now);
+          playCoachCapSfx('crisis_penalty');
+          dispatch({ type: 'triggerPublicInquiry', now });
+          stateRef.current = inquiry.state;
+          setPublicInquiryModal({
+            cashFine: inquiry.cashFine,
+            backersLost: inquiry.backersLost,
+            prohibitionMin: inquiry.prohibitionMin,
+            inquiriesCount: inquiry.state.oLicence?.inquiriesCount || 1,
+          });
+          setToast('🚨 DVSA Public Inquiry! 50% cash fine, 15% pending backers lost, 15m 0.25× prohibition!');
+          window.setTimeout(() => pushCloudSave({ force: true }).catch(() => {}), 100);
+        }
+      }
+    }, 1000);
+    return () => window.clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sandbox, cloudReady, pageVisible, playLocked, quietHours, scheduledSeasonLaunch]);
 
   // Heartbeat every 45s while visible (also on mount / becoming visible).
   useEffect(() => {
@@ -1626,7 +1792,7 @@ function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false, weekendByp
   useEffect(() => {
     if (!cloudReady || !playLocked) return undefined;
     const id = window.setInterval(() => {
-      const away = applyAwayEarnings(stateRef.current);
+      const away = applyAwayEarnings(stateRef.current, Date.now(), cardBonusesRef.current, season5ModsRef.current);
       if (away.earned > 0 || away.state !== stateRef.current) {
         dispatch({ type: 'replace', state: away.state });
         stateRef.current = away.state;
@@ -1649,7 +1815,14 @@ function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false, weekendByp
           const depots = { ...cur.depots };
           for (const d of DEPOTS) {
             if (!depots[d.id]?.unlocked) continue;
-            const tick = tickDepot(applyNameOverrides(d, nameConfig), depots[d.id], now, cur.angels);
+            const tick = tickDepot(
+              applyNameOverrides(d, nameConfig),
+              depots[d.id],
+              now,
+              cur.angels,
+              cardBonusesRef.current,
+              season5ModsRef.current,
+            );
             depots[d.id] = tick.depotState;
             cashEarned += tick.earned;
           }
@@ -1664,7 +1837,7 @@ function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false, weekendByp
         }
         return;
       }
-      const away = applyAwayEarnings(stateRef.current);
+      const away = applyAwayEarnings(stateRef.current, Date.now(), cardBonusesRef.current, season5ModsRef.current);
       if (away.awayMs >= 1500 && away.earned > 0) {
         dispatch({ type: 'replace', state: away.state });
         stateRef.current = away.state;
@@ -1748,6 +1921,10 @@ function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false, weekendByp
       });
     }
     if (!offer) return;
+    if (!forcedEvent && season5ModsRef.current?.goldenTenderImmune && offer.category === 'negative' && offer.kind === 'penalty_breakdown') {
+      setToast('👑 Golden Tender Priority deflected a Fleet Breakdown crisis!');
+      return;
+    }
     if (offer.category === 'negative') {
       playCoachCapSfx('crisis_alert');
     } else {
@@ -1944,6 +2121,9 @@ function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false, weekendByp
         }
         if (data.uid) setCurrentUid(String(data.uid));
         if (data.isSyndicateDirector != null) setIsSyndicateDirector(Boolean(data.isSyndicateDirector));
+        if (data.scheduledSeasonLaunch !== undefined) {
+          setScheduledSeasonLaunch(data.scheduledSeasonLaunch || null);
+        }
       } catch {
         /* ignore polling errors */
       }
@@ -1952,6 +2132,186 @@ function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false, weekendByp
     const timer = window.setInterval(fetchSyndicateLive, pollInterval);
     return () => window.clearInterval(timer);
   }, [sandbox, cloudReady, tab]);
+
+  const loadTrafficOffice = async (isBackground = false) => {
+    if (sandbox) return null;
+    if (!isBackground) setTrafficLoading(true);
+    try {
+      const res = await fetch('/api/coachCapitalistTrafficOffice', { credentials: 'include' });
+      const payload = (await readJsonResponse(res)) || {};
+      if (res.ok && payload.routes) {
+        setTrafficOffice(payload);
+        return payload;
+      }
+    } catch {
+      /* ignore polling failures */
+    } finally {
+      if (!isBackground) setTrafficLoading(false);
+    }
+    return null;
+  };
+
+  useEffect(() => {
+    if (sandbox || !cloudReady) return undefined;
+    loadTrafficOffice(tab !== 'traffic');
+    const intervalMs = tab === 'traffic' ? 10_000 : 45_000;
+    const timer = window.setInterval(() => {
+      loadTrafficOffice(true);
+    }, intervalMs);
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sandbox, cloudReady, tab]);
+
+  const handleAssignRoute = async (routeId) => {
+    if (sandbox || trafficBusy) return;
+    setTrafficBusy(true);
+    try {
+      const res = await fetch('/api/coachCapitalistTrafficOffice', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'assignRoute', routeId }),
+      });
+      const payload = (await readJsonResponse(res)) || {};
+      if (!res.ok) throw new Error(payload.error || 'Could not assign route.');
+      setTrafficOffice(payload);
+      playCoachCapSfx('buy');
+      setToast('🗺️ Fleet dispatched to new charter corridor!');
+    } catch (err) {
+      setToast(err.message || 'Route assignment failed.');
+    } finally {
+      setTrafficBusy(false);
+    }
+  };
+
+  const handlePlaceBid = async (amount) => {
+    if (sandbox || trafficBusy) return;
+    setTrafficBusy(true);
+    try {
+      const res = await fetch('/api/coachCapitalistTrafficOffice', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'placeBid', amount }),
+      });
+      const payload = (await readJsonResponse(res)) || {};
+      if (!res.ok) throw new Error(payload.error || 'Could not place bid.');
+      setTrafficOffice(payload);
+      playCoachCapSfx('upgrade');
+      setToast(`🪙 Sealed bid of ${amount} Tender Chips submitted!`);
+    } finally {
+      setTrafficBusy(false);
+    }
+  };
+
+  const handleClaimTenderReward = async () => {
+    if (sandbox || trafficBusy) return;
+    setTrafficBusy(true);
+    try {
+      const res = await fetch('/api/coachCapitalistTrafficOffice', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'claimTenderReward' }),
+      });
+      const payload = (await readJsonResponse(res)) || {};
+      if (!res.ok) throw new Error(payload.error || 'Could not claim reward.');
+      if (payload.trafficOffice) setTrafficOffice(payload.trafficOffice);
+      if (payload.state) {
+        const next = normalizeGameState(payload.state);
+        dispatch({ type: 'replace', state: next });
+        stateRef.current = next;
+      }
+      playCoachCapSfx('charter_claim');
+      setToast(
+        `👑 Golden Tender Claimed! +${payload.packsAwarded || 1} Pack(s) & ${payload.speedMult}× Speed for ${payload.durationHours}h!`,
+      );
+    } catch (err) {
+      setToast(err.message || 'Claim failed.');
+    } finally {
+      setTrafficBusy(false);
+    }
+  };
+
+  const handleForceResolveTender = async () => {
+    if (sandbox || trafficBusy) return;
+    setTrafficBusy(true);
+    try {
+      const res = await fetch('/api/coachCapitalistTrafficOffice', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'adminForceResolve' }),
+      });
+      const payload = (await readJsonResponse(res)) || {};
+      if (!res.ok) throw new Error(payload.error || 'Could not resolve tender.');
+      setTrafficOffice(payload);
+      setToast('⚡ Golden Tender resolved!');
+    } catch (err) {
+      setToast(err.message || 'Resolve failed.');
+    } finally {
+      setTrafficBusy(false);
+    }
+  };
+
+  const loadCardTrades = async () => {
+    if (sandbox) return null;
+    try {
+      const res = await fetch('/api/coachCapitalistCardExchange', { credentials: 'include' });
+      const payload = (await readJsonResponse(res)) || {};
+      if (res.ok) {
+        setCardTrades({
+          openTrades: Array.isArray(payload.openTrades) ? payload.openTrades : [],
+          recentCompleted: Array.isArray(payload.recentCompleted) ? payload.recentCompleted : [],
+        });
+        if (payload.cards && Number(payload.cardsRev) > (Number(stateRef.current?.cardsRev) || 0)) {
+          dispatch({ type: 'setCardsState', cards: payload.cards, cardsRev: payload.cardsRev });
+        }
+        return payload;
+      }
+    } catch {
+      /* ignore */
+    }
+    return null;
+  };
+
+  const callCardExchangePost = async (body) => {
+    if (sandbox) throw new Error('Card Exchange requires a live cloud account.');
+    setCardExchangeBusy(true);
+    try {
+      await pushCloudSave({ force: true }).catch(() => {});
+      const res = await fetch('/api/coachCapitalistCardExchange', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const payload = (await readJsonResponse(res)) || {};
+      if (!res.ok) throw new Error(payload.error || 'Card Exchange action failed.');
+      if (payload.cards) {
+        dispatch({ type: 'setCardsState', cards: payload.cards, cardsRev: payload.cardsRev });
+        stateRef.current = {
+          ...stateRef.current,
+          cards: payload.cards,
+          ...(payload.cardsRev != null ? { cardsRev: Number(payload.cardsRev) || 0 } : {}),
+        };
+      }
+      if (Array.isArray(payload.openTrades) || Array.isArray(payload.recentCompleted)) {
+        setCardTrades({
+          openTrades: Array.isArray(payload.openTrades) ? payload.openTrades : [],
+          recentCompleted: Array.isArray(payload.recentCompleted) ? payload.recentCompleted : [],
+        });
+      }
+      return payload;
+    } finally {
+      setCardExchangeBusy(false);
+    }
+  };
+
+  const handleForgeShiny = (params) => callCardExchangePost({ action: 'forgeShiny', ...params });
+  const handleCreateTrade = (params) => callCardExchangePost({ action: 'createListing', ...params });
+  const handleCancelTrade = (tradeId) => callCardExchangePost({ action: 'cancelListing', tradeId });
+  const handleAcceptTrade = (tradeId) => callCardExchangePost({ action: 'acceptListing', tradeId });
 
   const patch = (nextDepotState) => {
     dispatch({ type: 'patchDepot', depotId: state.activeDepot, depotState: nextDepotState });
@@ -2183,6 +2543,21 @@ function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false, weekendByp
               <span>⚡ Admin Preview: Weekend Stand-Down is active for regular players.</span>
             </div>
           ) : null}
+          {!sandbox && scheduledSeasonLaunch && !scheduledSeasonLaunch.executedAtMs && scheduledSeasonLaunch.launchAtMs > clockNow ? (
+            <div className="rounded-xl border-2 border-amber-400/70 bg-gradient-to-r from-amber-500/20 via-orange-500/15 to-sky-500/15 px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs shadow">
+              <div className="space-y-0.5">
+                <p className="gui-font text-sm text-amber-200">
+                  🚀 Season 5 Launches at 10:00 AM GMT ({new Date(scheduledSeasonLaunch.launchAtMs).toLocaleDateString('en-GB')})
+                </p>
+                <p className="text-[11px] text-amber-100/85">
+                  All progress &amp; leaderboards reset cleanly at launch — preview Traffic Office, O-Licence &amp; Card Forge below!
+                </p>
+              </div>
+              <span className="rounded-lg border border-amber-400/50 bg-slate-950/80 px-3 py-1 font-mono text-sm font-black text-amber-300 tabular-nums">
+                {formatDuration(Math.ceil((scheduledSeasonLaunch.launchAtMs - clockNow) / 1000))}
+              </span>
+            </div>
+          ) : null}
           {awayBanner ? (
             <div className="rounded-xl border-2 border-emerald-400/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-100">
               {awayBanner}
@@ -2333,6 +2708,26 @@ function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false, weekendByp
                 {mult.breakdownActive ? (
                   <span className="inline-flex items-center gap-1 rounded-md border border-rose-400/80 bg-rose-500/25 px-2 py-0.5 text-[11px] font-bold text-rose-200 animate-pulse tabular-nums">
                     ⚠️ FLEET BREAKDOWN · {Math.round(mult.breakdownSpeedMult * 100)}% SPEED · {mult.breakdownRemainingSec}s
+                  </span>
+                ) : null}
+                {mult.goldenTenderActive ? (
+                  <span className="inline-flex items-center gap-1 rounded-md border border-amber-300/80 bg-amber-400/20 px-2 py-0.5 text-[11px] font-bold text-amber-200 tabular-nums">
+                    👑 GOLDEN TENDER {mult.goldenTenderSpeedMult}× SPEED · {formatDuration(mult.goldenTenderRemainingSec)}
+                  </span>
+                ) : null}
+                {season5Mods.dispatchLabel ? (
+                  <button
+                    type="button"
+                    onClick={() => setTab('traffic')}
+                    className="inline-flex items-center gap-1 rounded-md border border-sky-400/60 bg-sky-500/15 px-2 py-0.5 text-[11px] font-bold text-sky-200 hover:bg-sky-500/25"
+                    title="Active Traffic Office Charter Corridor"
+                  >
+                    {season5Mods.dispatchLabel}
+                  </button>
+                ) : null}
+                {mult.oLicenceProfitMult > 1 ? (
+                  <span className="inline-flex items-center gap-1 rounded-md border border-rose-400/70 bg-rose-500/20 px-2 py-0.5 text-[11px] font-bold text-rose-200 tabular-nums">
+                    🚦 O-LICENCE {mult.oLicenceProfitMult}× PROFIT
                   </span>
                 ) : null}
               </div>
@@ -2611,6 +3006,19 @@ function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false, weekendByp
             })}
           </div>
 
+          <CoachCapitalistOLicenceBar
+            oLicence={state.oLicence}
+            tachoHeatReduction={tachoHeatReduction}
+            prohibitionRemainingSec={season5Mods.prohibitionRemainingSec}
+            cleanSheetActive={season5Mods.cleanSheetActive}
+            todayKey={getLondonDayKeyClient(clockNow)}
+            disabled={playLocked || quietHours}
+            onChangeMode={(mode) => {
+              dispatch({ type: 'setOLicenceMode', mode, now: Date.now() });
+              playCoachCapSfx('buy');
+            }}
+          />
+
           <div className="flex flex-wrap gap-1.5 border-b border-slate-700 pb-2">
             {[
               ['fleet', 'Fleet', 0],
@@ -2618,6 +3026,20 @@ function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false, weekendByp
               ['upgrades', 'Upgrades', affordableCashUpgradesList.length],
               ['angels', 'Backers', affordableAngelUpgradesCount + (prestigePreview.recommended ? 1 : 0)],
               ['cards', '🃏 Cards', Number(state.unopenedPacks) || 0],
+              [
+                'traffic',
+                '🗺️ Traffic Office',
+                (() => {
+                  if (sandbox || !trafficOffice) return 0;
+                  const uid = currentUid || leaderboardMe?.uid || '';
+                  const gt = trafficOffice.goldenTender;
+                  const canClaim = gt?.status === 'awarded' && (
+                    (gt.winner?.uid === uid && !gt.winner?.claimed)
+                    || (gt.runnerUp?.uid === uid && !gt.runnerUp?.claimed)
+                  );
+                  return (!trafficOffice.isWeekend && (!trafficOffice.myRouteId || canClaim)) ? 1 : 0;
+                })(),
+              ],
               ['syndicate', '🤝 Syndicate', syndicateContract?.status === 'active' ? 1 : 0],
               ['leaderboard', 'Leaderboard', 0],
               ...(adminMode && isAdmin
@@ -3154,6 +3576,31 @@ function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false, weekendByp
               cards={state.cards || {}}
               unopenedPacks={Number(state.unopenedPacks) || 0}
               onOpenPackClick={() => setPackModalOpen(true)}
+              currentUid={currentUid || leaderboardMe?.uid || ''}
+              cardTrades={cardTrades}
+              cardExchangeBusy={cardExchangeBusy}
+              onLoadCardTrades={loadCardTrades}
+              onForgeShiny={handleForgeShiny}
+              onCreateTrade={handleCreateTrade}
+              onCancelTrade={handleCancelTrade}
+              onAcceptTrade={handleAcceptTrade}
+            />
+          ) : null}
+
+          {tab === 'traffic' ? (
+            <CoachCapitalistTrafficOfficePanel
+              trafficOffice={trafficOffice}
+              loading={trafficLoading}
+              busy={trafficBusy}
+              currentUid={currentUid || leaderboardMe?.uid || ''}
+              cards={state.cards || {}}
+              isAdmin={isAdmin}
+              isSyndicateDirector={isSyndicateDirector}
+              onAssignRoute={handleAssignRoute}
+              onPlaceBid={handlePlaceBid}
+              onClaimTenderReward={handleClaimTenderReward}
+              onForceResolveTender={handleForceResolveTender}
+              onRefresh={() => loadTrafficOffice(false)}
             />
           ) : null}
 
@@ -3413,20 +3860,63 @@ function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false, weekendByp
       </GameUiModal>
 
       <GameUiModal
+        open={Boolean(publicInquiryModal)}
+        onClose={() => setPublicInquiryModal(null)}
+        title="🚨 DVSA Public Inquiry!"
+        header="red"
+        dark
+        confirmLabel="Accept Penalty & Rebuild"
+        confirmVariant="danger"
+        className="!w-[min(30rem,calc(100%-1.5rem))]"
+        onConfirm={() => setPublicInquiryModal(null)}
+      >
+        {publicInquiryModal ? (
+          <div className="space-y-3 text-sm text-slate-200">
+            <div className="rounded-xl border-2 border-rose-500/60 bg-rose-950/60 p-3 space-y-1">
+              <p className="gui-font text-base text-rose-200 font-bold">
+                Caught Running Hot by Traffic Commissioner DVSA!
+              </p>
+              <p className="text-xs text-rose-100/85">
+                Pushing your O-Licence too hard triggered a full roadside inspection and Public Inquiry (#{publicInquiryModal.inquiriesCount || 1}).
+              </p>
+            </div>
+            <div className="rounded-xl border border-rose-500/40 bg-slate-950/80 p-3 space-y-2 text-xs">
+              <div className="flex justify-between gap-2 border-b border-slate-800 pb-1.5">
+                <span className="text-slate-400">Cash Fine (50% Wallet):</span>
+                <strong className="text-rose-300 font-mono">−{formatMoney(publicInquiryModal.cashFine)}</strong>
+              </div>
+              <div className="flex justify-between gap-2 border-b border-slate-800 pb-1.5">
+                <span className="text-slate-400">Unclaimed Backers Lost (15%):</span>
+                <strong className="text-rose-300 font-mono">
+                  −{formatMoney(publicInquiryModal.backersLost, { symbol: '' })}
+                </strong>
+              </div>
+              <div className="flex justify-between gap-2">
+                <span className="text-slate-400">PG9 Yard Prohibition:</span>
+                <strong className="text-amber-300">0.25× Speed for {publicInquiryModal.prohibitionMin || 15} mins (Locked Green)</strong>
+              </div>
+            </div>
+          </div>
+        ) : null}
+      </GameUiModal>
+
+      <GameUiModal
         open={seasonIntroOpen && Boolean(seasonWrapup)}
         onClose={() => {
-          if (seasonId) acknowledgeSeasonIntro(seasonId);
+          const ack = seasonIntroKey || seasonId;
+          if (ack) acknowledgeSeasonIntro(ack);
           setSeasonIntroOpen(false);
         }}
-        title={seasonId ? `Season ${seasonId} is live` : 'New season is live'}
+        title={seasonId ? `Season ${seasonId} is live` : 'Season 5 is live'}
         header="blue"
         dark
         confirmLabel="Let's go"
         confirmVariant="accent"
         cancelLabel="Close"
-        className="!w-[min(28rem,calc(100%-1.5rem))]"
+        className="!w-[min(32rem,calc(100%-1.5rem))]"
         onConfirm={() => {
-          if (seasonId) acknowledgeSeasonIntro(seasonId);
+          const ack = seasonIntroKey || seasonId;
+          if (ack) acknowledgeSeasonIntro(ack);
           setSeasonIntroOpen(false);
         }}
       >
@@ -3540,6 +4030,16 @@ function CoachCapitalistPanelLive({ sandbox = false, isAdmin = false, weekendByp
                   </span>
                   <span className="gui-font text-amber-300 font-bold font-mono">
                     +{syndicateRewardModal.coins || 150} Coins 🪙
+                  </span>
+                </div>
+              )}
+              {Number(syndicateRewardModal.tenderChipsBonus) > 0 && (
+                <div className="flex items-center justify-between border-b border-emerald-500/20 pb-2 text-xs">
+                  <span className="text-sky-300 font-bold">
+                    Traffic Office Tender Chips:
+                  </span>
+                  <span className="gui-font text-sky-300 font-bold font-mono">
+                    +{Number(syndicateRewardModal.tenderChipsBonus)} Chips 🪙
                   </span>
                 </div>
               )}
@@ -3914,7 +4414,7 @@ function SeasonWrapupBody({ wrapup }) {
       <div className="rounded-xl border border-amber-400/40 bg-gradient-to-r from-amber-500/15 via-slate-900 to-amber-500/10 p-3 text-center space-y-1">
         <p className="gui-font text-base text-amber-300">🏆 {label} Hall of Fame Podium</p>
         <p className="text-xs text-slate-300">
-          Congratulations to our Gold, Silver, and Bronze fleet champions! Everyone starts fresh for <strong>Season 4</strong>.
+          Congratulations to our Gold, Silver, and Bronze fleet champions! Everyone starts fresh for <strong>Season 5</strong>.
         </p>
       </div>
 
@@ -3987,23 +4487,23 @@ function SeasonWrapupBody({ wrapup }) {
         </div>
       ) : null}
 
-      <div className="rounded-xl border border-amber-400/40 bg-gradient-to-b from-amber-500/15 to-slate-950 p-3 text-xs space-y-1.5 shadow">
+      <div className="rounded-xl border border-amber-400/40 bg-gradient-to-b from-amber-500/15 to-slate-950 p-3 text-xs space-y-2 shadow">
         <p className="font-bold text-amber-300 flex items-center gap-1.5 text-sm">
-          <span>🃏 New in Season 4: Fleet Trading Cards &amp; Booster Packs!</span>
+          <span>🚀 New in Season 5: Traffic Office, O-Licence &amp; Card Exchange!</span>
         </p>
-        <p className="text-[11px] text-slate-200 leading-relaxed">
-          Every time your entire fleet hits a whole-depot milestone (25, 50, 100, 200, 300+ across all 10 vehicles), you earn a <strong>3-Card Booster Pack</strong>!
-        </p>
-        <div className="rounded-lg bg-slate-900/80 p-2 border border-white/10 space-y-1 text-[11px]">
-          <p className="text-emerald-300 font-semibold">
-            ✨ <strong>2% Chance of Holographic Shiny Cards:</strong> Every card has a 2% chance to drop as an ultra-rare Shiny card with 5× to 10× massive permanent multipliers!
+        <div className="rounded-lg bg-slate-900/80 p-2.5 border border-white/10 space-y-1.5 text-[11px]">
+          <p className="text-sky-300">
+            🗺️ <strong>The Traffic Office:</strong> Dispatch your fleet onto 1 of 5 daily corridors (quiet routes pay up to <strong>4.0×</strong> Shortage Surge!) and bid weekly <strong>Tender Chips</strong> on sealed-bid Golden Tenders before 13:00!
           </p>
-          <p className="text-slate-300">
-            🎴 <strong>20 Cards to Collect:</strong> Fleet legends, workshop crew, and depot relics. Check your Binder in the new <strong>🃏 Cards</strong> tab!
+          <p className="text-rose-300">
+            🚦 <strong>O-Licence &amp; DVSA Compliance:</strong> Run 🟢 Green (15m = +1 Pack), 🟡 Amber (2.0×), or 🔴 Red (3.5×). Pushing heat raises Public Inquiry risk — get caught for a <strong>−50% cash fine, −15% pending backers, &amp; 15m 0.25× prohibition</strong>!
+          </p>
+          <p className="text-amber-200">
+            🫖 <strong>Tea Room Card Exchange &amp; Forge:</strong> Complete card sets for massive bonuses, melt 5 duplicates into a guaranteed <strong>✨ Shiny</strong>, and swap 1-for-1 with colleagues!
           </p>
         </div>
         <p className="text-[10px] text-amber-200/70 border-t border-amber-500/20 pt-1">
-          ⚖️ <strong>Rebalanced Economics:</strong> Backer scaling past National Hub has been re-tuned with smooth exponential dampening so late-game competition stays close and thrilling!
+          ⚖️ <strong>National Network Rebalanced:</strong> National Network lifetime weight tuned to 0.5× so Local, Regional &amp; Traffic Office strategy all decide the crown!
         </p>
       </div>
     </div>
@@ -4011,7 +4511,7 @@ function SeasonWrapupBody({ wrapup }) {
 }
 
 function CoachCapitalistSeasonAdmin() {
-  const [seasonId, setSeasonId] = useState('2026-S4');
+  const [seasonId, setSeasonId] = useState('2026-S5');
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState('');
@@ -4023,7 +4523,7 @@ function CoachCapitalistSeasonAdmin() {
       return;
     }
     if (!window.confirm(
-      `Start Coach Capitalist season "${id}"?\n\nThis archives Season 3 scores with Gold/Silver/Bronze winners, clears the leaderboard, resets all saves to zero, and resets everyone's daily playtime today.`,
+      `Start Coach Capitalist season "${id}"?\n\nThis archives previous scores with Gold/Silver/Bronze winners, clears the leaderboard, resets all saves & Season 5 boards to zero, and resets everyone's daily playtime today.`,
     )) {
       return;
     }
@@ -4040,7 +4540,7 @@ function CoachCapitalistSeasonAdmin() {
           dailyPlayCapMs: 60 * 60 * 1000,
           awayEarningsEnabled: true,
           archiveScores: true,
-          previousSeasonLabel: 'Season 3',
+          previousSeasonLabel: 'Pre-Season 5',
         }),
       });
       const payload = (await readJsonResponse(response)) || {};

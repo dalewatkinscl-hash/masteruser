@@ -19,6 +19,7 @@ import { ToolboxKickSandbox, ToolboxKickHalloweenSandbox, ToolboxKickChristmasSa
 import { SmashGrabSandbox } from '../components/SmashGrabPanel';
 import { WantedSandbox } from '../components/WantedPanel';
 import { CountryHolesSandbox } from '../components/CountryHolesPanel';
+import { CoachParkSandbox } from '../components/CoachParkPanel';
 import { PigmentPourSandbox } from '../components/PigmentPourPanel';
 import { DragRaceSandbox } from '../components/DragRacePanel';
 import EmployeeSelect from '../components/EmployeeSelect';
@@ -387,6 +388,7 @@ const TABS = [
   { id: 'toolboxkick-christmas', label: 'Dev · Toolbox (Christmas)' },
   { id: 'smashgrab', label: 'Dev · Daz Smash & Grab' },
   { id: 'countryholes', label: 'Dev · Country Holes' },
+  { id: 'coachpark', label: 'Dev · Coach Park' },
   { id: 'pigmentpour', label: 'Dev · Pigment Pour' },
   { id: 'dragrace', label: 'Dev · 2D Drag Racing' },
   { id: 'geoguessr', label: 'GeoGuessr' },
@@ -1506,7 +1508,7 @@ export default function FunAdmin() {
   return (
     <div className="min-h-screen bg-cl-bg text-cl-fg">
       <WorkspaceTabs />
-      <div className={`${tab === 'geoguessr' || tab === 'nonograms' || tab === 'casefile' || tab === 'wanted' || tab === 'pigmentpour' || tab === 'dragrace' ? 'max-w-6xl' : tab === 'coachdepot' || tab === 'coachdepot-assets' || tab === 'coachcapitalist' || tab === 'toolboxkick' || tab === 'toolboxkick-halloween' || tab === 'toolboxkick-christmas' || tab === 'smashgrab' || tab === 'countryholes' ? 'max-w-7xl' : 'max-w-4xl'} mx-auto px-4 sm:px-8 py-6 space-y-5`}>
+      <div className={`${tab === 'geoguessr' || tab === 'nonograms' || tab === 'casefile' || tab === 'wanted' || tab === 'pigmentpour' || tab === 'dragrace' ? 'max-w-6xl' : tab === 'coachdepot' || tab === 'coachdepot-assets' || tab === 'coachcapitalist' || tab === 'toolboxkick' || tab === 'toolboxkick-halloween' || tab === 'toolboxkick-christmas' || tab === 'smashgrab' || tab === 'countryholes' || tab === 'coachpark' ? 'max-w-7xl' : 'max-w-4xl'} mx-auto px-4 sm:px-8 py-6 space-y-5`}>
         <div>
           <button
             type="button"
@@ -1644,6 +1646,7 @@ export default function FunAdmin() {
         {tab === 'toolboxkick-christmas' && <ToolboxKickChristmasSandbox />}
         {tab === 'smashgrab' && <SmashGrabSandbox />}
         {tab === 'countryholes' && <CountryHolesSandbox />}
+        {tab === 'coachpark' && <CoachParkSandbox />}
         {tab === 'pigmentpour' && <PigmentPourSandbox />}
         {tab === 'dragrace' && <DragRaceSandbox />}
         {tab === 'geoguessr' && <GeoGuessrSandbox />}

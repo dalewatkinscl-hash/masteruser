@@ -229,15 +229,34 @@ const {
   clampToPar: clampCountryHolesToPar,
 } = require('./countryHoles');
 const {
+  MAX_BUMPS: COACH_PARK_MAX_BUMPS,
+  MAX_DAILY_TRIES: COACH_PARK_MAX_DAILY_TRIES,
+  MIN_DURATION_MS: COACH_PARK_MIN_DURATION_MS,
+  MAX_DURATION_MS: COACH_PARK_MAX_DURATION_MS,
+  clampDurationMs: clampCoachParkDurationMs,
+  clampBumps: clampCoachParkBumps,
+  clampAttempts: clampCoachParkAttempts,
+  clampTriesUsed: clampCoachParkTriesUsed,
+  computeScoreMs: computeCoachParkScoreMs,
+  normalizeAttemptHistory: normalizeCoachParkAttemptHistory,
+  serializeCoachParkGame,
+  compareCoachParkRows,
+  coachParkResultLabel,
+} = require('./coachPark');
+const {
   DEFAULT_DAILY_PLAY_MS: COACH_CAP_DAILY_PLAY_MS,
   TIME_BOOST_COST: COACH_CAP_TIME_BOOST_COST,
+  COACH_CAP_BLOCKED_UIDS,
+  isCoachCapitalistBlocked,
   normalizeSeasonConfig: normalizeCoachCapSeasonConfig,
   loadPlayStatus: loadCoachCapPlayStatus,
   creditPlayHeartbeat: creditCoachCapPlayHeartbeat,
   purchasePlayTimeBoost: purchaseCoachCapPlayTimeBoost,
   startCoachCapitalistSeason,
+  maybeRunScheduledSeasonLaunch,
   emptyStarterState: emptyCoachCapitalistStarterState,
   getLondonDayKey: getCoachCapPlayDayKey,
+  getLondonWeekKey: getCoachCapWeekKey,
   listAdminPlayStatuses: listCoachCapAdminPlayStatuses,
   adminAdjustPlayTime: adminAdjustCoachCapPlayTime,
 } = require('./coachCapitalistPlay');
@@ -247,6 +266,21 @@ const {
   getSyndicateMultiplier,
   isSyndicateDirector,
 } = require('./coachCapitalistSyndicate');
+const {
+  awardSyndicateTenderChips,
+  maybeResolveGoldenTender,
+  getTrafficOfficeState,
+  assignDispatchRoute,
+  placeGoldenTenderBid,
+  claimGoldenTenderReward,
+} = require('./coachCapitalistTrafficOffice');
+const {
+  listCardTrades,
+  forgeShinyCard,
+  createCardTrade,
+  cancelCardTrade,
+  acceptCardTrade,
+} = require('./coachCapitalistCardExchange');
 const {
   JOB_TYPES: COACH_DEPOT_JOB_TYPES,
   emptyDepot: emptyCoachDepot,
@@ -1075,6 +1109,7 @@ function buildEffectiveProfile(profile) {
     ...profile,
     portalsAccess: nextPortalsAccess,
     canIssueKudos: canIssueKudos({ ...profile, portalsAccess: nextPortalsAccess }, getEffectivePortalRole),
+    coachCapitalistBlocked: isCoachCapitalistBlocked(profile),
   };
 }
 
@@ -10288,6 +10323,422 @@ exports.submitCountryHolesResult = onRequest(
   }),
 );
 
+// GET → Coach Park saved score / daily leaderboard.
+exports.getDailyCoachPark = onRequest(
+  { region: 'europe-west2' },
+  withCors(async (req, res) => {
+    if (req.method !== 'GET') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
+
+    const session = await getVerifiedSessionUser(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+
+    try {
+      const todayKey = getLondonDayKey();
+      const sandbox = parseSandboxFlag(req) && canManagePortalAccess(session.profile);
+      const { dayKey, practice } = resolvePlayableDayKey(req.query?.dayKey, todayKey, {
+        sandbox,
+        allowFuturePreview: sandbox,
+      });
+
+      const access = await enforceFunGameAccess(
+        'coachpark',
+        { dayKey, practice, sandbox },
+        { softWeekend: true },
+      );
+      if (access.closed) {
+        res.status(200).json({
+          ...funAccessClosedPayload(dayKey, access),
+          totalSolved: 0,
+        });
+        return;
+      }
+
+      const leaderboard = practice ? [] : await buildCoachParkLeaderboard(dayKey);
+      let gameData = {
+        uid: session.profile.uid,
+        dayKey,
+        status: 'ready',
+        durationMs: 0,
+        bumps: 0,
+        scoreMs: 0,
+        attempts: 0,
+        triesUsed: 0,
+        roundComplete: false,
+        attemptHistory: [],
+      };
+      if (!practice) {
+        const snap = await db.collection('coach_park_games').doc(`${dayKey}_${session.profile.uid}`).get();
+        if (snap.exists) gameData = { ...gameData, ...(snap.data() || {}) };
+      }
+
+      const streaks = await loadFunStreaks(db, session.profile.uid, {
+        todayKey: dayKey,
+        fullName: session.profile.fullName || session.profile.email || 'Colleague',
+        email: session.profile.email || '',
+        FieldValue: admin.firestore.FieldValue,
+      });
+      const achievements = serializeAchievements(streaks, dayKey);
+
+      res.status(200).json({
+        practice,
+        sandbox: Boolean(sandbox),
+        uid: session.profile.uid,
+        dayKey,
+        weekend: false,
+        rotation: access.rotation,
+        game: serializeCoachParkGame(gameData),
+        leaderboard,
+        totalSolved: leaderboard.filter((r) => r.status === 'won').length,
+        achievements,
+      });
+    } catch (error) {
+      console.error('getDailyCoachPark failed', error);
+      res.status(error.status || 500).json({ error: error.message || 'Failed to load Coach Park.' });
+    }
+  }),
+);
+
+// POST { dayKey?, sandbox? } → reserve one of today's 3 Coach Park tries (transaction-safe).
+exports.startCoachParkTry = onRequest(
+  { region: 'europe-west2' },
+  withCors(async (req, res) => {
+    if (req.method !== 'POST') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
+
+    const session = await getVerifiedSessionUser(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+
+    try {
+      const todayKey = getLondonDayKey();
+      const sandbox = parseSandboxFlag(req) && canManagePortalAccess(session.profile);
+      const { dayKey, practice } = resolvePlayableDayKey(req.body?.dayKey, todayKey, {
+        sandbox,
+        allowFuturePreview: sandbox,
+      });
+
+      await enforceFunGameAccess('coachpark', { dayKey, practice, sandbox });
+
+      if (practice || sandbox) {
+        res.status(200).json({
+          ok: true,
+          practice: Boolean(practice),
+          sandbox: Boolean(sandbox),
+          triesUsed: 0,
+          triesRemaining: COACH_PARK_MAX_DAILY_TRIES,
+          maxTries: COACH_PARK_MAX_DAILY_TRIES,
+        });
+        return;
+      }
+
+      const gameId = `${dayKey}_${session.profile.uid}`;
+      const ref = db.collection('coach_park_games').doc(gameId);
+      const result = await db.runTransaction(async (tx) => {
+        const snap = await tx.get(ref);
+        const existingData = snap.exists ? snap.data() || {} : {};
+        const serialized = snap.exists ? serializeCoachParkGame(existingData) : null;
+        const currentTriesUsed = serialized ? serialized.triesUsed : 0;
+        if (currentTriesUsed >= COACH_PARK_MAX_DAILY_TRIES) {
+          return { limitReached: true, serialized };
+        }
+        const nextTriesUsed = currentTriesUsed + 1;
+        const status = existingData.status === 'won' ? 'won' : 'in_progress';
+        const payload = {
+          uid: session.profile.uid,
+          fullName: session.profile.fullName || session.profile.email || 'Colleague',
+          email: session.profile.email || '',
+          dayKey,
+          status,
+          triesUsed: nextTriesUsed,
+          attempts: nextTriesUsed,
+          activeTry: nextTriesUsed,
+          roundComplete: false,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        };
+        if (!snap.exists) {
+          payload.createdAt = admin.firestore.FieldValue.serverTimestamp();
+        }
+        tx.set(ref, payload, { merge: true });
+        return {
+          limitReached: false,
+          tryNumber: nextTriesUsed,
+          serialized: serializeCoachParkGame({
+            ...existingData,
+            ...payload,
+            roundComplete: false,
+          }),
+        };
+      });
+
+      if (result.limitReached) {
+        res.status(403).json({
+          error: 'All 3 daily tries have been used.',
+          limitReached: true,
+          game: result.serialized,
+        });
+        return;
+      }
+
+      res.status(200).json({
+        ok: true,
+        tryNumber: result.tryNumber,
+        triesUsed: result.serialized.triesUsed,
+        triesRemaining: result.serialized.triesRemaining,
+        maxTries: COACH_PARK_MAX_DAILY_TRIES,
+        game: result.serialized,
+      });
+    } catch (error) {
+      console.error('startCoachParkTry failed', error);
+      res.status(error.status || 500).json({ error: error.message || 'Failed to start Coach Park try.' });
+    }
+  }),
+);
+
+// POST { outcome?, durationMs, bumps, dayKey?, sandbox? } → record try result & best daily Coach Park time.
+exports.submitCoachParkResult = onRequest(
+  { region: 'europe-west2' },
+  withCors(async (req, res) => {
+    if (req.method !== 'POST') {
+      res.status(405).json({ error: 'Method not allowed.' });
+      return;
+    }
+
+    const session = await getVerifiedSessionUser(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+
+    try {
+      const todayKey = getLondonDayKey();
+      const sandbox = parseSandboxFlag(req) && canManagePortalAccess(session.profile);
+      const { dayKey, practice } = resolvePlayableDayKey(req.body?.dayKey, todayKey, {
+        sandbox,
+        allowFuturePreview: sandbox,
+      });
+
+      await enforceFunGameAccess('coachpark', { dayKey, practice, sandbox });
+
+      const outcome = req.body?.outcome === 'wrecked' ? 'wrecked' : 'parked';
+      const rawDuration = Number(req.body?.durationMs ?? 0);
+      if (outcome === 'parked') {
+        if (
+          !Number.isFinite(rawDuration)
+          || rawDuration < COACH_PARK_MIN_DURATION_MS
+          || rawDuration > COACH_PARK_MAX_DURATION_MS
+        ) {
+          res.status(400).json({ error: 'Need a valid completion time.' });
+          return;
+        }
+      } else if (!Number.isFinite(rawDuration) || rawDuration < 0) {
+        res.status(400).json({ error: 'Need a valid elapsed duration.' });
+        return;
+      }
+
+      const rawBumps = outcome === 'wrecked'
+        ? COACH_PARK_MAX_BUMPS
+        : Number(req.body?.bumps ?? 0);
+      if (outcome === 'parked') {
+        if (!Number.isInteger(rawBumps) || rawBumps < 0 || rawBumps >= COACH_PARK_MAX_BUMPS) {
+          res.status(400).json({ error: 'Need a valid bump count.' });
+          return;
+        }
+      }
+
+      const durationMs = clampCoachParkDurationMs(rawDuration);
+      const bumps = clampCoachParkBumps(rawBumps);
+      const scoreMs = outcome === 'parked' ? computeCoachParkScoreMs(durationMs, bumps) : 0;
+
+      if (practice || sandbox) {
+        res.status(200).json({
+          practice: Boolean(practice),
+          sandbox: Boolean(sandbox),
+          improved: outcome === 'parked',
+          game: serializeCoachParkGame({
+            dayKey,
+            status: outcome === 'parked' ? 'won' : 'lost',
+            durationMs,
+            bumps,
+            scoreMs,
+            triesUsed: 1,
+            roundComplete: false,
+            attemptHistory: [{ tryNumber: 1, outcome, durationMs, bumps, scoreMs }],
+            completedAt: new Date().toISOString(),
+          }),
+          leaderboard: [],
+          totalSolved: 0,
+        });
+        return;
+      }
+
+      const gameId = `${dayKey}_${session.profile.uid}`;
+      const ref = db.collection('coach_park_games').doc(gameId);
+      const existing = await ref.get();
+      const existingData = existing.exists ? existing.data() || {} : {};
+      const prevSerialized = existing.exists ? serializeCoachParkGame(existingData) : null;
+      const rawHistory = normalizeCoachParkAttemptHistory(existingData.attemptHistory);
+      const existingTriesUsed = prevSerialized ? prevSerialized.triesUsed : 0;
+
+      if (
+        existing.exists
+        && existingTriesUsed >= COACH_PARK_MAX_DAILY_TRIES
+        && (Boolean(existingData.roundComplete) || rawHistory.length >= COACH_PARK_MAX_DAILY_TRIES)
+      ) {
+        res.status(403).json({
+          error: 'All 3 daily tries have been used.',
+          limitReached: true,
+          game: prevSerialized,
+        });
+        return;
+      }
+
+      const triesUsed = clampCoachParkTriesUsed(existingTriesUsed > 0 ? existingTriesUsed : 1);
+      if (existing.exists && existingTriesUsed > 0 && rawHistory.length >= triesUsed) {
+        res.status(409).json({
+          error: 'Start your next try before submitting.',
+          needStart: true,
+          game: prevSerialized,
+        });
+        return;
+      }
+
+      const tryEntry = {
+        tryNumber: triesUsed,
+        outcome,
+        durationMs,
+        bumps,
+        scoreMs,
+      };
+      const attemptHistory = [...rawHistory, tryEntry].slice(0, COACH_PARK_MAX_DAILY_TRIES);
+      const roundComplete = triesUsed >= COACH_PARK_MAX_DAILY_TRIES;
+      const fullName = session.profile.fullName || session.profile.email || 'Colleague';
+      const email = session.profile.email || '';
+
+      let improved = false;
+      if (outcome === 'parked') {
+        improved = !existing.exists || existingData.status !== 'won';
+        if (!improved && prevSerialized) {
+          if (scoreMs < prevSerialized.scoreMs) {
+            improved = true;
+          } else if (scoreMs === prevSerialized.scoreMs && bumps < prevSerialized.bumps) {
+            improved = true;
+          } else if (
+            scoreMs === prevSerialized.scoreMs
+            && bumps === prevSerialized.bumps
+            && durationMs < prevSerialized.durationMs
+          ) {
+            improved = true;
+          }
+        }
+      }
+
+      const payload = {
+        uid: session.profile.uid,
+        fullName,
+        email,
+        dayKey,
+        triesUsed,
+        attempts: triesUsed,
+        roundComplete,
+        attemptHistory,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+      if (!existing.exists) {
+        payload.createdAt = admin.firestore.FieldValue.serverTimestamp();
+      }
+
+      if (outcome === 'parked') {
+        payload.status = 'won';
+        if (improved) {
+          payload.durationMs = durationMs;
+          payload.bumps = bumps;
+          payload.scoreMs = scoreMs;
+          payload.completedAt = admin.firestore.FieldValue.serverTimestamp();
+        }
+      } else {
+        // Never overwrite an earlier clean/won park when a later try wrecks.
+        if (existingData.status === 'won') {
+          payload.status = 'won';
+        } else if (roundComplete) {
+          payload.status = 'lost';
+          payload.completedAt = admin.firestore.FieldValue.serverTimestamp();
+        } else {
+          payload.status = 'in_progress';
+        }
+      }
+
+      await ref.set(payload, { merge: true });
+
+      let achievements;
+      if (outcome === 'parked') {
+        const streaks = await recordFunStreakWin(db, {
+          uid: session.profile.uid,
+          fullName,
+          email,
+          gameKey: 'coachpark',
+          dayKey,
+          FieldValue: admin.firestore.FieldValue,
+        });
+        const all = await loadFunStreaks(db, session.profile.uid, {
+          todayKey: dayKey,
+          fullName,
+          email,
+          FieldValue: admin.firestore.FieldValue,
+        });
+        achievements = serializeAchievements({ ...all, coachpark: streaks }, dayKey);
+      } else if (payload.status === 'lost') {
+        const streaks = await recordFunStreakFail(db, {
+          uid: session.profile.uid,
+          fullName,
+          email,
+          gameKey: 'coachpark',
+          dayKey,
+          FieldValue: admin.firestore.FieldValue,
+        });
+        const all = await loadFunStreaks(db, session.profile.uid, {
+          todayKey: dayKey,
+          fullName,
+          email,
+          FieldValue: admin.firestore.FieldValue,
+        });
+        achievements = serializeAchievements({ ...all, coachpark: streaks }, dayKey);
+      }
+
+      const snap = await ref.get();
+      const leaderboard = await buildCoachParkLeaderboard(dayKey);
+      await syncDayMedals(db, {
+        gameKey: 'coachpark',
+        dayKey,
+        leaderboardRows: leaderboard,
+        FieldValue: admin.firestore.FieldValue,
+      });
+
+      res.status(200).json({
+        practice: false,
+        improved,
+        alreadySubmitted: outcome === 'parked' && !improved,
+        game: serializeCoachParkGame(snap.data() || {}),
+        leaderboard,
+        totalSolved: leaderboard.filter((r) => r.status === 'won').length,
+        ...(achievements ? { achievements } : {}),
+      });
+    } catch (error) {
+      console.error('submitCoachParkResult failed', error);
+      res.status(error.status || 500).json({ error: error.message || 'Failed to submit Coach Park score.' });
+    }
+  }),
+);
+
 async function loadCoachDepotState(uid) {
   const depotRef = db.collection('coach_depots').doc(uid);
   const depotSnap = await depotRef.get();
@@ -11159,6 +11610,7 @@ const FUN_GAME_COLLECTIONS = {
   wanted: 'wanted_games',
   stackwalk: 'stack_walk_games',
   countryholes: 'country_holes_games',
+  coachpark: 'coach_park_games',
 };
 
 async function buildCountryHolesLeaderboard(dayKey) {
@@ -11194,6 +11646,67 @@ async function buildCountryHolesLeaderboard(dayKey) {
     completedAt: row.completedAt,
     resultLabel: countryHolesResultLabel(row),
   }));
+}
+
+async function buildCoachParkLeaderboard(dayKey) {
+  const snap = await db.collection('coach_park_games').where('dayKey', '==', dayKey).limit(FUN_LEADERBOARD_LIMIT).get();
+  const parsed = snap.docs.map((doc) => {
+    const data = doc.data() || {};
+    const durationMs = clampCoachParkDurationMs(data.durationMs);
+    const bumps = clampCoachParkBumps(data.bumps);
+    const rawScore = Number(data.scoreMs);
+    const scoreMs = Number.isFinite(rawScore) && rawScore > 0
+      ? Math.max(durationMs, Math.floor(rawScore))
+      : computeCoachParkScoreMs(durationMs, bumps);
+    return {
+      uid: data.uid || doc.id,
+      fullName: data.fullName || 'Colleague',
+      status: data.status || 'ready',
+      durationMs,
+      bumps,
+      scoreMs,
+      completedAt: data.completedAt?.toDate?.()?.toISOString?.() || null,
+    };
+  });
+
+  const wonRows = parsed.filter((row) => row.status === 'won');
+  wonRows.sort(compareCoachParkRows);
+  assignJointRanks(wonRows, (a, b) => a.scoreMs === b.scoreMs && a.bumps === b.bumps);
+
+  const lostRows = parsed
+    .filter((row) => row.status === 'lost')
+    .sort((a, b) => String(a.completedAt || '').localeCompare(String(b.completedAt || '')));
+
+  return [
+    ...wonRows.map((row) => ({
+      uid: row.uid,
+      fullName: row.fullName,
+      status: row.status,
+      durationMs: row.durationMs,
+      bumps: row.bumps,
+      scoreMs: row.scoreMs,
+      rank: row.rank,
+      joint: row.joint,
+      medal: row.medal,
+      failed: false,
+      completedAt: row.completedAt,
+      resultLabel: coachParkResultLabel(row),
+    })),
+    ...lostRows.map((row) => ({
+      uid: row.uid,
+      fullName: row.fullName,
+      status: row.status,
+      durationMs: row.durationMs,
+      bumps: row.bumps,
+      scoreMs: row.scoreMs,
+      rank: null,
+      joint: false,
+      medal: null,
+      failed: true,
+      completedAt: row.completedAt,
+      resultLabel: coachParkResultLabel(row),
+    })),
+  ];
 }
 
 async function buildStackWalkLeaderboard(dayKey) {
@@ -11491,6 +12004,7 @@ async function buildLeaderboardForGame(gameKey, dayKey) {
   if (gameKey === 'wanted') return buildWantedLeaderboard(dayKey);
   if (gameKey === 'stackwalk') return buildStackWalkLeaderboard(dayKey);
   if (gameKey === 'countryholes') return buildCountryHolesLeaderboard(dayKey);
+  if (gameKey === 'coachpark') return buildCoachParkLeaderboard(dayKey);
   return [];
 }
 
@@ -12143,6 +12657,7 @@ exports.adminBackfillFunMedals = onRequest(
         wanted: (dayKey) => buildWantedLeaderboard(dayKey),
         stackwalk: (dayKey) => buildStackWalkLeaderboard(dayKey),
         countryholes: (dayKey) => buildCountryHolesLeaderboard(dayKey),
+        coachpark: (dayKey) => buildCoachParkLeaderboard(dayKey),
       };
       const dayKeysByGame = {};
       await Promise.all(Object.entries(FUN_GAME_COLLECTIONS).map(async ([gameKey, collectionName]) => {
@@ -12204,6 +12719,50 @@ exports.adminClawbackFunWinCoins = onRequest(
 const COACH_CAPITALIST_CONFIG_DOC = 'coach_capitalist/config';
 const COACH_CAPITALIST_SAVES = 'coach_capitalist_saves';
 const COACH_CAPITALIST_SCORES = 'coach_capitalist_scores';
+
+function rejectIfCoachCapBlocked(session, res) {
+  if (isCoachCapitalistBlocked(session?.profile)) {
+    res.status(403).json({
+      error: 'You do not have access to Coach Capitalist.',
+      blocked: true,
+    });
+    return true;
+  }
+  return false;
+}
+
+function serializeScheduledSeasonLaunch(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const launchAtMs = Number(raw.launchAtMs) || 0;
+  if (!launchAtMs) return null;
+  return {
+    seasonId: String(raw.seasonId || '2026-S5'),
+    launchAtMs,
+    executedAtMs: raw.executedAtMs ? Number(raw.executedAtMs) : null,
+  };
+}
+
+async function getCoachCapitalistConfigWithAutoLaunch() {
+  const ref = db.doc(COACH_CAPITALIST_CONFIG_DOC);
+  let snap = await ref.get();
+  let data = snap.exists ? (snap.data() || {}) : {};
+  const sched = data.scheduledSeasonLaunch;
+  if (sched && !sched.executedAtMs && Number(sched.launchAtMs) > 0 && Date.now() >= Number(sched.launchAtMs)) {
+    try {
+      const launched = await maybeRunScheduledSeasonLaunch(db, {
+        FieldValue: admin.firestore.FieldValue,
+        source: 'lazy_api',
+      });
+      if (launched?.ran || launched?.inProgress) {
+        snap = await ref.get();
+        data = snap.exists ? (snap.data() || {}) : {};
+      }
+    } catch (err) {
+      console.error('lazy maybeRunScheduledSeasonLaunch failed', err);
+    }
+  }
+  return data;
+}
 const COACH_CAP_DEPOT_IDS = ['local', 'regional', 'national'];
 const COACH_CAP_MILESTONES = [
   { id: 'life_1m', at: 1e6, coins: 5, label: '£1 million lifetime' },
@@ -12307,6 +12866,8 @@ function sanitizeCoachCapitalistSave(raw) {
       frenzyUntil: Math.max(0, Number(d.frenzyUntil) || 0),
       frenzySpeedMult: Number(d.frenzySpeedMult) || 2,
       underdogBoostUntil: Math.max(0, Number(d.underdogBoostUntil) || 0),
+      breakdownUntil: Math.max(0, Number(d.breakdownUntil) || 0),
+      breakdownSpeedMult: Number(d.breakdownSpeedMult) || 0.5,
       unlocked: id === 'local' ? true : Boolean(d.unlocked),
       syndicatesCompleted: Math.max(0, Math.floor(Number(d.syndicatesCompleted ?? raw.syndicatesCompleted) || 0)),
     };
@@ -12333,8 +12894,25 @@ function sanitizeCoachCapitalistSave(raw) {
     }
   }
   const bonusAngels = Math.max(0, Math.floor(Number(raw.bonusAngels) || 0));
+  const forfeitedAngels = Math.max(0, Math.floor(Number(raw.forfeitedAngels) || 0));
   const syndicatesCompleted = Math.max(0, Math.floor(Number(raw.syndicatesCompleted) || 0));
   const unopenedPacks = Math.max(0, Math.floor(Number(raw.unopenedPacks) || 0));
+  const cardsRev = Math.max(0, Math.floor(Number(raw.cardsRev) || 0));
+  const goldenTendersWon = Math.max(0, Math.floor(Number(raw.goldenTendersWon) || 0));
+  const goldenTenderUntil = Math.max(0, Number(raw.goldenTenderUntil) || 0);
+  const goldenTenderSpeedMult = Math.max(1, Math.min(10, Number(raw.goldenTenderSpeedMult) || 1));
+  const goldenTenderImmuneUntil = Math.max(0, Number(raw.goldenTenderImmuneUntil) || 0);
+  const rawOl = raw.oLicence && typeof raw.oLicence === 'object' ? raw.oLicence : {};
+  const oLicence = {
+    mode: rawOl.mode === 'amber' || rawOl.mode === 'red' ? rawOl.mode : 'green',
+    heat: Math.max(0, Math.min(100, Number(rawOl.heat) || 0)),
+    hotStreakSec: Math.max(0, Math.min(86400, Number(rawOl.hotStreakSec) || 0)),
+    cleanStreakSec: Math.max(0, Math.min(86400, Number(rawOl.cleanStreakSec) || 0)),
+    cleanBonusClaimedDay: String(rawOl.cleanBonusClaimedDay || '').slice(0, 16),
+    prohibitionUntil: Math.max(0, Number(rawOl.prohibitionUntil) || 0),
+    prohibitionSpeedMult: Math.max(0.1, Math.min(1, Number(rawOl.prohibitionSpeedMult) || 0.25)),
+    inquiriesCount: Math.max(0, Math.floor(Number(rawOl.inquiriesCount) || 0)),
+  };
   const cards = {};
   if (raw.cards && typeof raw.cards === 'object' && !Array.isArray(raw.cards)) {
     for (const [cardId, entry] of Object.entries(raw.cards)) {
@@ -12357,8 +12935,15 @@ function sanitizeCoachCapitalistSave(raw) {
     angels,
     angelsSpent,
     bonusAngels,
+    forfeitedAngels,
     unopenedPacks,
     cards,
+    cardsRev,
+    goldenTendersWon,
+    goldenTenderUntil,
+    goldenTenderSpeedMult,
+    goldenTenderImmuneUntil,
+    oLicence,
     depots,
     syndicatesCompleted,
   };
@@ -12435,33 +13020,37 @@ async function loadCoachCapitalistLeaderboard(limit = 100) {
   try {
     const snap = await db.collection(COACH_CAPITALIST_SCORES)
       .orderBy('lifetimeSort', 'desc')
-      .limit(cap)
+      .limit(cap + 5)
       .get();
-    rows = snap.docs.map((doc) => {
-      const data = doc.data() || {};
-      return {
-        uid: doc.id,
-        fullName: data.fullName || 'Employee',
-        lifetimeEarnings: Number(data.lifetimeEarnings) || 0,
-        claimedAngels: data.claimedAngels != null ? Math.max(0, Number(data.claimedAngels) || 0) : null,
-        unlockedDepots: Array.isArray(data.unlockedDepots) ? data.unlockedDepots : null,
-        updatedAt: data.updatedAt?.toDate?.()?.toISOString?.() || null,
-      };
-    });
+    rows = snap.docs
+      .filter((doc) => !COACH_CAP_BLOCKED_UIDS.has(doc.id))
+      .map((doc) => {
+        const data = doc.data() || {};
+        return {
+          uid: doc.id,
+          fullName: data.fullName || 'Employee',
+          lifetimeEarnings: Number(data.lifetimeEarnings) || 0,
+          claimedAngels: data.claimedAngels != null ? Math.max(0, Number(data.claimedAngels) || 0) : null,
+          unlockedDepots: Array.isArray(data.unlockedDepots) ? data.unlockedDepots : null,
+          updatedAt: data.updatedAt?.toDate?.()?.toISOString?.() || null,
+        };
+      });
   } catch (queryError) {
     console.warn('loadCoachCapitalistLeaderboard ordered query failed', queryError?.message || queryError);
     const snap = await db.collection(COACH_CAPITALIST_SCORES).limit(500).get();
-    rows = snap.docs.map((doc) => {
-      const data = doc.data() || {};
-      return {
-        uid: doc.id,
-        fullName: data.fullName || 'Employee',
-        lifetimeEarnings: Number(data.lifetimeEarnings) || 0,
-        claimedAngels: data.claimedAngels != null ? Math.max(0, Number(data.claimedAngels) || 0) : null,
-        unlockedDepots: Array.isArray(data.unlockedDepots) ? data.unlockedDepots : null,
-        updatedAt: data.updatedAt?.toDate?.()?.toISOString?.() || null,
-      };
-    });
+    rows = snap.docs
+      .filter((doc) => !COACH_CAP_BLOCKED_UIDS.has(doc.id))
+      .map((doc) => {
+        const data = doc.data() || {};
+        return {
+          uid: doc.id,
+          fullName: data.fullName || 'Employee',
+          lifetimeEarnings: Number(data.lifetimeEarnings) || 0,
+          claimedAngels: data.claimedAngels != null ? Math.max(0, Number(data.claimedAngels) || 0) : null,
+          unlockedDepots: Array.isArray(data.unlockedDepots) ? data.unlockedDepots : null,
+          updatedAt: data.updatedAt?.toDate?.()?.toISOString?.() || null,
+        };
+      });
   }
   // Always re-sort in memory so every caller sees the same order
   // (covers missing lifetimeSort on older docs / index fallback).
@@ -12642,14 +13231,14 @@ exports.getCoachCapitalistConfig = onRequest(
       res.status(401).json({ error: 'Authentication required.' });
       return;
     }
+    if (rejectIfCoachCapBlocked(session, res)) return;
     try {
       const uid = session.profile.uid;
-      const [snap, syndicateContract, userSaveSnap] = await Promise.all([
-        db.doc(COACH_CAPITALIST_CONFIG_DOC).get(),
+      const data = await getCoachCapitalistConfigWithAutoLaunch();
+      const [syndicateContract, userSaveSnap] = await Promise.all([
         getOrCreateSyndicateContract(db),
         db.collection(COACH_CAPITALIST_SAVES).doc(uid).get(),
       ]);
-      const data = snap.exists ? (snap.data() || {}) : {};
       const userData = userSaveSnap.exists ? (userSaveSnap.data() || {}) : {};
       const season = normalizeCoachCapSeasonConfig(data);
       const syndicatesCompleted = Math.max(
@@ -12664,6 +13253,8 @@ exports.getCoachCapitalistConfig = onRequest(
         awayEarningsEnabled: season.awayEarningsEnabled,
         forceResetToken: data.forceResetToken ? String(data.forceResetToken) : null,
         previousSeasonWrapup: data.previousSeasonWrapup || null,
+        scheduledSeasonLaunch: serializeScheduledSeasonLaunch(data.scheduledSeasonLaunch),
+        seasonIntroVersion: Number(data.seasonIntroVersion) || 1,
         syndicateContract: syndicateContract || null,
         pendingSyndicateReward: userData.pendingSyndicateReward || null,
         syndicatesCompleted,
@@ -12834,6 +13425,7 @@ exports.syncCoachCapitalistScore = onRequest(
       res.status(401).json({ error: 'Authentication required.' });
       return;
     }
+    if (rejectIfCoachCapBlocked(session, res)) return;
     try {
       const lifetimeEarnings = Math.max(0, Number(req.body?.lifetimeEarnings) || 0);
       if (!Number.isFinite(lifetimeEarnings)) {
@@ -12875,6 +13467,7 @@ exports.getCoachCapitalistLeaderboard = onRequest(
       res.status(401).json({ error: 'Authentication required.' });
       return;
     }
+    if (rejectIfCoachCapBlocked(session, res)) return;
     try {
       const limit = Math.min(100, Math.max(5, Math.floor(Number(req.query?.limit) || 50)));
       const leaderboard = await loadCoachCapitalistLeaderboard(limit);
@@ -12937,17 +13530,22 @@ exports.getCoachCapitalistSave = onRequest(
       res.status(401).json({ error: 'Authentication required.' });
       return;
     }
+    if (rejectIfCoachCapBlocked(session, res)) return;
     try {
       const uid = session.profile.uid;
-      const [snap, configSnap, syndicateContract] = await Promise.all([
+      const configData = await getCoachCapitalistConfigWithAutoLaunch();
+      const [snap, syndicateContract] = await Promise.all([
         db.collection(COACH_CAPITALIST_SAVES).doc(uid).get(),
-        db.doc(COACH_CAPITALIST_CONFIG_DOC).get(),
         getOrCreateSyndicateContract(db),
       ]);
       const data = snap.exists ? (snap.data() || {}) : {};
-      const configData = configSnap.exists ? (configSnap.data() || {}) : {};
       const season = normalizeCoachCapSeasonConfig(configData);
       let state = data.state ? sanitizeCoachCapitalistSave(data.state) : null;
+      const cardsRev = Math.max(
+        Number(data.cardsRev) || 0,
+        Number(state?.cardsRev) || 0,
+      );
+      if (state) state.cardsRev = cardsRev;
       const lifetimeCap = Number(data.lifetimeCap);
       const hasCap = Number.isFinite(lifetimeCap) && lifetimeCap >= 0;
       if (state && hasCap && coachCapitalistTotalLifetime(state) > lifetimeCap) {
@@ -12972,6 +13570,7 @@ exports.getCoachCapitalistSave = onRequest(
       );
       res.status(200).json({
         state,
+        cardsRev,
         events: Array.isArray(configData.events) ? configData.events : null,
         lifetimeEarnings,
         lifetimeCap: hasCap ? lifetimeCap : null,
@@ -12980,6 +13579,8 @@ exports.getCoachCapitalistSave = onRequest(
         dailyPlayCapMs: season.dailyPlayCapMs,
         awayEarningsEnabled: season.awayEarningsEnabled,
         previousSeasonWrapup: configData.previousSeasonWrapup || null,
+        scheduledSeasonLaunch: serializeScheduledSeasonLaunch(configData.scheduledSeasonLaunch),
+        seasonIntroVersion: Number(configData.seasonIntroVersion) || 1,
         syndicateContract: syndicateContract || null,
         syndicatesCompleted,
         pendingSyndicateReward: data.pendingSyndicateReward || null,
@@ -13006,6 +13607,7 @@ exports.saveCoachCapitalistSave = onRequest(
       res.status(401).json({ error: 'Authentication required.' });
       return;
     }
+    if (rejectIfCoachCapBlocked(session, res)) return;
     try {
       const state = sanitizeCoachCapitalistSave(req.body?.state || req.body);
       if (!state) {
@@ -13013,8 +13615,7 @@ exports.saveCoachCapitalistSave = onRequest(
         return;
       }
       const uid = session.profile.uid;
-      const configSnap = await db.doc(COACH_CAPITALIST_CONFIG_DOC).get();
-      const configData = configSnap.exists ? (configSnap.data() || {}) : {};
+      const configData = await getCoachCapitalistConfigWithAutoLaunch();
       const season = normalizeCoachCapSeasonConfig(configData);
       const play = await loadCoachCapPlayStatus(db, {
         uid,
@@ -13056,6 +13657,17 @@ exports.saveCoachCapitalistSave = onRequest(
           if (prevSession < clientSession) keepPrev = true;
         }
       }
+      const prevOl = prevData.state?.oLicence || {};
+      const prevProhib = Math.max(0, Number(prevOl.prohibitionUntil) || 0);
+      const nextProhib = Math.max(0, Number(state.oLicence?.prohibitionUntil) || 0);
+      const prevInq = Math.max(0, Math.floor(Number(prevOl.inquiriesCount) || 0));
+      const nextInq = Math.max(0, Math.floor(Number(state.oLicence?.inquiriesCount) || 0));
+      const newPublicInquiry = !staleForceReset && !playLocked && prevSnap.exists && (nextProhib > prevProhib || nextInq > prevInq);
+
+      if (newPublicInquiry) {
+        keepPrev = false;
+      }
+
       let nextState = keepPrev
         ? sanitizeCoachCapitalistSave(prevData.state)
         : state;
@@ -13066,6 +13678,29 @@ exports.saveCoachCapitalistSave = onRequest(
       if (hasCap && coachCapitalistTotalLifetime(nextState) > lifetimeCap) {
         nextState = scaleCoachCapitalistLifetimeToTarget(nextState, lifetimeCap);
       }
+
+      // Public Inquiry & Golden Tender anti-dodge monotonicity
+      const prevForfeited = Math.max(0, Math.floor(Number(prevData.state?.forfeitedAngels) || 0));
+      nextState.forfeitedAngels = Math.max(prevForfeited, Math.floor(Number(nextState.forfeitedAngels) || 0));
+
+      const prevGtWon = Math.max(0, Math.floor(Number(prevData.goldenTendersWon ?? prevData.state?.goldenTendersWon) || 0));
+      nextState.goldenTendersWon = Math.max(prevGtWon, Math.floor(Number(nextState.goldenTendersWon) || 0));
+
+      const prevGtUntil = Math.max(0, Number(prevData.state?.goldenTenderUntil) || 0);
+      nextState.goldenTenderUntil = Math.max(prevGtUntil, Number(nextState.goldenTenderUntil) || 0);
+      nextState.goldenTenderSpeedMult = Math.max(
+        Number(prevData.state?.goldenTenderSpeedMult) || 1,
+        Number(nextState.goldenTenderSpeedMult) || 1,
+      );
+      const prevGtImm = Math.max(0, Number(prevData.state?.goldenTenderImmuneUntil) || 0);
+      nextState.goldenTenderImmuneUntil = Math.max(prevGtImm, Number(nextState.goldenTenderImmuneUntil) || 0);
+
+      nextState.oLicence = {
+        ...(nextState.oLicence || {}),
+        prohibitionUntil: Math.max(prevProhib, Number(nextState.oLicence?.prohibitionUntil) || 0),
+        inquiriesCount: Math.max(prevInq, Math.floor(Number(nextState.oLicence?.inquiriesCount) || 0)),
+      };
+
       const nextLife = coachCapitalistTotalLifetime(nextState);
       const nextClaimedAngels = coachCapitalistClaimedAngels(nextState);
       const nextUnlockedDepots = coachCapitalistUnlockedDepots(nextState);
@@ -13088,22 +13723,34 @@ exports.saveCoachCapitalistSave = onRequest(
         if (nextState.depots?.[id]) nextState.depots[id].syndicatesCompleted = syndicatesCompleted;
       }
 
-      // Never let a stale open tab wipe unopened booster packs or opened cards
+      // Respect server-authoritative cardsRev from Workshop Forge / Tea Room Swap Board
+      const prevCardsRev = Math.max(0, Math.floor(Number(prevData.cardsRev ?? prevData.state?.cardsRev) || 0));
+      const clientCardsRev = Math.max(0, Math.floor(Number(nextState.cardsRev) || 0));
       const prevCardsObj = (prevData.state?.cards && typeof prevData.state.cards === 'object') ? prevData.state.cards : {};
       const nextCardsObj = (nextState.cards && typeof nextState.cards === 'object') ? nextState.cards : {};
       const countCardsTotal = (obj) => Object.values(obj).reduce((s, c) => s + Math.max(0, Number(c?.count) || 0), 0);
       const prevCardsTotal = countCardsTotal(prevCardsObj);
       const nextCardsTotal = countCardsTotal(nextCardsObj);
-      if (prevCardsTotal > nextCardsTotal) {
-        nextState.cards = prevCardsObj;
-      }
       const prevPacks = Math.max(0, Math.floor(Number(prevData.state?.unopenedPacks) || 0));
       const nextPacks = Math.max(0, Math.floor(Number(nextState.unopenedPacks) || 0));
-      const prevTotalPacks = prevPacks + Math.floor(prevCardsTotal / 3);
-      const resolvedCardsTotal = Math.max(prevCardsTotal, nextCardsTotal);
-      const nextTotalPacks = nextPacks + Math.floor(resolvedCardsTotal / 3);
-      if (prevTotalPacks > nextTotalPacks) {
-        nextState.unopenedPacks = Math.max(nextPacks, prevTotalPacks - Math.floor(resolvedCardsTotal / 3));
+
+      if (prevCardsRev > clientCardsRev) {
+        nextState.cards = prevCardsObj;
+        nextState.cardsRev = prevCardsRev;
+        nextState.unopenedPacks = Math.max(prevPacks, nextPacks);
+      } else {
+        nextState.cardsRev = Math.max(prevCardsRev, clientCardsRev);
+        if (prevCardsRev === clientCardsRev && prevCardsTotal > nextCardsTotal) {
+          nextState.cards = prevCardsObj;
+        }
+        if (prevCardsRev === clientCardsRev) {
+          const prevTotalPacks = prevPacks + Math.floor(prevCardsTotal / 3);
+          const resolvedCardsTotal = Math.max(prevCardsTotal, nextCardsTotal);
+          const nextTotalPacks = nextPacks + Math.floor(resolvedCardsTotal / 3);
+          if (prevTotalPacks > nextTotalPacks) {
+            nextState.unopenedPacks = Math.max(nextPacks, prevTotalPacks - Math.floor(resolvedCardsTotal / 3));
+          }
+        }
       }
 
       if (shouldWrite) {
@@ -13115,6 +13762,8 @@ exports.saveCoachCapitalistSave = onRequest(
           claimedAngels: nextClaimedAngels,
           unlockedDepots: nextUnlockedDepots,
           syndicatesCompleted,
+          cardsRev: nextState.cardsRev,
+          goldenTendersWon: nextState.goldenTendersWon,
           seasonId: season.seasonId,
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
           updatedByName: session.profile.fullName || session.profile.email || '',
@@ -13132,6 +13781,7 @@ exports.saveCoachCapitalistSave = onRequest(
       const rank = await coachCapitalistRankForUid(uid, score.lifetimeEarnings);
       res.status(200).json(withCoinAwards({
         state: nextState,
+        cardsRev: nextState.cardsRev,
         lifetimeEarnings: score.lifetimeEarnings,
         claimedAngels: score.claimedAngels,
         lifetimeCap: hasCap ? lifetimeCap : null,
@@ -13168,10 +13818,10 @@ exports.coachCapitalistHeartbeat = onRequest(
       res.status(401).json({ error: 'Authentication required.' });
       return;
     }
+    if (rejectIfCoachCapBlocked(session, res)) return;
     try {
       const uid = session.profile.uid;
-      const configSnap = await db.doc(COACH_CAPITALIST_CONFIG_DOC).get();
-      const configData = configSnap.exists ? (configSnap.data() || {}) : {};
+      const configData = await getCoachCapitalistConfigWithAutoLaunch();
       const season = normalizeCoachCapSeasonConfig(configData);
       const play = await creditCoachCapPlayHeartbeat(db, {
         uid,
@@ -13206,10 +13856,10 @@ exports.buyCoachCapitalistPlayBoost = onRequest(
       res.status(401).json({ error: 'Authentication required.' });
       return;
     }
+    if (rejectIfCoachCapBlocked(session, res)) return;
     try {
       const uid = session.profile.uid;
-      const configSnap = await db.doc(COACH_CAPITALIST_CONFIG_DOC).get();
-      const configData = configSnap.exists ? (configSnap.data() || {}) : {};
+      const configData = await getCoachCapitalistConfigWithAutoLaunch();
       const season = normalizeCoachCapSeasonConfig(configData);
       const result = await purchaseCoachCapPlayTimeBoost(db, {
         uid,
@@ -13275,6 +13925,7 @@ exports.contributeCoachCapitalistSyndicate = onRequest(
       res.status(401).json({ error: 'Authentication required.' });
       return;
     }
+    if (rejectIfCoachCapBlocked(session, res)) return;
     const contributionType = req.body?.contributionType === 'vehicle' ? 'vehicle' : 'cash';
     const amount = Number(req.body?.amount) || 0;
     const vehicleCount = Math.max(0, Math.floor(Number(req.body?.vehicleCount) || 0));
@@ -13507,6 +14158,7 @@ exports.contributeCoachCapitalistSyndicate = onRequest(
                     payoutCash: revenueBonus,
                     cashReturnMult,
                     coins: result.updatedContract.rewardCoins || 150,
+                    tenderChipsBonus: 15,
                     syndicatesCompleted: nextCount,
                     multiplier: nextMult,
                     sponsorReward,
@@ -13518,6 +14170,18 @@ exports.contributeCoachCapitalistSyndicate = onRequest(
             });
           } catch (pErr) {
             console.error('Failed to credit syndicate reward to save for', cUid, pErr);
+          }
+
+          // 1b. Award +15 Season 5 Golden Tender Chips for completing a Syndicate
+          try {
+            await awardSyndicateTenderChips(db, {
+              uid: cUid,
+              amount: 15,
+              weekKey: getCoachCapWeekKey(),
+              FieldValue: admin.firestore.FieldValue,
+            });
+          } catch (chipErr) {
+            console.error('Failed to award syndicate Tender Chips for', cUid, chipErr);
           }
 
           // 2. Award portal coins if defined
@@ -13564,6 +14228,7 @@ exports.claimCoachCapitalistSyndicateReward = onRequest(
       res.status(401).json({ error: 'Authentication required.' });
       return;
     }
+    if (rejectIfCoachCapBlocked(session, res)) return;
     const uid = session.profile.uid;
     try {
       const pSaveRef = db.collection(COACH_CAPITALIST_SAVES).doc(uid);
@@ -13794,6 +14459,179 @@ exports.adminSetCoachCapitalistLifetime = onRequest(
       res.status(500).json({ error: error.message || 'Failed to set lifetime.' });
     }
   }),
+);
+
+// GET / POST → Season 5 Traffic Office (Daily Dispatch Board + Sealed-Bid Golden Tenders).
+exports.coachCapitalistTrafficOffice = onRequest(
+  { region: 'europe-west2' },
+  withCors(async (req, res) => {
+    const session = await getVerifiedSessionUser(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+    if (rejectIfCoachCapBlocked(session, res)) return;
+    const uid = session.profile.uid;
+    const fullName = session.profile.fullName || session.profile.email || 'Operator';
+    try {
+      await getCoachCapitalistConfigWithAutoLaunch();
+      if (req.method === 'GET') {
+        const board = await getTrafficOfficeState(db, {
+          uid,
+          FieldValue: admin.firestore.FieldValue,
+        });
+        res.status(200).json({ ok: true, ...board });
+        return;
+      }
+      if (req.method !== 'POST') {
+        res.status(405).json({ error: 'Method not allowed.' });
+        return;
+      }
+      const action = String(req.body?.action || '').trim();
+      if (action === 'assignRoute') {
+        const board = await assignDispatchRoute(db, {
+          uid,
+          fullName,
+          routeId: req.body?.routeId,
+          FieldValue: admin.firestore.FieldValue,
+        });
+        res.status(200).json({ ok: true, ...board });
+        return;
+      }
+      if (action === 'placeBid') {
+        const board = await placeGoldenTenderBid(db, {
+          uid,
+          fullName,
+          amount: req.body?.amount,
+          FieldValue: admin.firestore.FieldValue,
+        });
+        res.status(200).json({ ok: true, ...board });
+        return;
+      }
+      if (action === 'claimTenderReward') {
+        const claimRes = await claimGoldenTenderReward(db, {
+          uid,
+          FieldValue: admin.firestore.FieldValue,
+        });
+        res.status(200).json(claimRes);
+        return;
+      }
+      if (action === 'adminForceResolve') {
+        if (!canManagePortalAccess(session.profile) && !isSyndicateDirector(session.profile)) {
+          res.status(403).json({ error: 'Admin access required.' });
+          return;
+        }
+        await maybeResolveGoldenTender(db, {
+          forceResolve: true,
+          FieldValue: admin.firestore.FieldValue,
+        });
+        const board = await getTrafficOfficeState(db, {
+          uid,
+          FieldValue: admin.firestore.FieldValue,
+        });
+        res.status(200).json({ ok: true, ...board });
+        return;
+      }
+      res.status(400).json({ error: 'Unknown Traffic Office action.' });
+    } catch (error) {
+      console.error('coachCapitalistTrafficOffice failed', error);
+      res.status(error.status || 400).json({ error: error.message || 'Traffic Office request failed.' });
+    }
+  }),
+);
+
+// GET / POST → Season 5 Workshop Forge + Tea Room Card Swap Board.
+exports.coachCapitalistCardExchange = onRequest(
+  { region: 'europe-west2' },
+  withCors(async (req, res) => {
+    const session = await getVerifiedSessionUser(req);
+    if (!session) {
+      res.status(401).json({ error: 'Authentication required.' });
+      return;
+    }
+    if (rejectIfCoachCapBlocked(session, res)) return;
+    const uid = session.profile.uid;
+    const fullName = session.profile.fullName || session.profile.email || 'Operator';
+    try {
+      await getCoachCapitalistConfigWithAutoLaunch();
+      if (req.method === 'GET') {
+        const data = await listCardTrades(db, uid);
+        res.status(200).json({ ok: true, ...data });
+        return;
+      }
+      if (req.method !== 'POST') {
+        res.status(405).json({ error: 'Method not allowed.' });
+        return;
+      }
+      const action = String(req.body?.action || '').trim();
+      if (action === 'forgeShiny') {
+        const forgeRes = await forgeShinyCard(db, {
+          uid,
+          mode: req.body?.mode,
+          cardId: req.body?.cardId,
+          sacrificeIds: req.body?.sacrificeIds,
+          FieldValue: admin.firestore.FieldValue,
+        });
+        res.status(200).json(forgeRes);
+        return;
+      }
+      if (action === 'createListing') {
+        const createRes = await createCardTrade(db, {
+          uid,
+          fullName,
+          offerCardId: req.body?.offerCardId,
+          wantCardId: req.body?.wantCardId,
+          FieldValue: admin.firestore.FieldValue,
+        });
+        const listRes = await listCardTrades(db, uid);
+        res.status(200).json({ ...createRes, openTrades: listRes.openTrades, recentCompleted: listRes.recentCompleted });
+        return;
+      }
+      if (action === 'cancelListing') {
+        const cancelRes = await cancelCardTrade(db, {
+          uid,
+          tradeId: req.body?.tradeId,
+          FieldValue: admin.firestore.FieldValue,
+        });
+        const listRes = await listCardTrades(db, uid);
+        res.status(200).json({ ...cancelRes, openTrades: listRes.openTrades, recentCompleted: listRes.recentCompleted });
+        return;
+      }
+      if (action === 'acceptListing') {
+        const acceptRes = await acceptCardTrade(db, {
+          uid,
+          fullName,
+          tradeId: req.body?.tradeId,
+          FieldValue: admin.firestore.FieldValue,
+        });
+        const listRes = await listCardTrades(db, uid);
+        res.status(200).json({ ...acceptRes, openTrades: listRes.openTrades, recentCompleted: listRes.recentCompleted });
+        return;
+      }
+      res.status(400).json({ error: 'Unknown Card Exchange action.' });
+    } catch (error) {
+      console.error('coachCapitalistCardExchange failed', error);
+      res.status(error.status || 400).json({ error: error.message || 'Card Exchange request failed.' });
+    }
+  }),
+);
+
+// Daily at 10:00 Europe/London: triggers any pending scheduled Coach Capitalist season launch (e.g. Season 5).
+exports.scheduledCoachCapitalistSeasonLaunch = onSchedule(
+  {
+    schedule: '0 10 * * *',
+    timeZone: 'Europe/London',
+    region: 'europe-west2',
+    timeoutSeconds: 540,
+    memory: '1GiB',
+  },
+  async () => {
+    const res = await maybeRunScheduledSeasonLaunch(db, {
+      FieldValue: admin.firestore.FieldValue,
+      source: 'scheduler',
+    });
+    console.log('scheduledCoachCapitalistSeasonLaunch', JSON.stringify(res));
+  },
 );
 
 // POST { uid, amount, message? } → admin: manually grant portal coins with a note.

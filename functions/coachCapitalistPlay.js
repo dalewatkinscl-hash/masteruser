@@ -10,6 +10,25 @@ const HEARTBEAT_MAX_GAP_MS = 60 * 1000;
 const PLAY_COLLECTION = 'coach_capitalist_play';
 const BOOST_COLLECTION = 'coach_capitalist_play_boosts';
 const SCORES_ARCHIVE = 'coach_capitalist_scores_archive';
+const DISPATCH_COLLECTION = 'coach_capitalist_dispatch';
+const CHIPS_COLLECTION = 'coach_capitalist_chips';
+const CARD_TRADES_COLLECTION = 'coach_capitalist_card_trades';
+
+/** Accounts blocked from accessing Coach Capitalist (exact UID/email/name match only). */
+const COACH_CAP_BLOCKED_UIDS = new Set(['i0wKLRuVwfbNAa7SL113m19kf6F3']);
+const COACH_CAP_BLOCKED_EMAILS = new Set(['kerrycox@countrylion.co.uk']);
+
+function isCoachCapitalistBlocked(profile = {}) {
+  if (!profile || typeof profile !== 'object') return false;
+  const uid = String(profile.uid || '').trim();
+  if (uid && COACH_CAP_BLOCKED_UIDS.has(uid)) return true;
+  const email = String(profile.email || '').trim().toLowerCase();
+  if (email && COACH_CAP_BLOCKED_EMAILS.has(email)) return true;
+  const fullName = String(profile.fullName || '').trim().toLowerCase();
+  if (fullName === 'kerry cox') return true;
+  if (profile?.funFlags?.coachCapitalistBlocked === true) return true;
+  return false;
+}
 
 /** Portal-coin purchase: +30 minutes active play, max 2× per London ISO week. */
 const TIME_BOOST_COST = 100;
@@ -380,8 +399,10 @@ function angelsFromWeighted(weighted) {
 function pendingAngelsFromState(state) {
   if (!state) return 0;
   const total = angelsFromWeighted(weightedLifetimeFromState(state));
-  const already = Math.max(0, Number(state.angels) || 0) + Math.max(0, Number(state.angelsSpent) || 0);
-  return Math.max(0, total - already);
+  const bonus = Math.max(0, Number(state.bonusAngels) || 0);
+  const forfeited = Math.max(0, Number(state.forfeitedAngels) || 0);
+  const already = Math.max(0, (Number(state.angels) || 0) + (Number(state.angelsSpent) || 0) - bonus);
+  return Math.max(0, total - already - forfeited);
 }
 
 function deepestDepotFromState(state) {
@@ -413,6 +434,7 @@ function buildPreviousSeasonWrapup({
   for (const doc of scoresDocs) {
     const data = doc.data() || {};
     const uid = doc.id;
+    if (COACH_CAP_BLOCKED_UIDS.has(uid)) continue;
     const fullName = data.fullName || data.email || 'Employee';
     nameByUid.set(uid, fullName);
     scoreRows.push({
@@ -433,6 +455,7 @@ function buildPreviousSeasonWrapup({
   for (const doc of savesDocs) {
     const data = doc.data() || {};
     const uid = doc.id;
+    if (COACH_CAP_BLOCKED_UIDS.has(uid)) continue;
     const state = data.state || null;
     const fullName = nameByUid.get(uid) || data.updatedByName || 'Employee';
     const pending = pendingAngelsFromState(state);
@@ -494,7 +517,13 @@ function emptyStarterState(now = Date.now()) {
     progress: ownedFirst ? [0] : [],
     running: ownedFirst ? [false] : [],
     lastTick: now,
+    frenzyUntil: 0,
+    frenzySpeedMult: 2,
+    underdogBoostUntil: 0,
+    breakdownUntil: 0,
+    breakdownSpeedMult: 1,
     unlocked,
+    syndicatesCompleted: 0,
   });
   return {
     version: 1,
@@ -503,8 +532,26 @@ function emptyStarterState(now = Date.now()) {
     cash: 0,
     angels: 0,
     angelsSpent: 0,
+    bonusAngels: 0,
+    forfeitedAngels: 0,
+    syndicatesCompleted: 0,
     unopenedPacks: 0,
     cards: {},
+    cardsRev: 0,
+    goldenTendersWon: 0,
+    goldenTenderUntil: 0,
+    goldenTenderSpeedMult: 1,
+    goldenTenderImmuneUntil: 0,
+    oLicence: {
+      mode: 'green',
+      heat: 0,
+      hotStreakSec: 0,
+      cleanStreakSec: 0,
+      cleanBonusClaimedDay: '',
+      prohibitionUntil: 0,
+      prohibitionSpeedMult: 0.25,
+      inquiriesCount: 0,
+    },
     depots: {
       local: blankDepot(true, true),
       regional: blankDepot(false, false),
@@ -540,6 +587,7 @@ async function startCoachCapitalistSeason(db, {
   FieldValue,
   adminUid = '',
   adminName = '',
+  markScheduledExecuted = false,
 }) {
   const id = String(seasonId || '').trim();
   if (!id) {
@@ -576,6 +624,7 @@ async function startCoachCapitalistSeason(db, {
     let batch = db.batch();
     let n = 0;
     for (const doc of scoresSnap.docs) {
+      if (COACH_CAP_BLOCKED_UIDS.has(doc.id)) continue;
       const data = doc.data() || {};
       batch.set(
         db.collection(SCORES_ARCHIVE).doc(archiveKey).collection('scores').doc(doc.id),
@@ -613,6 +662,12 @@ async function startCoachCapitalistSeason(db, {
       state: starter,
       lifetimeEarnings: 0,
       lifetimeSort: 0,
+      claimedAngels: 0,
+      unlockedDepots: ['local'],
+      syndicatesCompleted: 0,
+      cardsRev: 0,
+      goldenTendersWon: 0,
+      pendingSyndicateReward: FieldValue.delete(),
       lifetimeCap: FieldValue.delete(),
       forceResetToken,
       seasonId: id,
@@ -652,18 +707,36 @@ async function startCoachCapitalistSeason(db, {
   }
   if (pCount > 0) await playBatch.commit();
 
-  await db.doc('coach_capitalist/config').set({
+  // Clear Season 5 operational collections + active syndicate contract so everyone starts completely fresh
+  await Promise.all([
+    deleteCollectionInBatches(db, db.collection(DISPATCH_COLLECTION)).catch(() => 0),
+    deleteCollectionInBatches(db, db.collection(CHIPS_COLLECTION)).catch(() => 0),
+    deleteCollectionInBatches(db, db.collection(CARD_TRADES_COLLECTION)).catch(() => 0),
+    db.doc('coach_capitalist/syndicate').delete().catch(() => null),
+  ]);
+
+  const configUpdate = {
     seasonId: id,
     dailyPlayCapMs: Math.max(0, Math.floor(Number(dailyPlayCapMs) || DEFAULT_DAILY_PLAY_MS)),
     awayEarningsEnabled: awayEarningsEnabled !== false,
     forceResetToken,
     previousSeasonWrapup,
-    seasonIntroVersion: 1,
+    seasonIntroVersion: 5,
     seasonStartedAt: FieldValue.serverTimestamp(),
     seasonStartedByUid: adminUid || '',
     seasonStartedByName: adminName || '',
     updatedAt: FieldValue.serverTimestamp(),
-  }, { merge: true });
+  };
+
+  if (markScheduledExecuted && prevConfig.scheduledSeasonLaunch && typeof prevConfig.scheduledSeasonLaunch === 'object') {
+    configUpdate.scheduledSeasonLaunch = {
+      ...prevConfig.scheduledSeasonLaunch,
+      executedAtMs: Date.now(),
+      inProgressAtMs: FieldValue.delete(),
+    };
+  }
+
+  await db.doc('coach_capitalist/config').set(configUpdate, { merge: true });
 
   return {
     seasonId: id,
@@ -675,6 +748,74 @@ async function startCoachCapitalistSeason(db, {
     scoresCleared,
     savesReset,
   };
+}
+
+/**
+ * Execute a pending scheduled season launch once its launchAtMs timestamp has arrived.
+ * Safe against concurrent callers using a Firestore transaction lock on coach_capitalist/config.
+ */
+async function maybeRunScheduledSeasonLaunch(db, { FieldValue, source = 'lazy' }) {
+  if (!db || !FieldValue) return { ran: false };
+  const configRef = db.doc('coach_capitalist/config');
+  const preSnap = await configRef.get();
+  if (!preSnap.exists) return { ran: false };
+  const preSched = preSnap.data()?.scheduledSeasonLaunch;
+  if (!preSched || typeof preSched !== 'object') return { ran: false };
+  const preLaunchAtMs = Number(preSched.launchAtMs) || 0;
+  if (!preLaunchAtMs || preSched.executedAtMs || Date.now() < preLaunchAtMs) {
+    return { ran: false };
+  }
+
+  const nowMs = Date.now();
+  const lockResult = await db.runTransaction(async (tx) => {
+    const snap = await tx.get(configRef);
+    const data = snap.exists ? (snap.data() || {}) : {};
+    const sched = data.scheduledSeasonLaunch;
+    if (!sched || typeof sched !== 'object') return { acquired: false };
+    const launchAtMs = Number(sched.launchAtMs) || 0;
+    if (!launchAtMs || sched.executedAtMs || nowMs < launchAtMs) {
+      return { acquired: false };
+    }
+    const inProg = Number(sched.inProgressAtMs) || 0;
+    if (inProg && (nowMs - inProg) < 5 * 60 * 1000) {
+      return { acquired: false, inProgress: true };
+    }
+    tx.set(configRef, {
+      scheduledSeasonLaunch: {
+        ...sched,
+        inProgressAtMs: nowMs,
+      },
+    }, { merge: true });
+    return { acquired: true, sched };
+  });
+
+  if (!lockResult.acquired) {
+    return { ran: false, inProgress: Boolean(lockResult.inProgress) };
+  }
+
+  const sched = lockResult.sched;
+  try {
+    const result = await startCoachCapitalistSeason(db, {
+      seasonId: sched.seasonId || '2026-S5',
+      previousSeasonLabel: sched.previousSeasonLabel || 'Pre-Season 5',
+      dailyPlayCapMs: Number(sched.dailyPlayCapMs) || DEFAULT_DAILY_PLAY_MS,
+      awayEarningsEnabled: sched.awayEarningsEnabled !== false,
+      archiveScores: sched.archiveScores !== false,
+      FieldValue,
+      adminUid: source,
+      adminName: 'Scheduled Season 5 Launch',
+      markScheduledExecuted: true,
+    });
+    return { ran: true, result };
+  } catch (err) {
+    await configRef.set({
+      scheduledSeasonLaunch: {
+        ...sched,
+        inProgressAtMs: FieldValue.delete(),
+      },
+    }, { merge: true }).catch(() => null);
+    throw err;
+  }
 }
 
 /**
@@ -925,9 +1066,15 @@ module.exports = {
   DEFAULT_DAILY_PLAY_MS,
   HEARTBEAT_MAX_GAP_MS,
   PLAY_COLLECTION,
+  DISPATCH_COLLECTION,
+  CHIPS_COLLECTION,
+  CARD_TRADES_COLLECTION,
   TIME_BOOST_COST,
   TIME_BOOST_MS,
   TIME_BOOST_WEEKLY_LIMIT,
+  COACH_CAP_BLOCKED_UIDS,
+  COACH_CAP_BLOCKED_EMAILS,
+  isCoachCapitalistBlocked,
   getLondonDayKey,
   getLondonWeekKey,
   normalizeSeasonConfig,
@@ -936,6 +1083,7 @@ module.exports = {
   purchasePlayTimeBoost,
   emptyStarterState,
   startCoachCapitalistSeason,
+  maybeRunScheduledSeasonLaunch,
   buildPreviousSeasonWrapup,
   serializePlayStatus,
   listAdminPlayStatuses,

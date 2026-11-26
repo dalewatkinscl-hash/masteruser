@@ -2,6 +2,7 @@
  * Coach Capitalist — Adventure Capitalist balances, coach-hire theme.
  * Depots map to Earth / Moon / Mars worlds.
  */
+import { getCardSynergyBonus } from './coachCapitalistCards.js';
 
 const ILLIONS = [
   '', 'thousand', 'million', 'billion', 'trillion', 'quadrillion', 'quintillion',
@@ -677,6 +678,60 @@ function emptyDepotState(depot) {
   };
 }
 
+export const DEFAULT_O_LICENCE = {
+  mode: 'green', // 'green' | 'amber' | 'red'
+  heat: 0,
+  hotStreakSec: 0,
+  cleanStreakSec: 0,
+  cleanBonusClaimedDay: '',
+  prohibitionUntil: 0,
+  prohibitionSpeedMult: 0.25,
+  inquiriesCount: 0,
+};
+
+export const O_LICENCE_MODES = {
+  green: {
+    id: 'green',
+    label: 'Green · Run Clean',
+    shortLabel: 'Green',
+    profitMult: 1.0,
+    cleanStreakBonusMult: 1.15,
+    heatRatePerSec: -2.5,
+    desc: 'Zero DVSA risk. Cools inspection heat fast. 15m continuous Green earns +1 Booster Pack today & +15% Clean Bonus.',
+  },
+  amber: {
+    id: 'amber',
+    label: 'Amber · Cut Corners',
+    shortLabel: 'Amber',
+    profitMult: 2.0,
+    heatRatePerSec: 1.2,
+    desc: '2.0× All-Fleet Profits. Slowly builds DVSA Heat; escalating Public Inquiry risk as heat & duration rise.',
+  },
+  red: {
+    id: 'red',
+    label: 'Red · Full Bandit',
+    shortLabel: 'Red',
+    profitMult: 3.5,
+    heatRatePerSec: 3.0,
+    desc: '3.5× All-Fleet Profits. Rapidly spikes DVSA Heat & high Public Inquiry risk the longer you push it!',
+  },
+};
+
+export function normalizeOLicence(raw) {
+  const ol = raw && typeof raw === 'object' ? raw : {};
+  const mode = ol.mode === 'amber' || ol.mode === 'red' ? ol.mode : 'green';
+  return {
+    mode,
+    heat: Math.max(0, Math.min(100, Number(ol.heat) || 0)),
+    hotStreakSec: Math.max(0, Math.min(86400, Number(ol.hotStreakSec) || 0)),
+    cleanStreakSec: Math.max(0, Math.min(86400, Number(ol.cleanStreakSec) || 0)),
+    cleanBonusClaimedDay: String(ol.cleanBonusClaimedDay || '').slice(0, 16),
+    prohibitionUntil: Math.max(0, Number(ol.prohibitionUntil) || 0),
+    prohibitionSpeedMult: Math.max(0.1, Math.min(1, Number(ol.prohibitionSpeedMult) || 0.25)),
+    inquiriesCount: Math.max(0, Math.floor(Number(ol.inquiriesCount) || 0)),
+  };
+}
+
 export function createInitialState() {
   const depots = {};
   for (const d of DEPOTS) depots[d.id] = emptyDepotState(d);
@@ -690,10 +745,18 @@ export function createInitialState() {
     angels: 0,
     angelsSpent: 0,
     bonusAngels: 0,
+    forfeitedAngels: 0,
     syndicatesCompleted: 0,
-    /** Season 4 Fleet Trading Cards & Booster Packs */
+    /** Season 4 & 5 Fleet Trading Cards & Booster Packs */
     unopenedPacks: 0,
     cards: {},
+    cardsRev: 0,
+    /** Season 5 Golden Tenders & O-Licence Compliance */
+    goldenTendersWon: 0,
+    goldenTenderUntil: 0,
+    goldenTenderSpeedMult: 1,
+    goldenTenderImmuneUntil: 0,
+    oLicence: { ...DEFAULT_O_LICENCE },
     depots,
   };
 }
@@ -937,6 +1000,13 @@ export function normalizeGameState(raw) {
   const syndicatesCompleted = Math.max(0, Math.floor(Number(raw.syndicatesCompleted) || 0));
   const unopenedPacks = Math.max(0, Math.floor(Number(raw.unopenedPacks) || 0));
   const cards = (raw.cards && typeof raw.cards === 'object') ? { ...raw.cards } : {};
+  const cardsRev = Math.max(0, Math.floor(Number(raw.cardsRev) || 0));
+  const forfeitedAngels = Math.max(0, Math.floor(Number(raw.forfeitedAngels) || 0));
+  const goldenTendersWon = Math.max(0, Math.floor(Number(raw.goldenTendersWon) || 0));
+  const goldenTenderUntil = Math.max(0, Number(raw.goldenTenderUntil) || 0);
+  const goldenTenderSpeedMult = Math.max(1, Math.min(10, Number(raw.goldenTenderSpeedMult) || 1));
+  const goldenTenderImmuneUntil = Math.max(0, Number(raw.goldenTenderImmuneUntil) || 0);
+  const oLicence = normalizeOLicence(raw.oLicence);
   const merged = {
     ...base,
     ...raw,
@@ -944,6 +1014,13 @@ export function normalizeGameState(raw) {
     syndicatesCompleted,
     unopenedPacks,
     cards,
+    cardsRev,
+    forfeitedAngels,
+    goldenTendersWon,
+    goldenTenderUntil,
+    goldenTenderSpeedMult,
+    goldenTenderImmuneUntil,
+    oLicence,
     depots: { ...base.depots },
   };
   if (raw.buyMode === 10 || raw.buyMode === 100 || raw.buyMode === 'max' || raw.buyMode === 'next' || raw.buyMode === 1) {
@@ -1058,38 +1135,76 @@ function totalRunningProgress(state) {
   return sum;
 }
 
+function reconcileSeason5Fields(picked, other) {
+  if (!picked || !other) return picked;
+  const pCardsRev = Number(picked.cardsRev) || 0;
+  const oCardsRev = Number(other.cardsRev) || 0;
+  const cards = oCardsRev > pCardsRev ? { ...(other.cards || {}) } : { ...(picked.cards || {}) };
+  const cardsRev = Math.max(pCardsRev, oCardsRev);
+  const pOl = normalizeOLicence(picked.oLicence);
+  const oOl = normalizeOLicence(other.oLicence);
+  const oLicence = oOl.inquiriesCount > pOl.inquiriesCount || oOl.prohibitionUntil > pOl.prohibitionUntil
+    ? {
+        ...pOl,
+        mode: oOl.prohibitionUntil > Date.now() ? 'green' : pOl.mode,
+        heat: oOl.prohibitionUntil > Date.now() ? 0 : pOl.heat,
+        hotStreakSec: oOl.prohibitionUntil > Date.now() ? 0 : pOl.hotStreakSec,
+        prohibitionUntil: Math.max(pOl.prohibitionUntil, oOl.prohibitionUntil),
+        inquiriesCount: Math.max(pOl.inquiriesCount, oOl.inquiriesCount),
+      }
+    : pOl;
+  return {
+    ...picked,
+    cards,
+    cardsRev,
+    unopenedPacks: oCardsRev > pCardsRev
+      ? Math.max(Number(picked.unopenedPacks) || 0, Number(other.unopenedPacks) || 0)
+      : Number(picked.unopenedPacks) || 0,
+    forfeitedAngels: Math.max(Number(picked.forfeitedAngels) || 0, Number(other.forfeitedAngels) || 0),
+    goldenTendersWon: Math.max(Number(picked.goldenTendersWon) || 0, Number(other.goldenTendersWon) || 0),
+    goldenTenderUntil: Math.max(Number(picked.goldenTenderUntil) || 0, Number(other.goldenTenderUntil) || 0),
+    goldenTenderSpeedMult: Math.max(Number(picked.goldenTenderSpeedMult) || 1, Number(other.goldenTenderSpeedMult) || 1),
+    goldenTenderImmuneUntil: Math.max(Number(picked.goldenTenderImmuneUntil) || 0, Number(other.goldenTenderImmuneUntil) || 0),
+    oLicence,
+  };
+}
+
 export function pickRicherState(localState, cloudState, cloudUpdatedAt = null) {
   const local = normalizeGameState(localState);
   if (!cloudState) return { state: local, source: 'local' };
   const cloud = normalizeGameState(cloudState);
+  const wrap = (res) => ({
+    state: reconcileSeason5Fields(res.state, res.source === 'cloud' ? local : cloud),
+    source: res.source,
+  });
   const localLife = totalLifetimeEarnings(local);
   const cloudLife = totalLifetimeEarnings(cloud);
-  if (cloudLife > localLife) return { state: cloud, source: 'cloud' };
-  if (localLife > cloudLife) return { state: local, source: 'local' };
+  if (cloudLife > localLife) return wrap({ state: cloud, source: 'cloud' });
+  if (localLife > cloudLife) return wrap({ state: local, source: 'local' });
   const localAngels = (Number(local.angels) || 0) + (Number(local.angelsSpent) || 0);
   const cloudAngels = (Number(cloud.angels) || 0) + (Number(cloud.angelsSpent) || 0);
-  if (cloudAngels > localAngels) return { state: cloud, source: 'cloud' };
-  if (localAngels > cloudAngels) return { state: local, source: 'local' };
+  if (cloudAngels > localAngels) return wrap({ state: cloud, source: 'cloud' });
+  if (localAngels > cloudAngels) return wrap({ state: local, source: 'local' });
   const localSession = totalSessionEarnings(local);
   const cloudSession = totalSessionEarnings(cloud);
-  if (cloudSession < localSession) return { state: cloud, source: 'cloud' };
-  if (localSession < cloudSession) return { state: local, source: 'local' };
+  if (cloudSession < localSession) return wrap({ state: cloud, source: 'cloud' });
+  if (localSession < cloudSession) return wrap({ state: local, source: 'local' });
   const localCash = Math.max(0, Number(local.cash) || 0);
   const cloudCash = Math.max(0, Number(cloud.cash) || 0);
-  if (cloudCash < localCash) return { state: cloud, source: 'cloud' };
-  if (localCash < cloudCash) return { state: local, source: 'local' };
+  if (cloudCash < localCash) return wrap({ state: cloud, source: 'cloud' });
+  if (localCash < cloudCash) return wrap({ state: local, source: 'local' });
   const localProg = totalRunningProgress(local);
   const cloudProg = totalRunningProgress(cloud);
-  if (localProg > cloudProg + 1e-6) return { state: local, source: 'local' };
-  if (cloudProg > localProg + 1e-6) return { state: cloud, source: 'cloud' };
+  if (localProg > cloudProg + 1e-6) return wrap({ state: local, source: 'local' });
+  if (cloudProg > localProg + 1e-6) return wrap({ state: cloud, source: 'cloud' });
   if (maxDepotLastTick(local) >= maxDepotLastTick(cloud)) {
-    return { state: local, source: 'local' };
+    return wrap({ state: local, source: 'local' });
   }
   const cloudAt = cloudUpdatedAt ? Date.parse(cloudUpdatedAt) : 0;
   if (Number.isFinite(cloudAt) && cloudAt > Date.now() - 5_000) {
-    return { state: cloud, source: 'cloud' };
+    return wrap({ state: cloud, source: 'cloud' });
   }
-  return { state: local, source: 'local' };
+  return wrap({ state: local, source: 'local' });
 }
 
 /** Offline pay is a small fraction of live manager £/s (not full AdCap offline). */
@@ -1184,7 +1299,7 @@ export function earnableMsBetween(startMs, endMs) {
  * Quiet hours (10pm–5am London) never earn. Unmanaged in-progress jobs finish at most once.
  * Timers always advance forward from their current progress and never reset on focus loss.
  */
-export function applyAwayEarnings(state, now = Date.now()) {
+export function applyAwayEarnings(state, now = Date.now(), cardBonuses = null, season5Mods = null) {
   let awayMs = 0;
   let earnableMs = 0;
   let cashEarned = 0;
@@ -1197,7 +1312,7 @@ export function applyAwayEarnings(state, now = Date.now()) {
     const wallMs = Math.max(0, windowEnd - last);
     if (wallMs < 1500) {
       // Short focus switch: advance timers smoothly using normal live tick instead of discarding elapsed time.
-      const quickTick = tickDepot(d, ds, now, state.angels);
+      const quickTick = tickDepot(d, ds, now, state.angels, cardBonuses, season5Mods);
       depots[d.id] = quickTick.depotState;
       cashEarned += quickTick.earned;
       continue;
@@ -1205,7 +1320,7 @@ export function applyAwayEarnings(state, now = Date.now()) {
     const paidMs = earnableMsBetween(last, windowEnd);
     awayMs = Math.max(awayMs, wallMs);
     earnableMs = Math.max(earnableMs, paidMs);
-    const awayTick = tickDepotAway(d, ds, now, paidMs / 1000, state.angels);
+    const awayTick = tickDepotAway(d, ds, now, paidMs / 1000, state.angels, cardBonuses, season5Mods);
     depots[d.id] = awayTick.depotState;
     cashEarned += awayTick.earned;
   }
@@ -1222,7 +1337,7 @@ export function applyAwayEarnings(state, now = Date.now()) {
   };
 }
 
-function tickDepotAway(depot, depotState, now, elapsedSec, accountAngels = 0) {
+function tickDepotAway(depot, depotState, now, elapsedSec, accountAngels = 0, cardBonuses = null, season5Mods = null) {
   const state = {
     ...depotState,
     owned: [...depotState.owned],
@@ -1233,8 +1348,10 @@ function tickDepotAway(depot, depotState, now, elapsedSec, accountAngels = 0) {
   state.lastTick = now;
   if (!(elapsedSec > 0)) return { depotState: state, earned: 0 };
 
-  const mult = computeMultipliers(depot, state, accountAngels);
-  const rate = AWAY_EARNINGS_RATE;
+  const mult = computeMultipliers(depot, state, accountAngels, null, null, cardBonuses, season5Mods);
+  const cardAwayMult = 1 + (Math.max(0, Number(cardBonuses?.awayRatePct) || 0) / 100);
+  const dispatchAwayMult = Math.max(1, Number(season5Mods?.dispatchAwayMult) || 1);
+  const rate = AWAY_EARNINGS_RATE * cardAwayMult * dispatchAwayMult;
   let earned = 0;
   for (let i = 0; i < depot.businesses.length; i += 1) {
     const o = state.owned[i] || 0;
@@ -1487,7 +1604,7 @@ export function getSyndicateMultiplier(syndicatesCompleted) {
   return 1.5 + (count - 1) * 0.5;
 }
 
-export function computeMultipliers(depot, depotState, accountAngels = null, explicitSyndicateMult = null, accountSyndicatesCompleted = null, cardBonuses = null) {
+export function computeMultipliers(depot, depotState, accountAngels = null, explicitSyndicateMult = null, accountSyndicatesCompleted = null, cardBonuses = null, season5Mods = null) {
   const n = depot.businesses.length;
   const owned = depotState.owned;
   const upgradeProfit = Array.from({ length: n }, () => 1);
@@ -1525,7 +1642,8 @@ export function computeMultipliers(depot, depotState, accountAngels = null, expl
     : { selfSpeedHalves: 0, profitByTarget: Array.from({ length: n }, () => 1) };
   const global = globalBonuses(owned);
 
-  const angelRate = 0.02 + angelBonusExtra;
+  const dispatchAngelFactor = Math.max(1, Number(season5Mods?.dispatchAngelMult) || 1);
+  const angelRate = (0.02 + angelBonusExtra) * dispatchAngelFactor;
   const angels = accountAngels != null
     ? Number(accountAngels) || 0
     : Number(depotState.angels) || 0;
@@ -1545,6 +1663,11 @@ export function computeMultipliers(depot, depotState, accountAngels = null, expl
   const breakdownActive = breakdownUntil > nowMs;
   const breakdownRemainingSec = breakdownActive ? Math.max(0, Math.ceil((breakdownUntil - nowMs) / 1000)) : 0;
   const breakdownSpeedMult = breakdownActive ? (Number(depotState?.breakdownSpeedMult) || 0.5) : 1;
+
+  const oLicenceProfitMult = Math.max(1, Number(season5Mods?.oLicenceProfitMult) || 1);
+  const oLicenceSpeedMult = Math.max(0.1, Number(season5Mods?.oLicenceSpeedMult) || 1);
+  const dispatchDepotMult = Math.max(1, Number(season5Mods?.dispatchDepotProfitMult?.[depot.id]) || 1);
+  const goldenTenderSpeedMult = Math.max(1, Number(season5Mods?.goldenTenderSpeedMult) || 1);
 
   const syndCount = Math.max(0, Math.floor(Number(depotState?.syndicatesCompleted ?? accountSyndicatesCompleted) || 0));
   const syndicateProfitMult = explicitSyndicateMult != null
@@ -1572,8 +1695,10 @@ export function computeMultipliers(depot, depotState, accountAngels = null, expl
       * angelMult
       * underdogProfitMult
       * syndicateProfitMult
-      * cardProfitFactor;
-    const totalSpeedMult = (2 ** speedHalves) * angelAllSpeedMult * mgrSpeedMult * frenzySpeedMult * breakdownSpeedMult * cardSpeedFactor;
+      * cardProfitFactor
+      * oLicenceProfitMult
+      * dispatchDepotMult;
+    const totalSpeedMult = (2 ** speedHalves) * angelAllSpeedMult * mgrSpeedMult * frenzySpeedMult * breakdownSpeedMult * cardSpeedFactor * oLicenceSpeedMult * goldenTenderSpeedMult;
     const time = biz.baseTime / totalSpeedMult;
     const revenuePerUnit = biz.baseRevenue * profitMult;
     const cycleRevenue = revenuePerUnit * o;
@@ -1604,6 +1729,14 @@ export function computeMultipliers(depot, depotState, accountAngels = null, expl
     breakdownActive,
     breakdownRemainingSec,
     breakdownSpeedMult,
+    oLicenceProfitMult,
+    oLicenceSpeedMult,
+    dispatchProfitMult: dispatchDepotMult,
+    goldenTenderActive: Boolean(season5Mods?.goldenTenderActive),
+    goldenTenderSpeedMult,
+    goldenTenderRemainingSec: Number(season5Mods?.goldenTenderRemainingSec) || 0,
+    prohibitionActive: Boolean(season5Mods?.prohibitionActive),
+    prohibitionRemainingSec: Number(season5Mods?.prohibitionRemainingSec) || 0,
   };
 }
 
@@ -1631,15 +1764,16 @@ export function angelsFromLifetime(depot, lifetimeEarnings) {
   return Math.floor(scale * Math.sqrt(lifetimeEarnings / div));
 }
 
-/** Pending shared backers from weighted lifetime across all depots. */
+/** Pending shared backers from weighted lifetime across all depots (net of forfeited backers). */
 export function pendingAngels(state) {
   const total = angelsFromWeightedLifetime(totalLifetimeEarnings(state));
   const bonus = Math.max(0, Number(state.bonusAngels) || 0);
+  const forfeited = Math.max(0, Number(state.forfeitedAngels) || 0);
   const already = Math.max(0, (Number(state.angels) || 0) + (Number(state.angelsSpent) || 0) - bonus);
-  return Math.max(0, total - already);
+  return Math.max(0, total - already - forfeited);
 }
 
-export function tickDepot(depot, depotState, now = Date.now(), accountAngels = 0) {
+export function tickDepot(depot, depotState, now = Date.now(), accountAngels = 0, cardBonuses = null, season5Mods = null) {
   const state = {
     ...depotState,
     owned: [...depotState.owned],
@@ -1653,7 +1787,7 @@ export function tickDepot(depot, depotState, now = Date.now(), accountAngels = 0
   state.lastTick = now;
   if (elapsed <= 0) return { depotState: state, earned: 0 };
 
-  const mult = computeMultipliers(depot, state, accountAngels);
+  const mult = computeMultipliers(depot, state, accountAngels, null, null, cardBonuses, season5Mods);
   let earned = 0;
 
   for (let i = 0; i < depot.businesses.length; i += 1) {
@@ -2088,8 +2222,8 @@ export function syncDepotUnlocks(state) {
   return next;
 }
 
-export function totalRevenuePerSecond(depot, depotState, accountAngels = null, cardBonuses = null) {
-  const mult = computeMultipliers(depot, depotState, accountAngels, null, null, cardBonuses);
+export function totalRevenuePerSecond(depot, depotState, accountAngels = null, cardBonuses = null, season5Mods = null) {
+  const mult = computeMultipliers(depot, depotState, accountAngels, null, null, cardBonuses, season5Mods);
   let sum = 0;
   for (let i = 0; i < depot.businesses.length; i += 1) {
     if (depotState.managers[i] && (depotState.owned[i] || 0) > 0) {
@@ -2097,6 +2231,196 @@ export function totalRevenuePerSecond(depot, depotState, accountAngels = null, c
     }
   }
   return sum;
+}
+
+export function getLondonDayKeyClient(now = Date.now()) {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: QUIET_HOURS_TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date(now));
+}
+
+export function computeDvsaCatchChancePer5s(oLicence, now = Date.now()) {
+  const ol = normalizeOLicence(oLicence);
+  if (ol.prohibitionUntil > now || ol.mode === 'green') return 0;
+  const heat = Math.max(0, Math.min(100, ol.heat));
+  const hotStreakSec = Math.max(0, ol.hotStreakSec);
+  const base = ol.mode === 'red'
+    ? 0.015 + (Math.pow(heat / 100, 1.8) * 0.24)
+    : heat < 15
+      ? 0
+      : Math.pow((heat - 15) / 85, 1.7) * 0.11;
+  const durationFactor = 1 + (hotStreakSec / 120);
+  return Math.min(0.65, base * durationFactor);
+}
+
+export function setOLicenceMode(state, mode, now = Date.now()) {
+  if (!state) return state;
+  const ol = normalizeOLicence(state.oLicence);
+  if (ol.prohibitionUntil > now && mode !== 'green') return state;
+  const nextMode = mode === 'amber' || mode === 'red' ? mode : 'green';
+  if (ol.mode === nextMode) return state;
+  return {
+    ...state,
+    oLicence: {
+      ...ol,
+      mode: nextMode,
+    },
+  };
+}
+
+export function tickOLicenceHeat(state, deltaSec, { now = Date.now(), tachoHeatReduction = 0, dayKey = '' } = {}) {
+  if (!state) return { state, cleanPackAwarded: false };
+  const dt = Math.max(0, Number(deltaSec) || 0);
+  const ol = normalizeOLicence(state.oLicence);
+  const activeDay = dayKey || getLondonDayKeyClient(now);
+
+  if (ol.prohibitionUntil > now) {
+    if (ol.mode !== 'green' || ol.heat > 0 || ol.hotStreakSec > 0 || ol.cleanStreakSec > 0) {
+      return {
+        state: {
+          ...state,
+          oLicence: {
+            ...ol,
+            mode: 'green',
+            heat: 0,
+            hotStreakSec: 0,
+            cleanStreakSec: 0,
+          },
+        },
+        cleanPackAwarded: false,
+      };
+    }
+    return { state, cleanPackAwarded: false };
+  }
+
+  let nextHeat = ol.heat;
+  let nextHotStreak = ol.hotStreakSec;
+  let nextCleanStreak = ol.cleanStreakSec;
+  let nextClaimedDay = ol.cleanBonusClaimedDay;
+  let nextPacks = Math.max(0, Math.floor(Number(state.unopenedPacks) || 0));
+  let cleanPackAwarded = false;
+
+  if (ol.mode === 'green') {
+    nextHeat = Math.max(0, ol.heat + (O_LICENCE_MODES.green.heatRatePerSec * dt));
+    nextHotStreak = Math.max(0, ol.hotStreakSec - (dt * 2));
+    nextCleanStreak = Math.min(86400, ol.cleanStreakSec + dt);
+    if (nextCleanStreak >= 900 && nextClaimedDay !== activeDay) {
+      nextClaimedDay = activeDay;
+      nextPacks += 1;
+      cleanPackAwarded = true;
+    }
+  } else {
+    const modeRate = O_LICENCE_MODES[ol.mode]?.heatRatePerSec || 1.2;
+    const reduction = Math.max(0, Math.min(0.6, Number(tachoHeatReduction) || 0));
+    nextHeat = Math.min(100, Math.max(0, ol.heat + (modeRate * (1 - reduction) * dt)));
+    nextHotStreak = Math.min(86400, ol.hotStreakSec + dt);
+    nextCleanStreak = 0;
+  }
+
+  return {
+    state: {
+      ...state,
+      unopenedPacks: nextPacks,
+      oLicence: {
+        ...ol,
+        heat: nextHeat,
+        hotStreakSec: nextHotStreak,
+        cleanStreakSec: nextCleanStreak,
+        cleanBonusClaimedDay: nextClaimedDay,
+      },
+    },
+    cleanPackAwarded,
+  };
+}
+
+export function triggerPublicInquiryPenalty(state, now = Date.now()) {
+  if (!state) return { state, cashFine: 0, backersLost: 0, prohibitionMin: 15 };
+  const cash = Math.max(0, Number(state.cash) || 0);
+  const cashFine = Math.floor(cash * 0.5);
+  const pendingBefore = pendingAngels(state);
+  const backersLost = pendingBefore > 0 ? Math.max(1, Math.floor(pendingBefore * 0.15)) : 0;
+  const prohibitionMs = 15 * 60 * 1000;
+  const ol = normalizeOLicence(state.oLicence);
+  const nextForfeited = Math.max(0, Math.floor(Number(state.forfeitedAngels) || 0)) + backersLost;
+
+  return {
+    state: {
+      ...state,
+      cash: Math.max(0, cash - cashFine),
+      forfeitedAngels: nextForfeited,
+      oLicence: {
+        ...ol,
+        mode: 'green',
+        heat: 0,
+        hotStreakSec: 0,
+        cleanStreakSec: 0,
+        prohibitionUntil: Math.max(now, ol.prohibitionUntil) + prohibitionMs,
+        prohibitionSpeedMult: 0.25,
+        inquiriesCount: ol.inquiriesCount + 1,
+      },
+    },
+    cashFine,
+    backersLost,
+    prohibitionMin: 15,
+  };
+}
+
+export function computeSeason5Mods(state, trafficOffice = null, cardBonuses = null, now = Date.now()) {
+  const ol = normalizeOLicence(state?.oLicence);
+  const prohibitionActive = ol.prohibitionUntil > now;
+  const prohibitionRemainingSec = prohibitionActive ? Math.max(0, Math.ceil((ol.prohibitionUntil - now) / 1000)) : 0;
+  const cleanSheetActive = !prohibitionActive && ol.mode === 'green' && ol.cleanStreakSec >= 900;
+  const oLicenceProfitMult = prohibitionActive
+    ? 1.0
+    : (ol.mode === 'red' ? 3.5 : ol.mode === 'amber' ? 2.0 : (cleanSheetActive ? 1.15 : 1.0));
+  const oLicenceSpeedMult = prohibitionActive ? (ol.prohibitionSpeedMult || 0.25) : 1.0;
+
+  const dispatchDepotProfitMult = { local: 1, regional: 1, national: 1 };
+  let dispatchAwayMult = 1;
+  let dispatchAngelMult = 1;
+  let dispatchLabel = '';
+
+  const myRouteId = trafficOffice?.myRouteId || '';
+  const activeRoute = Array.isArray(trafficOffice?.routes)
+    ? trafficOffice.routes.find((r) => r.id === myRouteId)
+    : null;
+  if (activeRoute) {
+    const synergy = getCardSynergyBonus(state?.cards || {}, activeRoute.synergyCardId);
+    const effectiveMult = Math.max(1, Number(activeRoute.multiplier) || 1) * (1 + synergy);
+    dispatchLabel = `${activeRoute.icon || '🗺️'} ${activeRoute.title} (${effectiveMult.toFixed(1)}×)`;
+    if (activeRoute.effectType === 'depot_profit' && activeRoute.depotId) {
+      dispatchDepotProfitMult[activeRoute.depotId] = effectiveMult;
+    } else if (activeRoute.effectType === 'away_mult') {
+      dispatchAwayMult = effectiveMult;
+    } else if (activeRoute.effectType === 'angel_mult') {
+      dispatchAngelMult = 1 + ((effectiveMult - 1) * 0.25);
+    }
+  }
+
+  const goldenTenderUntil = Math.max(0, Number(state?.goldenTenderUntil) || 0);
+  const goldenTenderActive = goldenTenderUntil > now;
+  const goldenTenderSpeedMult = goldenTenderActive ? Math.max(1, Number(state?.goldenTenderSpeedMult) || 1) : 1;
+  const goldenTenderRemainingSec = goldenTenderActive ? Math.max(0, Math.ceil((goldenTenderUntil - now) / 1000)) : 0;
+  const goldenTenderImmune = Math.max(0, Number(state?.goldenTenderImmuneUntil) || 0) > now;
+
+  return {
+    oLicenceProfitMult,
+    oLicenceSpeedMult,
+    prohibitionActive,
+    prohibitionRemainingSec,
+    cleanSheetActive,
+    dispatchDepotProfitMult,
+    dispatchAwayMult,
+    dispatchAngelMult,
+    dispatchLabel,
+    goldenTenderActive,
+    goldenTenderSpeedMult,
+    goldenTenderRemainingSec,
+    goldenTenderImmune,
+  };
 }
 
 export function nextUnlockAt(owned) {

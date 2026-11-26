@@ -575,6 +575,21 @@
         "region": "europe-west2"
       },
       {
+        "source": "/api/getDailyCoachPark",
+        "function": "getDailyCoachPark",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/startCoachParkTry",
+        "function": "startCoachParkTry",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/submitCoachParkResult",
+        "function": "submitCoachParkResult",
+        "region": "europe-west2"
+      },
+      {
         "source": "/api/listMultiplayerGames",
         "function": "listMultiplayerGames",
         "region": "europe-west2"
@@ -797,6 +812,16 @@
       {
         "source": "/api/saveCoachCapitalistConfig",
         "function": "saveCoachCapitalistConfig",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/coachCapitalistTrafficOffice",
+        "function": "coachCapitalistTrafficOffice",
+        "region": "europe-west2"
+      },
+      {
+        "source": "/api/coachCapitalistCardExchange",
+        "function": "coachCapitalistCardExchange",
         "region": "europe-west2"
       },
       {

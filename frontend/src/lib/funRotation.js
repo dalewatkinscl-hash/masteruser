@@ -32,6 +32,10 @@ export const WANTED_GAME = { key: 'wanted', label: 'Daily Wanted' };
 export const COUNTRY_HOLES_LIVE_FROM = '2026-10-14';
 export const COUNTRY_HOLES_GAME = { key: 'countryholes', label: 'Country Holes' };
 
+/** Always offered on Fun from this London day (not counted in weekday sit-outs). */
+export const COACH_PARK_LIVE_FROM = '2026-11-25';
+export const COACH_PARK_GAME = { key: 'coachpark', label: 'Coach Park' };
+
 /** Soft launch / O×5 secret unlock from this day. */
 export const STACK_WALK_PREVIEW_FROM = '2026-09-18';
 /** Joins Fun rotation (normal play) from this Europe/London day. */
@@ -55,6 +59,7 @@ export const FUN_GAME_ROSTER = [
   WANTED_GAME,
   STACK_WALK_GAME,
   COUNTRY_HOLES_GAME,
+  COACH_PARK_GAME,
 ];
 
 export const ROTATION_START_DAY_KEY = '2026-08-03';
@@ -147,6 +152,7 @@ export function getRosterForDay(dayKey) {
   if (key >= WANTED_LIVE_FROM) roster.push(WANTED_GAME);
   if (key >= STACK_WALK_LIVE_FROM) roster.push(STACK_WALK_GAME);
   if (key >= COUNTRY_HOLES_LIVE_FROM) roster.push(COUNTRY_HOLES_GAME);
+  if (key >= COACH_PARK_LIVE_FROM) roster.push(COACH_PARK_GAME);
   return roster;
 }
 
@@ -189,6 +195,10 @@ export function isStackWalkLive(dayKey) {
 export function isStackWalkPreviewDay(dayKey) {
   const key = String(dayKey || '');
   return key >= STACK_WALK_PREVIEW_FROM && key < STACK_WALK_LIVE_FROM;
+}
+
+export function isCoachParkLive(dayKey) {
+  return String(dayKey || '') >= COACH_PARK_LIVE_FROM;
 }
 
 export function addDaysToDayKey(dayKey, deltaDays) {
@@ -262,6 +272,9 @@ function alwaysOnGameKeys(dayKey, rosterKeys) {
   const keys = [];
   if (dayKey >= COUNTRY_HOLES_LIVE_FROM && rosterKeys.includes('countryholes')) {
     keys.push('countryholes');
+  }
+  if (dayKey >= COACH_PARK_LIVE_FROM && rosterKeys.includes('coachpark')) {
+    keys.push('coachpark');
   }
   return keys;
 }
@@ -337,6 +350,7 @@ export function getFunRotationForDay(dayKey, settingsInput = null) {
       wantedLive: Boolean(key && key >= WANTED_LIVE_FROM),
       stackWalkLive: Boolean(key && key >= STACK_WALK_LIVE_FROM),
       countryHolesLive: Boolean(key && key >= COUNTRY_HOLES_LIVE_FROM),
+      coachParkLive: Boolean(key && key >= COACH_PARK_LIVE_FROM),
     };
   }
 
@@ -382,6 +396,7 @@ export function getFunRotationForDay(dayKey, settingsInput = null) {
     wantedLive: key >= WANTED_LIVE_FROM,
     stackWalkLive: key >= STACK_WALK_LIVE_FROM,
     countryHolesLive: key >= COUNTRY_HOLES_LIVE_FROM,
+    coachParkLive: key >= COACH_PARK_LIVE_FROM,
   };
 }
 

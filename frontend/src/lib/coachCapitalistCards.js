@@ -344,7 +344,8 @@ export function addCardsToInventory(existingCards = {}, drawnCards = []) {
 }
 
 /**
- * Calculate total cumulative bonuses from the player's card collection.
+ * Calculate total cumulative bonuses from the player's card collection,
+ * including Season 5 Set Completion Bonuses.
  */
 export function computeCardBonuses(cards = {}) {
   let allProfitPct = 0;
@@ -358,6 +359,13 @@ export function computeCardBonuses(cards = {}) {
   let totalShiniesCount = 0;
   let uniqueCardsCount = 0;
 
+  let fleetCount = 0;
+  let crewCount = 0;
+  let relicCount = 0;
+  const fleetTotal = FLEET_CARDS_CATALOGUE.filter((c) => c.category === 'fleet').length;
+  const crewTotal = FLEET_CARDS_CATALOGUE.filter((c) => c.category === 'crew').length;
+  const relicTotal = FLEET_CARDS_CATALOGUE.filter((c) => c.category === 'relic').length;
+
   for (const [id, entry] of Object.entries(cards || {})) {
     if (!entry || !entry.count) continue;
     const card = CARDS_BY_ID.get(id);
@@ -366,6 +374,10 @@ export function computeCardBonuses(cards = {}) {
     uniqueCardsCount += 1;
     totalCardsCount += entry.count;
     totalShiniesCount += (entry.shinyCount || 0);
+
+    if (card.category === 'fleet') fleetCount += 1;
+    else if (card.category === 'crew') crewCount += 1;
+    else if (card.category === 'relic') relicCount += 1;
 
     // Each regular copy gives standardValue
     const regularCopies = Math.max(0, entry.count - (entry.shinyCount || 0));
@@ -401,6 +413,20 @@ export function computeCardBonuses(cards = {}) {
     }
   }
 
+  // Season 5 Set Completion Bonuses
+  const fleetComplete = fleetTotal > 0 && fleetCount >= fleetTotal;
+  const crewComplete = crewTotal > 0 && crewCount >= crewTotal;
+  const relicComplete = relicTotal > 0 && relicCount >= relicTotal;
+  const masterComplete = FLEET_CARDS_CATALOGUE.length > 0 && uniqueCardsCount >= FLEET_CARDS_CATALOGUE.length;
+
+  if (fleetComplete) allProfitPct += 25;
+  if (crewComplete) allSpeedPct += 20;
+  if (relicComplete) angelBonusExtra += 0.01;
+  if (masterComplete) {
+    allProfitPct += 50;
+    awayRatePct += 25;
+  }
+
   return {
     allProfitPct,
     allSpeedPct,
@@ -411,5 +437,32 @@ export function computeCardBonuses(cards = {}) {
     totalCardsCount,
     totalShiniesCount,
     uniqueCardsCount,
+    sets: {
+      fleetCount,
+      fleetTotal,
+      fleetComplete,
+      crewCount,
+      crewTotal,
+      crewComplete,
+      relicCount,
+      relicTotal,
+      relicComplete,
+      masterComplete,
+    },
   };
+}
+
+/** Master Tachograph Key slows O-Licence DVSA heat buildup (-15% standard, -25% shiny). */
+export function getTachoHeatReduction(cards = {}) {
+  const entry = cards?.['card-master-tacho-key'];
+  if (!entry || !(Number(entry.count) > 0)) return 0;
+  return Number(entry.shinyCount) > 0 ? 0.25 : 0.15;
+}
+
+/** Traffic Office corridor card synergy (+25% standard, +50% shiny). */
+export function getCardSynergyBonus(cards = {}, cardId = '') {
+  if (!cardId) return 0;
+  const entry = cards?.[cardId];
+  if (!entry || !(Number(entry.count) > 0)) return 0;
+  return Number(entry.shinyCount) > 0 ? 0.50 : 0.25;
 }

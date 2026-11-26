@@ -278,7 +278,7 @@ export function BoosterPackOpeningModal({
         {/* Title */}
         <div className="text-center mb-4">
           <p className="gui-font text-xl text-amber-300 flex items-center justify-center gap-2">
-            <span>📦</span> Season 4 Trading Card Booster
+            <span>📦</span> Season 5 Trading Card Booster
           </p>
           <p className="text-xs text-slate-400">
             {unopenedCount > 1
@@ -328,7 +328,7 @@ export function BoosterPackOpeningModal({
                   FLEET CARDS
                 </p>
                 <p className="text-[10px] text-amber-100 font-semibold tracking-wider">
-                  SEASON 4 OFFICIAL EDITION
+                  SEASON 5 OFFICIAL EDITION
                 </p>
               </div>
 
@@ -444,16 +444,52 @@ export function BoosterPackOpeningModal({
 }
 
 /**
- * Full Card Binder & Collection Tab UI
+ * Full Card Binder, Workshop Forge & Tea Room Swap Board UI
  */
 export function CardBinderView({
   cards = {},
   unopenedPacks = 0,
   onOpenPackClick = null,
+  currentUid = '',
+  cardTrades = null,
+  cardExchangeBusy = false,
+  onLoadCardTrades = null,
+  onForgeShiny = null,
+  onCreateTrade = null,
+  onCancelTrade = null,
+  onAcceptTrade = null,
 }) {
+  const [subTab, setSubTab] = useState('binder'); // 'binder' | 'forge' | 'swap'
   const [filter, setFilter] = useState('all'); // 'all' | 'fleet' | 'crew' | 'relic' | 'shinies'
-  const bonuses = computeCardBonuses(cards);
+  const [sacrificeBasket, setSacrificeBasket] = useState([]); // array of up to 5 cardIds for Random Press
+  const [allowLastCopyBurn, setAllowLastCopyBurn] = useState(false);
+  const [forgedResult, setForgedResult] = useState(null);
+  const [exchangeMsg, setExchangeMsg] = useState('');
+  const [exchangeErr, setExchangeErr] = useState('');
 
+  // Swap form state
+  const regularOwnedCards = FLEET_CARDS_CATALOGUE.filter((c) => {
+    const e = cards[c.id];
+    const regular = Math.max(0, (Number(e?.count) || 0) - (Number(e?.shinyCount) || 0));
+    return regular >= 1;
+  });
+  const [offerCardId, setOfferCardId] = useState(() => regularOwnedCards[0]?.id || FLEET_CARDS_CATALOGUE[0].id);
+  const [wantCardId, setWantCardId] = useState(FLEET_CARDS_CATALOGUE[1].id);
+
+  useEffect(() => {
+    if (regularOwnedCards.length > 0 && !regularOwnedCards.some((c) => c.id === offerCardId)) {
+      setOfferCardId(regularOwnedCards[0].id);
+    }
+  }, [cards, offerCardId, regularOwnedCards]);
+
+  useEffect(() => {
+    if (subTab === 'swap' && onLoadCardTrades) {
+      onLoadCardTrades();
+    }
+  }, [subTab]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const bonuses = computeCardBonuses(cards);
+  const sets = bonuses.sets || {};
   const totalPossible = FLEET_CARDS_CATALOGUE.length;
   const progressPct = Math.round((bonuses.uniqueCardsCount / totalPossible) * 100);
 
@@ -465,6 +501,95 @@ export function CardBinderView({
     return c.category === filter;
   });
 
+  const openTrades = Array.isArray(cardTrades?.openTrades) ? cardTrades.openTrades : [];
+  const recentCompleted = Array.isArray(cardTrades?.recentCompleted) ? cardTrades.recentCompleted : [];
+
+  const handleTargetedForge = async (card) => {
+    if (!onForgeShiny || cardExchangeBusy) return;
+    setExchangeErr('');
+    setExchangeMsg('');
+    try {
+      const res = await onForgeShiny({ mode: 'targeted', cardId: card.id });
+      const forgedCard = CARDS_BY_ID.get(res?.forgedCardId || card.id) || card;
+      setForgedResult(forgedCard);
+      playCoachCapSfx('shiny_fanfare');
+      setExchangeMsg(`✨ Forged Shiny ${forgedCard.name}!`);
+    } catch (err) {
+      setExchangeErr(err.message || 'Forge failed.');
+    }
+  };
+
+  const handleRandomForge = async () => {
+    if (!onForgeShiny || cardExchangeBusy || sacrificeBasket.length !== 5) return;
+    setExchangeErr('');
+    setExchangeMsg('');
+    try {
+      const res = await onForgeShiny({ mode: 'random', sacrificeIds: sacrificeBasket });
+      const forgedCard = CARDS_BY_ID.get(res?.forgedCardId) || FLEET_CARDS_CATALOGUE[0];
+      setSacrificeBasket([]);
+      setForgedResult(forgedCard);
+      playCoachCapSfx('shiny_fanfare');
+      setExchangeMsg(`✨ Workshop Press forged Shiny ${forgedCard.name}!`);
+    } catch (err) {
+      setExchangeErr(err.message || 'Workshop Press failed.');
+    }
+  };
+
+  const addToBasket = (cardId) => {
+    if (sacrificeBasket.length >= 5) return;
+    const entry = cards[cardId] || {};
+    const count = Number(entry.count) || 0;
+    const shinyCount = Number(entry.shinyCount) || 0;
+    const regular = Math.max(0, count - shinyCount);
+    const maxAllowed = allowLastCopyBurn || shinyCount > 0 ? regular : Math.max(0, regular - 1);
+    const usedInBasket = sacrificeBasket.filter((id) => id === cardId).length;
+    if (usedInBasket >= maxAllowed) return;
+    setSacrificeBasket((prev) => [...prev, cardId]);
+  };
+
+  const removeFromBasketAt = (idx) => {
+    setSacrificeBasket((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  const handlePostTrade = async (e) => {
+    e.preventDefault();
+    if (!onCreateTrade || cardExchangeBusy) return;
+    setExchangeErr('');
+    setExchangeMsg('');
+    try {
+      await onCreateTrade({ offerCardId, wantCardId });
+      setExchangeMsg('☕ Swap offer posted to the Tea Room board!');
+    } catch (err) {
+      setExchangeErr(err.message || 'Could not post swap.');
+    }
+  };
+
+  const handleCancel = async (tradeId) => {
+    if (!onCancelTrade || cardExchangeBusy) return;
+    setExchangeErr('');
+    setExchangeMsg('');
+    try {
+      await onCancelTrade(tradeId);
+      setExchangeMsg('Returned card to your binder.');
+    } catch (err) {
+      setExchangeErr(err.message || 'Could not cancel swap.');
+    }
+  };
+
+  const handleAccept = async (tradeId) => {
+    if (!onAcceptTrade || cardExchangeBusy) return;
+    setExchangeErr('');
+    setExchangeMsg('');
+    try {
+      const res = await onAcceptTrade(tradeId);
+      const got = CARDS_BY_ID.get(res?.receivedCardId);
+      playCoachCapSfx('charter_claim');
+      setExchangeMsg(`🤝 Swap complete! Added ${got?.name || 'card'} to your binder.`);
+    } catch (err) {
+      setExchangeErr(err.message || 'Could not complete swap.');
+    }
+  };
+
   return (
     <div className="space-y-4">
       {/* Top Banner & Summary */}
@@ -473,13 +598,13 @@ export function CardBinderView({
           <div>
             <div className="flex items-center gap-2">
               <span className="text-2xl">🃏</span>
-              <h2 className="gui-font text-lg text-amber-300">Fleet Trading Cards</h2>
+              <h2 className="gui-font text-lg text-amber-300">Fleet Trading Cards &amp; Tea Room</h2>
               <span className="text-[10px] uppercase font-bold px-2 py-0.5 rounded bg-amber-400 text-slate-950">
-                Season 4
+                Season 5
               </span>
             </div>
             <p className="text-xs text-slate-300 mt-1">
-              Earn a 3-card booster pack every time your entire fleet hits a global milestone. Cards grant permanent passive multipliers!
+              Collect all 20 cards for Set Bonuses, melt 5 duplicates into a guaranteed ✨ Shiny in the Workshop Forge, or trade 1-for-1 with colleagues!
             </p>
           </div>
 
@@ -495,7 +620,7 @@ export function CardBinderView({
           ) : (
             <div className="text-right text-[11px] text-slate-400 bg-slate-950/60 border border-slate-800 rounded-xl px-3 py-2">
               <p className="font-semibold text-slate-300">No packs waiting</p>
-              <p className="text-[10px]">Get all 10 vehicles to the next milestone to earn one!</p>
+              <p className="text-[10px]">All-Fleet milestones, Golden Tenders &amp; 15m Green shifts award packs!</p>
             </div>
           )}
         </div>
@@ -555,59 +680,526 @@ export function CardBinderView({
         )}
       </div>
 
-      {/* Filter Tabs */}
-      <div className="flex flex-wrap gap-2 text-xs">
+      {/* Sub-Tabs: Binder & Sets | Workshop Forge | Tea Room Swap Board */}
+      <div className="flex flex-wrap gap-2 border-b border-slate-800 pb-2">
         {[
-          { id: 'all', label: 'All Cards (20)' },
-          { id: 'fleet', label: '🚌 Fleet (8)' },
-          { id: 'crew', label: '👔 Crew & Staff (6)' },
-          { id: 'relic', label: '⭐ Relics & Artifacts (6)' },
-          { id: 'shinies', label: `✨ Shinies (${bonuses.totalShiniesCount})` },
-        ].map((t) => (
+          { id: 'binder', label: '📖 Binder & Sets' },
+          { id: 'forge', label: '🔨 Workshop Forge' },
+          { id: 'swap', label: `🫖 Tea Room Swap Board${openTrades.length > 0 ? ` (${openTrades.length})` : ''}` },
+        ].map((st) => (
           <button
-            key={t.id}
-            onClick={() => setFilter(t.id)}
-            className={`px-3 py-1.5 rounded-xl font-bold transition ${
-              filter === t.id
+            key={st.id}
+            type="button"
+            onClick={() => {
+              setSubTab(st.id);
+              setExchangeErr('');
+              setExchangeMsg('');
+            }}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition ${
+              subTab === st.id
                 ? 'bg-amber-400 text-slate-950 shadow'
                 : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700'
             }`}
           >
-            {t.label}
+            {st.label}
           </button>
         ))}
       </div>
 
-      {/* Cards Grid */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 justify-items-center">
-        {filteredCards.map((c) => {
-          const entry = cards[c.id];
-          const owned = Boolean(entry && entry.count > 0);
-          const shinyCount = entry?.shinyCount || 0;
+      {exchangeErr ? (
+        <div className="rounded-lg border border-rose-400/50 bg-rose-500/15 px-3 py-2 text-xs text-rose-200">
+          {exchangeErr}
+        </div>
+      ) : null}
+      {exchangeMsg ? (
+        <div className="rounded-lg border border-emerald-400/50 bg-emerald-500/15 px-3 py-2 text-xs text-emerald-200">
+          {exchangeMsg}
+        </div>
+      ) : null}
 
-          if (!owned) {
-            return (
-              <TradingCard
-                key={c.id}
-                card={c}
-                isSilhouette={true}
-                size="sm"
-              />
-            );
-          }
+      {/* SUB-TAB 1: BINDER & SET COMPLETION */}
+      {subTab === 'binder' && (
+        <div className="space-y-4">
+          {/* Season 5 Set Completion Bonuses */}
+          <div className="rounded-xl border border-indigo-400/30 bg-slate-900/70 p-3 space-y-2">
+            <p className="gui-font text-xs uppercase tracking-wider text-amber-300">
+              🏆 Season 5 Set Completion Bonuses
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 text-xs">
+              {[
+                {
+                  label: '🚌 Complete Fleet',
+                  count: sets.fleetCount || 0,
+                  total: sets.fleetTotal || 8,
+                  done: Boolean(sets.fleetComplete),
+                  reward: '+25% All Profits',
+                },
+                {
+                  label: '👔 Complete Crew',
+                  count: sets.crewCount || 0,
+                  total: sets.crewTotal || 6,
+                  done: Boolean(sets.crewComplete),
+                  reward: '+20% All Speed',
+                },
+                {
+                  label: '⭐ Complete Relics',
+                  count: sets.relicCount || 0,
+                  total: sets.relicTotal || 6,
+                  done: Boolean(sets.relicComplete),
+                  reward: '+1.0% Backer Strength',
+                },
+                {
+                  label: '👑 Master Binder',
+                  count: bonuses.uniqueCardsCount || 0,
+                  total: totalPossible,
+                  done: Boolean(sets.masterComplete),
+                  reward: '+50% Profit & +25% Away',
+                },
+              ].map((s) => (
+                <div
+                  key={s.label}
+                  className={`rounded-lg border px-2.5 py-2 ${
+                    s.done
+                      ? 'border-emerald-400/60 bg-emerald-500/15 text-emerald-100'
+                      : 'border-slate-700 bg-slate-950/60 text-slate-300'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-1 font-bold">
+                    <span>{s.label}</span>
+                    <span className="tabular-nums">
+                      {s.count}/{s.total} {s.done ? '✓' : ''}
+                    </span>
+                  </div>
+                  <p className={`text-[10px] mt-0.5 ${s.done ? 'text-emerald-300 font-semibold' : 'text-slate-400'}`}>
+                    {s.reward}
+                  </p>
+                </div>
+              ))}
+            </div>
+          </div>
 
-          return (
-            <TradingCard
-              key={c.id}
-              card={c}
-              copies={entry.count}
-              shinyCopies={shinyCount}
-              isShiny={shinyCount > 0}
-              size="sm"
-            />
-          );
-        })}
-      </div>
+          {/* Filter Tabs */}
+          <div className="flex flex-wrap gap-2 text-xs">
+            {[
+              { id: 'all', label: 'All Cards (20)' },
+              { id: 'fleet', label: '🚌 Fleet (8)' },
+              { id: 'crew', label: '👔 Crew & Staff (6)' },
+              { id: 'relic', label: '⭐ Relics & Artifacts (6)' },
+              { id: 'shinies', label: `✨ Shinies (${bonuses.totalShiniesCount})` },
+            ].map((t) => (
+              <button
+                key={t.id}
+                onClick={() => setFilter(t.id)}
+                className={`px-3 py-1.5 rounded-xl font-bold transition ${
+                  filter === t.id
+                    ? 'bg-amber-400 text-slate-950 shadow'
+                    : 'bg-slate-900 hover:bg-slate-800 text-slate-300 border border-slate-700'
+                }`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Cards Grid */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 justify-items-center">
+            {filteredCards.map((c) => {
+              const entry = cards[c.id];
+              const owned = Boolean(entry && entry.count > 0);
+              const shinyCount = entry?.shinyCount || 0;
+
+              if (!owned) {
+                return (
+                  <TradingCard
+                    key={c.id}
+                    card={c}
+                    isSilhouette={true}
+                    size="sm"
+                  />
+                );
+              }
+
+              return (
+                <TradingCard
+                  key={c.id}
+                  card={c}
+                  copies={entry.count}
+                  shinyCopies={shinyCount}
+                  isShiny={shinyCount > 0}
+                  size="sm"
+                />
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* SUB-TAB 2: WORKSHOP FORGE */}
+      {subTab === 'forge' && (
+        <div className="space-y-4">
+          {forgedResult ? (
+            <div className="rounded-2xl border-2 border-amber-400 bg-gradient-to-b from-amber-500/20 via-slate-900 to-slate-950 p-4 flex flex-col sm:flex-row items-center gap-4 shadow-xl">
+              <TradingCard card={forgedResult} isShiny={true} size="sm" />
+              <div className="space-y-2 text-center sm:text-left flex-1">
+                <span className="inline-block rounded-full bg-gradient-to-r from-pink-500 via-amber-400 to-cyan-400 px-3 py-0.5 text-[10px] font-black uppercase tracking-wider text-slate-950">
+                  ✨ Workshop Forge Complete!
+                </span>
+                <h4 className="gui-font text-lg text-white">Shiny {forgedResult.name}</h4>
+                <p className="text-xs text-slate-300">{forgedResult.quote}</p>
+                <button
+                  type="button"
+                  onClick={() => setForgedResult(null)}
+                  className="rounded-lg border border-slate-600 bg-slate-800 px-3 py-1 text-xs font-semibold text-slate-200 hover:bg-slate-700"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          ) : null}
+
+          {/* Targeted Forge */}
+          <div className="rounded-xl border border-amber-400/35 bg-slate-900/75 p-3.5 space-y-2.5">
+            <div>
+              <h4 className="gui-font text-sm text-amber-300">
+                🔥 Targeted Shiny Forge (5 Same Standard Copies → 1 Shiny of That Card)
+              </h4>
+              <p className="text-[11px] text-slate-400">
+                Any card with 5+ non-shiny copies can be forged directly into a Holographic Shiny!
+              </p>
+            </div>
+            {(() => {
+              const eligible = FLEET_CARDS_CATALOGUE.filter((c) => {
+                const e = cards[c.id];
+                const regular = Math.max(0, (Number(e?.count) || 0) - (Number(e?.shinyCount) || 0));
+                return regular >= 5;
+              });
+              if (!eligible.length) {
+                return (
+                  <p className="text-xs text-slate-400 italic">
+                    No single card has 5+ standard copies yet. Use the Random Workshop Press below or open more packs!
+                  </p>
+                );
+              }
+              return (
+                <div className="grid sm:grid-cols-2 gap-2">
+                  {eligible.map((c) => {
+                    const e = cards[c.id];
+                    const regular = Math.max(0, (Number(e?.count) || 0) - (Number(e?.shinyCount) || 0));
+                    return (
+                      <div
+                        key={c.id}
+                        className="rounded-xl border border-amber-400/30 bg-slate-950/70 px-3 py-2 flex items-center justify-between gap-2"
+                      >
+                        <div className="min-w-0">
+                          <p className="gui-font text-xs text-white truncate">{c.name}</p>
+                          <p className="text-[11px] text-slate-400">
+                            {regular} standard copies available · Shiny: {e?.shinyCount || 0}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          disabled={cardExchangeBusy}
+                          onClick={() => handleTargetedForge(c)}
+                          className="shrink-0 rounded-lg bg-gradient-to-r from-amber-400 to-amber-500 px-3 py-1.5 text-[11px] font-black text-slate-950 hover:from-amber-300 disabled:opacity-50"
+                        >
+                          {cardExchangeBusy ? 'Forging…' : '✨ Forge Shiny'}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })()}
+          </div>
+
+          {/* Random Workshop Press */}
+          <div className="rounded-xl border border-purple-400/35 bg-slate-900/75 p-3.5 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h4 className="gui-font text-sm text-purple-200">
+                  🔨 Random Workshop Press (Any 5 Surplus Standard Cards → 1 Random ✨ Shiny)
+                </h4>
+                <p className="text-[11px] text-slate-400">
+                  Prioritizes Shinies you haven&apos;t pulled yet. Pick 5 cards below to load the press.
+                </p>
+              </div>
+              <label className="inline-flex items-center gap-1.5 text-[11px] text-slate-300 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={allowLastCopyBurn}
+                  onChange={(e) => {
+                    setAllowLastCopyBurn(e.target.checked);
+                    setSacrificeBasket([]);
+                  }}
+                />
+                Allow burning last copy
+              </label>
+            </div>
+
+            {/* Selected 5 slots */}
+            <div className="rounded-xl border border-slate-800 bg-slate-950/80 p-3 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-1.5">
+                {[0, 1, 2, 3, 4].map((slotIdx) => {
+                  const id = sacrificeBasket[slotIdx];
+                  const c = id ? CARDS_BY_ID.get(id) : null;
+                  return (
+                    <button
+                      key={slotIdx}
+                      type="button"
+                      disabled={!c}
+                      onClick={() => removeFromBasketAt(slotIdx)}
+                      title={c ? `Click to remove ${c.name}` : 'Empty press slot'}
+                      className={`rounded-lg border px-2.5 py-1.5 text-[11px] font-semibold transition ${
+                        c
+                          ? 'border-purple-400/60 bg-purple-500/20 text-purple-100 hover:bg-rose-500/25'
+                          : 'border-dashed border-slate-700 bg-slate-900/50 text-slate-500'
+                      }`}
+                    >
+                      {c ? `${c.name} ✕` : `Slot ${slotIdx + 1}`}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="flex items-center gap-2">
+                {sacrificeBasket.length > 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => setSacrificeBasket([])}
+                    className="rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1.5 text-xs text-slate-300 hover:bg-slate-700"
+                  >
+                    Clear
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  disabled={cardExchangeBusy || sacrificeBasket.length !== 5}
+                  onClick={handleRandomForge}
+                  className="rounded-xl bg-gradient-to-r from-purple-400 via-pink-400 to-amber-400 px-4 py-1.5 text-xs font-black text-slate-950 shadow disabled:opacity-40"
+                >
+                  {cardExchangeBusy ? 'Pressing…' : `✨ Press 5 → Random Shiny (${sacrificeBasket.length}/5)`}
+                </button>
+              </div>
+            </div>
+
+            {/* Available duplicate cards */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+              {FLEET_CARDS_CATALOGUE.map((c) => {
+                const entry = cards[c.id];
+                const count = Number(entry?.count) || 0;
+                const shinyCount = Number(entry?.shinyCount) || 0;
+                const regular = Math.max(0, count - shinyCount);
+                const maxAllowed = allowLastCopyBurn || shinyCount > 0 ? regular : Math.max(0, regular - 1);
+                const usedInBasket = sacrificeBasket.filter((id) => id === c.id).length;
+                const remaining = Math.max(0, maxAllowed - usedInBasket);
+                if (maxAllowed <= 0) return null;
+                return (
+                  <button
+                    key={c.id}
+                    type="button"
+                    disabled={remaining <= 0 || sacrificeBasket.length >= 5}
+                    onClick={() => addToBasket(c.id)}
+                    className="rounded-lg border border-slate-700 bg-slate-950/70 hover:border-purple-400/60 px-2.5 py-2 text-left transition disabled:opacity-40"
+                  >
+                    <p className="gui-font text-[11px] text-white truncate">{c.name}</p>
+                    <p className="text-[10px] text-purple-300 font-semibold mt-0.5">
+                      Available to melt: {remaining}
+                    </p>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* SUB-TAB 3: TEA ROOM SWAP BOARD */}
+      {subTab === 'swap' && (
+        <div className="space-y-4">
+          {/* Create Listing Form */}
+          <form
+            onSubmit={handlePostTrade}
+            className="rounded-xl border border-amber-400/35 bg-slate-900/75 p-3.5 space-y-2.5"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h4 className="gui-font text-sm text-amber-300">
+                  ☕ Post a 1-for-1 Swap Offer (Max 3 Open Listings)
+                </h4>
+                <p className="text-[11px] text-slate-400">
+                  Escrows 1 standard copy of your offered card until someone accepts or you cancel.
+                </p>
+              </div>
+              {onLoadCardTrades ? (
+                <button
+                  type="button"
+                  disabled={cardExchangeBusy}
+                  onClick={() => onLoadCardTrades()}
+                  className="rounded-lg border border-slate-700 bg-slate-800 px-2.5 py-1 text-xs text-slate-200 hover:bg-slate-700"
+                >
+                  ↻ Refresh Board
+                </button>
+              ) : null}
+            </div>
+
+            {regularOwnedCards.length === 0 ? (
+              <p className="text-xs text-slate-400 italic">
+                Open a Booster Pack first so you have at least 1 standard card to offer.
+              </p>
+            ) : (
+              <div className="grid sm:grid-cols-[1fr_1fr_auto] gap-2 items-end">
+                <div>
+                  <label className="block text-[10px] uppercase tracking-wider text-slate-400 mb-1">
+                    I Offer (1 Standard Copy)
+                  </label>
+                  <select
+                    value={offerCardId}
+                    onChange={(e) => setOfferCardId(e.target.value)}
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-2.5 py-1.5 text-xs text-white"
+                  >
+                    {regularOwnedCards.map((c) => {
+                      const e = cards[c.id];
+                      const reg = Math.max(0, (Number(e?.count) || 0) - (Number(e?.shinyCount) || 0));
+                      return (
+                        <option key={c.id} value={c.id}>
+                          #{String(c.number).padStart(2, '0')} {c.name} ({reg} std)
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[10px] uppercase tracking-wider text-slate-400 mb-1">
+                    I Want (1 Standard Copy)
+                  </label>
+                  <select
+                    value={wantCardId}
+                    onChange={(e) => setWantCardId(e.target.value)}
+                    className="w-full rounded-lg border border-slate-700 bg-slate-950 px-2.5 py-1.5 text-xs text-white"
+                  >
+                    {FLEET_CARDS_CATALOGUE.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        #{String(c.number).padStart(2, '0')} {c.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <button
+                  type="submit"
+                  disabled={cardExchangeBusy || offerCardId === wantCardId}
+                  className="rounded-xl bg-amber-400 hover:bg-amber-300 px-4 py-2 text-xs font-black text-slate-950 disabled:opacity-40"
+                >
+                  {cardExchangeBusy ? 'Posting…' : 'Post Swap'}
+                </button>
+              </div>
+            )}
+          </form>
+
+          {/* Open Swap Listings */}
+          <div className="space-y-2">
+            <h4 className="gui-font text-sm text-white">
+              Open Tea Room Swaps ({openTrades.length})
+            </h4>
+            {openTrades.length === 0 ? (
+              <p className="rounded-xl border border-slate-800 bg-slate-900/50 p-4 text-center text-xs text-slate-400">
+                No open swaps on the Tea Room table right now — post one above!
+              </p>
+            ) : (
+              <div className="grid sm:grid-cols-2 gap-2.5">
+                {openTrades.map((trade) => {
+                  const offerCard = CARDS_BY_ID.get(trade.offerCardId);
+                  const wantCard = CARDS_BY_ID.get(trade.wantCardId);
+                  const isMine = Boolean(currentUid && trade.sellerUid === currentUid);
+                  const myWantEntry = cards[trade.wantCardId];
+                  const myWantRegular = Math.max(0, (Number(myWantEntry?.count) || 0) - (Number(myWantEntry?.shinyCount) || 0));
+                  const canAccept = !isMine && myWantRegular >= 1;
+
+                  return (
+                    <div
+                      key={trade.id}
+                      className={`rounded-xl border p-3 flex flex-col justify-between gap-2.5 ${
+                        isMine
+                          ? 'border-sky-400/45 bg-sky-950/25'
+                          : 'border-slate-700 bg-slate-900/75'
+                      }`}
+                    >
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between gap-2 text-[11px]">
+                          <span className="font-bold text-slate-200">
+                            {trade.sellerName || 'Colleague'}
+                            {isMine ? ' (you)' : ''}
+                          </span>
+                          <span className="text-slate-500">
+                            {trade.createdAt ? new Date(trade.createdAt).toLocaleDateString('en-GB') : ''}
+                          </span>
+                        </div>
+                        <div className="rounded-lg border border-slate-800 bg-slate-950/70 p-2 text-xs space-y-1">
+                          <p className="text-emerald-300">
+                            <span className="text-slate-400">Offers:</span>{' '}
+                            <strong>{offerCard?.name || trade.offerCardId}</strong>
+                          </p>
+                          <p className="text-amber-300">
+                            <span className="text-slate-400">Wants:</span>{' '}
+                            <strong>{wantCard?.name || trade.wantCardId}</strong>
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex justify-end">
+                        {isMine ? (
+                          <button
+                            type="button"
+                            disabled={cardExchangeBusy}
+                            onClick={() => handleCancel(trade.id)}
+                            className="rounded-lg border border-rose-400/50 bg-rose-500/15 px-3 py-1.5 text-xs font-bold text-rose-200 hover:bg-rose-500/25 disabled:opacity-50"
+                          >
+                            Cancel Listing
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={cardExchangeBusy || !canAccept}
+                            onClick={() => handleAccept(trade.id)}
+                            className="rounded-lg bg-emerald-400 hover:bg-emerald-300 px-3 py-1.5 text-xs font-black text-slate-950 disabled:opacity-40"
+                          >
+                            {canAccept
+                              ? '🤝 Accept Swap'
+                              : `Need 1 std ${wantCard?.name || 'card'}`}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Recent Completed Swaps */}
+          {recentCompleted.length > 0 ? (
+            <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-3 space-y-1.5">
+              <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                Your Recent Completed Swaps
+              </p>
+              <ul className="space-y-1 text-xs text-slate-300">
+                {recentCompleted.map((t) => {
+                  const offer = CARDS_BY_ID.get(t.offerCardId)?.name || t.offerCardId;
+                  const want = CARDS_BY_ID.get(t.wantCardId)?.name || t.wantCardId;
+                  return (
+                    <li key={t.id} className="flex flex-wrap justify-between gap-2">
+                      <span>
+                        <strong>{t.sellerName}</strong> ({offer}) ⇄ <strong>{t.buyerName}</strong> ({want})
+                      </span>
+                      <span className="text-slate-500 text-[10px]">
+                        {t.completedAt ? new Date(t.completedAt).toLocaleString('en-GB') : ''}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          ) : null}
+        </div>
+      )}
     </div>
   );
 }

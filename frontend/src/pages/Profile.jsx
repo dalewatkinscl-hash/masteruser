@@ -179,7 +179,17 @@ export default function Profile() {
       ) : activeTab === 'coachcapitalist' ? (
         <div className="py-4 sm:py-6 w-full max-w-5xl mx-auto px-1 sm:px-2">
           <FunErrorBoundary>
-            <CoachCapitalistPanel isAdmin={canManagePortalAccess(user)} />
+            {user?.coachCapitalistBlocked ? (
+              <div className="max-w-lg mx-auto rounded-2xl border border-rose-500/35 bg-[#120d10] px-6 py-8 text-center shadow-xl">
+                <div className="text-[11px] uppercase tracking-[0.16em] text-rose-300/90">Coach Capitalist</div>
+                <h2 className="mt-2 text-lg font-semibold text-white">Access Unavailable</h2>
+                <p className="mt-2 text-sm text-white/70">
+                  Coach Capitalist is not available on your account.
+                </p>
+              </div>
+            ) : (
+              <CoachCapitalistPanel isAdmin={canManagePortalAccess(user)} />
+            )}
           </FunErrorBoundary>
         </div>
       ) : activeTab === 'countryholes' ? (

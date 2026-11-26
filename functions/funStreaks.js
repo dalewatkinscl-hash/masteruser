@@ -268,7 +268,7 @@ async function recordFunStreakFail(db, {
 }
 
 async function collectOutcomeEvents(db, uid) {
-  const [triviaSnap, wordleSnap, nonogramSnap, sokobanSnap, boggleSnap, connectionsSnap, encloseSnap, letterboxSnap, pipesSnap, toolboxKickSnap, wantedSnap, stackWalkSnap, countryHolesSnap] = await Promise.all([
+  const [triviaSnap, wordleSnap, nonogramSnap, sokobanSnap, boggleSnap, connectionsSnap, encloseSnap, letterboxSnap, pipesSnap, toolboxKickSnap, wantedSnap, stackWalkSnap, countryHolesSnap, coachParkSnap] = await Promise.all([
     db.collection('trivia_answers').where('uid', '==', uid).limit(400).get().catch(() => ({ docs: [] })),
     db.collection('wordle_games').where('uid', '==', uid).limit(400).get().catch(() => ({ docs: [] })),
     db.collection('nonogram_games').where('uid', '==', uid).limit(400).get().catch(() => ({ docs: [] })),
@@ -282,6 +282,7 @@ async function collectOutcomeEvents(db, uid) {
     db.collection('wanted_games').where('uid', '==', uid).limit(400).get().catch(() => ({ docs: [] })),
     db.collection('stack_walk_games').where('uid', '==', uid).limit(400).get().catch(() => ({ docs: [] })),
     db.collection('country_holes_games').where('uid', '==', uid).limit(400).get().catch(() => ({ docs: [] })),
+    db.collection('coach_park_games').where('uid', '==', uid).limit(400).get().catch(() => ({ docs: [] })),
   ]);
 
   const fromTrivia = triviaSnap.docs.map((doc) => {
@@ -325,6 +326,7 @@ async function collectOutcomeEvents(db, uid) {
     wanted: fromWanted,
     stackwalk: fromStatus(stackWalkSnap),
     countryholes: fromStatus(countryHolesSnap),
+    coachpark: fromStatus(coachParkSnap),
   };
 }
 
@@ -350,6 +352,7 @@ async function backfillFunStreaksFromHistory(db, {
       wanted: emptyGameStreak(),
       stackwalk: emptyGameStreak(),
       countryholes: emptyGameStreak(),
+      coachpark: emptyGameStreak(),
     };
   }
 
@@ -367,6 +370,7 @@ async function backfillFunStreaksFromHistory(db, {
   const wanted = computeStreakFromOutcomes(events.wanted, todayKey);
   const stackwalk = computeStreakFromOutcomes(events.stackwalk, todayKey);
   const countryholes = computeStreakFromOutcomes(events.countryholes, todayKey);
+  const coachpark = computeStreakFromOutcomes(events.coachpark, todayKey);
 
   await db.collection('fun_streaks').doc(uid).set({
     uid,
@@ -385,6 +389,7 @@ async function backfillFunStreaksFromHistory(db, {
     wanted,
     stackwalk,
     countryholes,
+    coachpark,
     streakWeekdayAware: true,
     streakFailAware: true,
     backfilledAt: FieldValue.serverTimestamp(),
@@ -392,7 +397,7 @@ async function backfillFunStreaksFromHistory(db, {
   }, { merge: true });
 
   return {
-    trivia, wordle, nonogram, sokoban, boggle, connections, enclose, letterbox, pipes, toolboxkick, wanted, stackwalk, countryholes,
+    trivia, wordle, nonogram, sokoban, boggle, connections, enclose, letterbox, pipes, toolboxkick, wanted, stackwalk, countryholes, coachpark,
   };
 }
 
@@ -418,6 +423,7 @@ async function loadFunStreaks(db, uid, {
       wanted: emptyGameStreak(),
       stackwalk: emptyGameStreak(),
       countryholes: emptyGameStreak(),
+      coachpark: emptyGameStreak(),
     };
   }
 
@@ -437,6 +443,7 @@ async function loadFunStreaks(db, uid, {
     || !data.wanted
     || !data.stackwalk
     || !data.countryholes
+    || !data.coachpark
     || !data.streakWeekdayAware
     || !data.streakFailAware;
 
@@ -464,6 +471,7 @@ async function loadFunStreaks(db, uid, {
     wanted: normalizeGameStreak(data.wanted),
     stackwalk: normalizeGameStreak(data.stackwalk),
     countryholes: normalizeGameStreak(data.countryholes),
+    coachpark: normalizeGameStreak(data.coachpark),
   };
 }
 
@@ -482,6 +490,7 @@ function serializeAchievements(streaks = {}, dayKey = '') {
     { key: 'wanted', label: 'Wanted' },
     { key: 'stackwalk', label: "O Dell's Amazon Run" },
     { key: 'countryholes', label: 'Country Holes' },
+    { key: 'coachpark', label: 'Coach Park' },
   ];
 
   return games.map((game) => {

@@ -261,7 +261,7 @@ export default function ProfileWidgets({ currentUserUid }) {
       try {
         setLoading(true);
         await load();
-        if (!cancelled && SHOW_COACH_CAPITALIST) await loadCoachCapBoard();
+        if (!cancelled && SHOW_COACH_CAPITALIST && !user?.coachCapitalistBlocked) await loadCoachCapBoard();
       } catch (err) {
         if (!cancelled) setError(err.message || 'Failed to load widgets.');
       } finally {
@@ -482,58 +482,60 @@ export default function ProfileWidgets({ currentUserUid }) {
         </div>
       </WidgetShell>
 
-      <WidgetShell
-        title="Coach Capitalist"
-        empty={
-          !SHOW_COACH_CAPITALIST
-            ? 'Down for maintenance — check back later.'
-            : !coachCapBoard.leaderboard.length
-              ? 'Play Coach Capitalist — progress syncs to your account.'
-              : null
-        }
-      >
-        {SHOW_COACH_CAPITALIST ? (
-          <>
-            {coachCapBoard.me?.rank ? (
-              <p className="text-xs text-indigo-200 mb-2">
-                Your rank #{coachCapBoard.me.rank}
-                {coachCapBoard.me.lifetimeEarnings > 0
-                  ? ` · ${formatMoney(coachCapBoard.me.lifetimeEarnings)}`
-                  : ''}
-                {Number(coachCapBoard.me.claimedAngels) > 0
-                  ? ` · ${formatMoney(coachCapBoard.me.claimedAngels, { symbol: '' })} backers`
-                  : ''}
-              </p>
-            ) : null}
-            {coachCapBoard.leaderboard.length > 0 ? (
-              <ol className="space-y-1.5">
-                {coachCapBoard.leaderboard.slice(0, 5).map((row, index) => {
-                  const claimed = Math.max(0, Number(row.claimedAngels) || 0);
-                  const earningsLabel = formatMoney(row.lifetimeEarnings);
-                  const resultText = claimed > 0
-                    ? `${earningsLabel} · ${formatMoney(claimed, { symbol: '' })}b`
-                    : earningsLabel;
-                  return (
-                    <WidgetLeaderRow
-                      key={row.uid || index}
-                      row={{ ...row, rank: index + 1 }}
-                      currentUserUid={currentUserUid}
-                      resultText={resultText}
-                    />
-                  );
-                })}
-              </ol>
-            ) : null}
-            <button
-              type="button"
-              onClick={() => navigate('/dashboard/profile', { state: { profileTab: 'coachcapitalist' } })}
-              className="mt-2 text-[11px] text-indigo-300 hover:text-indigo-200"
-            >
-              Open Coach Capitalist →
-            </button>
-          </>
-        ) : null}
-      </WidgetShell>
+      {!user?.coachCapitalistBlocked ? (
+        <WidgetShell
+          title="Coach Capitalist"
+          empty={
+            !SHOW_COACH_CAPITALIST
+              ? 'Down for maintenance — check back later.'
+              : !coachCapBoard.leaderboard.length
+                ? 'Play Coach Capitalist — progress syncs to your account.'
+                : null
+          }
+        >
+          {SHOW_COACH_CAPITALIST ? (
+            <>
+              {coachCapBoard.me?.rank ? (
+                <p className="text-xs text-indigo-200 mb-2">
+                  Your rank #{coachCapBoard.me.rank}
+                  {coachCapBoard.me.lifetimeEarnings > 0
+                    ? ` · ${formatMoney(coachCapBoard.me.lifetimeEarnings)}`
+                    : ''}
+                  {Number(coachCapBoard.me.claimedAngels) > 0
+                    ? ` · ${formatMoney(coachCapBoard.me.claimedAngels, { symbol: '' })} backers`
+                    : ''}
+                </p>
+              ) : null}
+              {coachCapBoard.leaderboard.length > 0 ? (
+                <ol className="space-y-1.5">
+                  {coachCapBoard.leaderboard.slice(0, 5).map((row, index) => {
+                    const claimed = Math.max(0, Number(row.claimedAngels) || 0);
+                    const earningsLabel = formatMoney(row.lifetimeEarnings);
+                    const resultText = claimed > 0
+                      ? `${earningsLabel} · ${formatMoney(claimed, { symbol: '' })}b`
+                      : earningsLabel;
+                    return (
+                      <WidgetLeaderRow
+                        key={row.uid || index}
+                        row={{ ...row, rank: index + 1 }}
+                        currentUserUid={currentUserUid}
+                        resultText={resultText}
+                      />
+                    );
+                  })}
+                </ol>
+              ) : null}
+              <button
+                type="button"
+                onClick={() => navigate('/dashboard/profile', { state: { profileTab: 'coachcapitalist' } })}
+                className="mt-2 text-[11px] text-indigo-300 hover:text-indigo-200"
+              >
+                Open Coach Capitalist →
+              </button>
+            </>
+          ) : null}
+        </WidgetShell>
+      ) : null}
 
       <WidgetShell
         title="Kudos today"

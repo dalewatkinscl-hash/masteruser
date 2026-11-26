@@ -35,6 +35,10 @@ const WANTED_GAME = { key: 'wanted', label: 'Daily Wanted' };
 const COUNTRY_HOLES_LIVE_FROM = '2026-10-14';
 const COUNTRY_HOLES_GAME = { key: 'countryholes', label: 'Country Holes' };
 
+/** Always offered on Fun from this London day (not counted in weekday sit-outs). */
+const COACH_PARK_LIVE_FROM = '2026-11-25';
+const COACH_PARK_GAME = { key: 'coachpark', label: 'Coach Park' };
+
 /** Soft launch / secret unlock from this day; joins weekday rotation from LIVE_FROM. */
 const STACK_WALK_PREVIEW_FROM = '2026-09-18';
 /** Joins Fun rotation (normal play) from this Europe/London day. */
@@ -58,6 +62,7 @@ const FUN_GAMES = [
   WANTED_GAME,
   STACK_WALK_GAME,
   COUNTRY_HOLES_GAME,
+  COACH_PARK_GAME,
 ];
 const FUN_GAME_ROSTER = FUN_GAMES;
 const ALL_ROSTER_KEYS = FUN_GAME_ROSTER.map((g) => g.key);
@@ -188,6 +193,7 @@ function getRosterForDay(dayKey) {
   if (key >= WANTED_LIVE_FROM) roster.push(WANTED_GAME);
   if (key >= STACK_WALK_LIVE_FROM) roster.push(STACK_WALK_GAME);
   if (key >= COUNTRY_HOLES_LIVE_FROM) roster.push(COUNTRY_HOLES_GAME);
+  if (key >= COACH_PARK_LIVE_FROM) roster.push(COACH_PARK_GAME);
   return roster;
 }
 
@@ -276,6 +282,9 @@ function alwaysOnGameKeys(dayKey, rosterKeys) {
   if (dayKey >= COUNTRY_HOLES_LIVE_FROM && rosterKeys.includes('countryholes')) {
     keys.push('countryholes');
   }
+  if (dayKey >= COACH_PARK_LIVE_FROM && rosterKeys.includes('coachpark')) {
+    keys.push('coachpark');
+  }
   return keys;
 }
 
@@ -350,6 +359,7 @@ function getFunRotationForDay(dayKey = getLondonDayKey(), settings = getActiveRo
       wantedLive: key >= WANTED_LIVE_FROM,
       stackWalkLive: key >= STACK_WALK_LIVE_FROM,
       countryHolesLive: key >= COUNTRY_HOLES_LIVE_FROM,
+      coachParkLive: key >= COACH_PARK_LIVE_FROM,
     };
   }
 
@@ -395,6 +405,7 @@ function getFunRotationForDay(dayKey = getLondonDayKey(), settings = getActiveRo
     wantedLive: key >= WANTED_LIVE_FROM,
     stackWalkLive: key >= STACK_WALK_LIVE_FROM,
     countryHolesLive: key >= COUNTRY_HOLES_LIVE_FROM,
+    coachParkLive: key >= COACH_PARK_LIVE_FROM,
   };
 }
 
@@ -475,6 +486,8 @@ module.exports = {
   WANTED_LIVE_FROM,
   COUNTRY_HOLES_LIVE_FROM,
   COUNTRY_HOLES_GAME,
+  COACH_PARK_LIVE_FROM,
+  COACH_PARK_GAME,
   STACK_WALK_GAME,
   STACK_WALK_LIVE_FROM,
   STACK_WALK_PREVIEW_FROM,

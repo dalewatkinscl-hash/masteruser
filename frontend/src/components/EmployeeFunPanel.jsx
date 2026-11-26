@@ -12,6 +12,7 @@ import { ToolboxKickDailyPanel, TOOLBOX_HALLOWEEN_LIVE_FROM, TOOLBOX_CHRISTMAS_L
 import { WantedDailyPanel } from './WantedPanel';
 import { StackWalkDailyPanel } from './StackWalkPanel';
 import { CountryHolesDailyPanel } from './CountryHolesPanel';
+import { CoachParkDailyPanel } from './CoachParkPanel';
 import AchievementsPanel from './AchievementsPanel';
 import FunDayPicker, { getLondonDayKey } from './FunDayPicker';
 import FunLeaderboardRow from './FunLeaderboardRow';
@@ -80,6 +81,7 @@ const DEFAULT_OPEN_SECTIONS = {
   toolboxkick: false,
   wanted: false,
   stackwalk: false,
+  coachpark: false,
   achievements: false,
 };
 
@@ -695,6 +697,19 @@ export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
         <CountryHolesDailyPanel />
       ),
     },
+    coachpark: {
+      id: 'coachpark',
+      title: 'Coach Park',
+      render: () => (
+        <CoachParkDailyPanel
+          currentUserUid={currentUserUid}
+          onAchievements={refreshAchievements}
+          isAdmin={isAdmin}
+          onUnavailable={() => markGameUnavailable('coachpark')}
+          onRotationSync={syncRotationFromGame}
+        />
+      ),
+    },
   };
 
   // Strict: only games in today's rotation.games, in that order. Sit-outs / practice / peeks never show.
@@ -765,6 +780,9 @@ export default function EmployeeFunPanel({ currentUserUid, isAdmin = false }) {
             : ''}
           {rotation.games?.includes('stackwalk')
             ? " O Dell's Amazon Run: deliver parcels on foot — one more every 10 m; furthest wins."
+            : ''}
+          {rotation.games?.includes('coachpark')
+            ? ' Coach Park: 3 tries a day — steer & throttle don’t auto-reset; ease the coach into the yellow box (+5s per bump).'
             : ''}
           {todayKey >= PERMANENT_FUN_FROM
             ? ' Wordle, Boggle, Connections, Little Dicks Toolbox, and Daily Wanted stay in rotation every weekday.'
